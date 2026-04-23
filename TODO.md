@@ -1,0 +1,882 @@
+# imbl — Implementation Plan
+
+Sequenced implementation plan for improvements to the
+[imbl](https://github.com/jneem/imbl) Rust crate (persistent/immutable
+collections with structural sharing).
+
+**Current state (Apr 2026):** v7.0.0, ~12K lines of Rust, 5 core types
+(Vector, HashMap, HashSet, OrdMap, OrdSet). Maintained reactively by jneem —
+explicitly welcoming PRs but not driving a roadmap. Used in production by
+Matrix SDK, Fedimint, ~280 downstream crates.
+
+---
+
+## Principles
+
+### Upstream-first
+
+This is a fork of jneem/imbl. Every change should be structured as an
+independent, upstreamable PR: small, focused, well-tested, with a clear
+commit message. Avoid coupling unrelated changes. Breaking changes need
+strong justification. Batch breaking changes into a single major version
+bump (v8.0.0) to avoid churn for downstream users.
+
+### Document as you go
+
+The codebase has a ~4% comment ratio. Rather than a standalone documentation
+pass, every PR that touches internal code must document what it modifies:
+architecture decisions, invariants, algorithmic complexity, and `// SAFETY:`
+comments for any unsafe block. By the time all phases are complete, the
+documentation will be comprehensive as a natural byproduct.
+
+### Measure before and after
+
+No optimisation lands without benchmarks proving the improvement and no
+structural change lands without fuzz/miri validation. Preparation steps
+(benchmarks, fuzz targets, miri) are first-class work items, not afterthoughts.
+
+### Semver discipline
+
+Items are grouped by semver impact. Non-breaking changes can ship as v7.x
+point releases. Breaking changes (5.1, 5.2, 5.3, 5.4) are batched into a
+single v8.0.0 release in Phase 5.
+
+---
+
+## Contents
+
+- [Phase 0 — Foundations](#phase-0)
+- [Phase 1 — Housekeeping](#phase-1)
+- [Phase 2 — Correctness fixes & quick API wins](#phase-2)
+- [Phase 3 — Mutation performance](#phase-3)
+- [Phase 4 — Data structure internals](#phase-4)
+- [Phase 5 — Breaking API changes (v8.0.0)](#phase-5)
+- [Phase 6 — Research & speculative](#phase-6)
+- [Dependency map](#dependency-map)
+- [References](#references)
+
+---
+
+## Phase 0 — Foundations {#phase-0}
+
+Everything in this phase must land before any structural work begins. The
+goal is to make the project safe to change: CI catches regressions,
+benchmarks quantify impact, fuzz targets catch edge cases, miri catches UB,
+and architecture documentation ensures changes are made with understanding.
+
+### 0.1 CI pipeline, test.sh, build.sh
+
+**What:** Set up GitHub Actions and standard project entry points.
+
+**Scope:**
+- GitHub Actions workflow: stable matrix (`cargo test`, `cargo clippy`,
+  `cargo test --all-features`) and nightly matrix (`cargo +nightly miri test`)
+- `build.sh` at project root (standard entry point per workspace conventions)
+- `test.sh` at project root wrapping `cargo test --all-features`
+- Run fuzz targets in CI for a short duration (60s each) as a smoke check
+- Run `cargo test --features small-chunks` — this feature exists specifically
+  to improve test coverage by forcing smaller node sizes that trigger edge
+  cases (node splitting, merging, rebalancing)
+
+**Why:** There is no CI at all. Miri is essential given the unsafe code in
+Focus/FocusMut (vector/focus.rs) and nodes/hamt.rs. The `small-chunks`
+feature is designed for testing but there's no evidence it's regularly run.
+
+**Complexity:** Low.
+
+**Prerequisite for:** Everything in Phases 2–6.
+
+---
+
+### 0.2 Complete fuzz coverage
+
+**What:** Add missing fuzz targets and extend existing ones to cover
+unsafe-heavy code paths.
+
+**Scope:**
+- **New:** `fuzz/fuzz_targets/hashmap.rs` — random sequences of insert,
+  remove, get, iter, union, difference, intersection against
+  `std::collections::HashMap` reference. Modelled on existing `hashset.rs`.
+- **New:** `fuzz/fuzz_targets/ordmap.rs` — same pattern against
+  `std::collections::BTreeMap` reference. Modelled on existing `ordset.rs`.
+- **Extend:** `fuzz/fuzz_targets/vector.rs` — add `Focus` and `FocusMut`
+  actions to the existing `Action` enum: create Focus/FocusMut, random
+  indexed reads/writes, interleave with structural mutations (push, split,
+  join). Focus and FocusMut (vector/focus.rs) contain the most complex
+  unsafe code (raw pointers, manual Send/Sync impls, AtomicPtr) and have
+  zero fuzz coverage today.
+
+**Why:** HashMap and OrdMap have no fuzz targets. The CHAMP rewrite (4.3)
+replaces the entire HAMT node layout — the most invasive change in this plan.
+Focus/FocusMut are the highest-risk unsafe code and are exercised by the
+unsafe audit (3.2). Without fuzz coverage, subtle bugs in node manipulation
+or pointer arithmetic will not be caught.
+
+**Complexity:** Low. Existing targets provide templates.
+
+**Prerequisite for:** 3.2 (unsafe audit), 4.3 (CHAMP integration), 6.1 (ART).
+
+---
+
+### 0.3 Complete benchmark coverage
+
+**What:** Fill gaps in the benchmark suite and add measurement types that
+don't currently exist.
+
+**Scope:**
+- **New:** `benches/hashset.rs` — insert, remove, lookup, iteration, union,
+  intersection, difference. Compare against `std::collections::HashSet` and
+  `rpds`.
+- **New:** `benches/ordset.rs` — same pattern against
+  `std::collections::BTreeSet` and `rpds`.
+- **Extend `benches/vector.rs`:**
+  - Sole-owner mutation benchmarks: sequential insert chains where the old
+    binding is immediately dropped, bulk construction via repeated push,
+    update-in-place loops (baseline for 3.1).
+  - Concat-depth benchmarks: iteration speed on concat-built vs push-built
+    vectors of equal size (baseline for 2.1).
+  - Prepend benchmarks: push_front chains at 1K/10K/100K elements
+    (baseline for 4.1).
+- **Extend `benches/hashmap.rs` and `benches/ordmap.rs`:**
+  - Sole-owner mutation benchmarks (baseline for 3.1).
+- **New: memory profiling benchmarks.** Several items claim memory savings
+  (5.1, 4.3, 6.3) but there is no way to measure memory usage. Add benchmarks
+  using `std::alloc::GlobalAlloc` tracking (or the `dhat` crate) to measure
+  peak heap allocation for constructing collections of 1K/10K/100K/1M
+  elements.
+
+**Why:** HashSet and OrdSet have zero benchmarks. The sole-owner and
+concat-depth benchmarks provide before/after baselines for the highest-impact
+changes. Memory profiling is essential for items that target memory reduction.
+
+**Complexity:** Low-moderate. Criterion boilerplate for throughput; `dhat` or
+custom allocator for memory.
+
+**Prerequisite for:** 2.1 (concat fix), 3.1 (Arc::get_mut), 4.1 (prefix
+buffer), 4.2 (CHAMP prototype), 5.1 (triomphe default).
+
+---
+
+### 0.4 Architecture documentation
+
+**What:** Document the current internal architecture of each data structure
+module before modifying it. This is a prerequisite for making safe changes,
+not a polish step.
+
+**Scope:**
+- **RRB tree (nodes/rrb.rs, vector/mod.rs):** Document the `Entry` enum
+  (`Values` / `Nodes`), `Size` tracking (dense vs size table), the 4-buffer
+  structure (`outer_f`, `inner_f`, `inner_b`, `outer_b`), the `middle` tree,
+  and how `push_middle`/`pop_middle`/`prune` maintain invariants. Document
+  the concatenation algorithm (currently Stucki's, to be replaced in 2.1).
+- **HAMT (nodes/hamt.rs):** Document the SIMD-accelerated hybrid
+  architecture. The current implementation is NOT a standard bitmap HAMT —
+  it uses a 3-tier node hierarchy: `SmallSimdNode` (16 slots, 1×u8x16 SIMD
+  group for parallel probe), `LargeSimdNode` (32 slots, 2×u8x16 SIMD
+  groups), and `HamtNode` (classic bitmap-indexed, 32-slot SparseChunk).
+  Nodes promote: Small→Large→Hamt as they fill. The `Entry` enum has 5
+  variants: `Value`, `SmallSimdNode`, `LargeSimdNode`, `HamtNode`,
+  `Collision`. This is significantly more complex than described in the
+  academic papers and must be understood before the CHAMP rewrite (4.2/4.3).
+- **B+ tree (nodes/btree.rs, ord/map.rs):** Document the node structure
+  (rewritten in v6.0), split/merge/rebalance logic, and the `Cursor` type.
+  Needed before `iter_mut` (2.3) and any future OrdMap work.
+- **Focus/FocusMut (vector/focus.rs):** Document the unsafe invariants —
+  raw `target_ptr`, `AtomicPtr` in FocusMut, `Send`/`Sync` impls, the
+  interaction between focus cursors and tree modification. These have zero
+  documentation and contain the densest unsafe code.
+- **SharedPointer abstraction (shared_ptr.rs, archery):** Document how the
+  `DefaultSharedPtr` type alias works, what `archery::SharedPointerKind`
+  provides (`get_mut`, `make_mut`, `strong_count`), and how the `triomphe`
+  feature flag switches the default.
+
+**Why:** The codebase has ~4% comment ratio. Contributors in upstream issues
+describe the RRB implementation as "severely under-documented." Every
+subsequent phase modifies these internals — without documentation, changes
+are made blind and review is impossible. This also fulfils the user's request
+to include documentation review as preparation.
+
+**Complexity:** Moderate. Requires reading and understanding ~5K lines of
+core implementation. Produces no functional changes.
+
+**Prerequisite for:** 2.1 (concat fix), 3.1 (Arc::get_mut), 3.2 (unsafe
+audit), 4.1 (prefix buffer), 4.2 (CHAMP prototype).
+
+---
+
+## Phase 1 — Housekeeping {#phase-1}
+
+Low-risk cleanup that can proceed in parallel with Phase 0 or immediately
+after. Each item is an independent PR.
+
+### 1.1 Merge or close stale dependabot PRs
+
+**What:** Five dependabot PRs (#142, #132, #126, #125, #124) bumping rayon,
+rand, rpds, criterion, and half have sat unmerged for 6-12 months.
+
+**Why:** Stale PRs signal an unmaintained project. Dependency updates often
+contain security fixes.
+
+**Complexity:** Trivial.
+
+---
+
+### 1.2 Remove dead pool code
+
+**What:** Remove `fakepool.rs`, `vector/pool.rs`, and all references to
+`POOL_SIZE` (which doesn't exist in `config.rs` — the code referencing it
+in `vector/pool.rs` cannot compile if that code path is reached). Remove
+phantom pool references from documentation.
+
+**Why:** `fakepool.rs` is a no-op stub. `vector/pool.rs` defines `RRBPool`
+types that reference `crate::config::POOL_SIZE` which doesn't exist. The
+pool was an Rc-only optimisation in the original `im` crate; imbl dropped
+Rc support. Dead code and phantom feature flags confuse users.
+
+**Complexity:** Low.
+
+**References:** imbl issue #52.
+
+---
+
+### 1.3 Deprecate bincode feature
+
+**What:** The optional `bincode` feature depends on bincode 2.x (not 1.x as
+previously noted — the imports use `bincode::{Decode, Encode}` which is the
+2.x API). The bincode 2.x crate had ownership issues and is not considered
+well-maintained.
+
+**Approach:** Deprecate the feature with a `#[deprecated]` attribute on the
+bincode-specific impls. Remove entirely in v8.0.0. Users can implement
+bincode serialisation externally via serde.
+
+**Complexity:** Low.
+
+**References:** imbl issue #146.
+
+---
+
+### 1.4 Edition 2021 migration
+
+**What:** The crate uses `edition = "2018"` despite MSRV 1.85 (which
+supports edition 2021). Migrate to edition 2021.
+
+**Why:** Edition 2021 provides cleaner closure captures, `IntoIterator` for
+arrays, and other ergonomic improvements. The MSRV already supports it.
+Doing this early avoids it becoming a nuisance in later PRs.
+
+**Complexity:** Trivial. Run `cargo fix --edition` and update `Cargo.toml`.
+
+---
+
+## Phase 2 — Correctness fixes & quick API wins {#phase-2}
+
+Non-breaking changes that fix bugs or add missing API surface. Each is an
+independent PR suitable for upstream submission. These can start once the
+relevant Phase 0 items have landed.
+
+### 2.1 Fix RRB tree concatenation (issue [#35](https://github.com/jneem/imbl/issues/35))
+
+**What:** Vector concatenation produces excessively deep trees. With
+branching factor 64, height 3 should accommodate ~200K elements, but vectors
+of ~40K elements reach height 7 after repeated concatenation. The root
+cause: imbl implements Stucki's concatenation algorithm, which bounds height
+at O(log(N × C)) where C is the concatenation count.
+
+**Fix:** Implement L'orange's RRB concatenation algorithm. L'orange's
+algorithm maintains proper tree balance by redistributing nodes during
+concatenation. The `librrb` C reference implementation and his 2014 master's
+thesis document it thoroughly.
+
+**Validation:**
+- The concat-depth regression test (from 0.3) must pass — assert that a
+  vector of N elements produced by repeated concat does not exceed the
+  expected height
+- The concat-depth benchmark (from 0.3) must show improvement in iteration
+  speed on concat-built vectors
+- All existing Vector tests and the fuzz target must continue to pass
+- Run under miri
+
+**Complexity:** Moderate-high. The algorithm is more complex than Stucki's.
+The issue has been open since October 2021.
+
+**Affects:** `Vector<A>`.
+
+**Prerequisites:** 0.1 (CI/miri), 0.3 (concat-depth benchmarks), 0.4
+(RRB architecture docs).
+
+**References:** L'orange, "Improving RRB-Tree Performance through
+Transience" (master's thesis, 2014); L'orange, `librrb` C implementation
+(github.com/hyPiRion/c-rrb); Stucki et al., "RRB Vector: A Practical
+General Purpose Immutable Sequence" (ICFP 2015); imbl issue #35.
+
+---
+
+### 2.2 `get_next_exclusive` / `get_prev_exclusive` (issue [#157](https://github.com/jneem/imbl/issues/157))
+
+**What:** `OrdMap::get_next(key)` uses `Bound::Included(key)`, so it returns
+the entry for `key` itself if it exists. Add `get_next_exclusive` (using
+`Bound::Excluded`) and `get_prev_exclusive` for strictly-greater /
+strictly-less semantics.
+
+**Why:** The current semantics surprise users. A `get_next_exclusive` aligns
+with `BTreeMap::range((Excluded(k), Unbounded))`. The maintainer agrees.
+This is a pure addition — no existing API changes.
+
+**Complexity:** Trivial. Single comparison change per method.
+
+**Affects:** `OrdMap<K, V>`, `OrdSet<A>`.
+
+**Prerequisites:** 0.1 (CI).
+
+**References:** imbl issue #157.
+
+---
+
+### 2.3 OrdMap `iter_mut` (issue [#156](https://github.com/jneem/imbl/issues/156))
+
+**What:** Add a mutable iterator to `OrdMap` and `OrdSet`. HashMap already
+has `iter_mut` (via `NodeIterMut` in hamt.rs), but btree.rs has zero mutable
+iteration infrastructure — this must be built from scratch.
+
+**Design:** The iterator walks the B+ tree and yields `(&K, &mut V)` pairs.
+Each node on the path must be made exclusive via `SharedPointer::make_mut`
+(copy-on-write at the node level). This is the same pattern HashMap uses.
+No new unsafe code should be needed — the B+ tree node operations are all
+safe Rust.
+
+**Why:** `BTreeMap` provides `iter_mut()`. Its absence is a friction point
+for anyone migrating from std. The maintainer has agreed and would accept a
+PR.
+
+**Complexity:** Low-moderate. The B+ tree internals (rewritten in v6.0)
+support mutable access to leaf nodes, but the iterator scaffolding (tracking
+position across nodes, yielding references) needs to be written.
+
+**Affects:** `OrdMap<K, V>`, `OrdSet<A>`.
+
+**Prerequisites:** 0.1 (CI), 0.4 (B+ tree architecture docs).
+
+**References:** imbl issue #156.
+
+---
+
+## Phase 3 — Mutation performance {#phase-3}
+
+The core performance track. 3.1 is the foundation, 3.2 validates safety,
+3.3 builds the user-facing API on top.
+
+### 3.1 `Arc::get_mut` in-place mutation
+
+**What:** When a node's `SharedPointer` refcount is 1, mutate it in place
+instead of clone-on-write. Replace calls to `SharedPointer::make_mut` (which
+always clones if refcount > 1) with a `SharedPointer::get_mut` check
+(which returns `Some(&mut T)` if sole owner) followed by `make_mut` as
+fallback.
+
+**Key finding:** `archery::SharedPointer` already exposes `get_mut()` — the
+method exists in the trait and works through both `ArcK` (std::Arc) and
+`ArcTK` (triomphe::Arc). There are 105 `make_mut` call sites across the
+codebase. The change is mechanically replacing each with a get_mut check +
+make_mut fallback, but care is needed to ensure the semantics are identical
+(the old collection must actually be dropped before the refcount reaches 1).
+
+**Why:** The pattern `let mut map = map.insert(k, v)` clones O(tree_depth)
+nodes unnecessarily because the refcount is 1 by the time the clone happens.
+Clojure measured ~2× speedup for bulk construction with this optimisation.
+
+**Note:** This does NOT require new unsafe code. `SharedPointer::get_mut` is
+safe Rust. The subtlety is logical: ensuring that sole-owner detection
+happens at the right point in the call sequence. The crate-root
+`#[deny(unsafe_code)]` will enforce this.
+
+**Validation:**
+- Sole-owner mutation benchmarks (from 0.3) must show improvement
+- All existing tests, proptests, and fuzz targets must pass
+- Run under miri
+
+**Complexity:** Low-moderate. Mechanically straightforward but must be
+threaded through all mutation paths consistently.
+
+**Affects:** All five collection types.
+
+**Prerequisites:** 0.1 (CI/miri), 0.3 (sole-owner benchmarks), 0.4
+(architecture docs for all three data structures).
+
+**References:** Clojure transients — Rich Hickey; immer memory policy —
+Bolívar Puente, "Persistence for the Masses" (CppCon 2017); Bifurcan —
+Zach Tellman.
+
+---
+
+### 3.2 Unsafe code audit (issue [#27](https://github.com/jneem/imbl/issues/27))
+
+**What:** Audit, document, and where possible eliminate `unsafe` blocks. The
+crate uses `#[deny(unsafe_code)]` at the crate root (lib.rs:321) with
+`#[allow(unsafe_code)]` only in `vector/mod.rs`. Unsafe also exists in
+`nodes/hamt.rs` (inline `#[allow]` blocks) and `nodes/btree.rs`.
+
+**Current unsafe inventory:**
+- `vector/mod.rs`: 12 occurrences — mostly self-referential pointer casts
+  for Focus/FocusMut iterator lifetimes
+- `vector/focus.rs`: 6 occurrences — raw `target_ptr`, `AtomicPtr`, manual
+  `Send`/`Sync` impls
+- `nodes/hamt.rs`: 8 occurrences — `node_with` uses `UnsafeCell` +
+  `transmute_copy` for zero-copy node construction; `ptr::read`/`ptr::write`
+  for in-place entry replacement
+- `nodes/btree.rs`: 4 occurrences — `get_unchecked` for binary search
+
+**Approach:**
+1. Run `cargo +nightly miri test` — fix any existing UB before proceeding
+2. For every `unsafe` block, add a `// SAFETY:` comment documenting the
+   invariant and what would break it
+3. Identify blocks replaceable with safe alternatives:
+   - The `get_unchecked` calls in btree.rs can likely become safe indexing
+     with negligible cost
+   - The Focus/FocusMut pointer casts may be replaceable with GATs or
+     lifetime tricks (needs investigation)
+4. For blocks that must remain, ensure the fuzz targets (0.2) exercise the
+   code path — the combination of fuzzing + miri gives high confidence
+5. Enable `unsafe_op_in_unsafe_fn` lint to tighten granularity
+
+**Why:** imbl is used in production by security-sensitive projects (Matrix
+SDK, Fedimint). Undocumented unsafe invariants are a credibility and safety
+liability. Issue open since August 2021.
+
+**Affects:** Primarily `Vector<A>` (Focus/FocusMut), also nodes/hamt.rs
+and nodes/btree.rs.
+
+**Prerequisites:** 0.1 (CI/miri), 0.2 (Focus/FocusMut fuzz coverage), 0.4
+(Focus/FocusMut architecture docs).
+
+**References:** imbl issue #27; Rust unsafe code guidelines.
+
+---
+
+### 3.3 Transient / builder API
+
+**What:** An explicit API for batch mutations. A `Builder<T>` wrapper holds
+sole ownership and exposes `&mut` methods. `.build()` consumes it and returns
+the persistent collection.
+
+**Design:** Use the Rust-native approach — the type system guarantees sole
+ownership at compile time, so `SharedPointer::get_mut` always succeeds
+inside the builder (no runtime checks, no fallback cloning). This builds
+directly on 3.1.
+
+**Design consideration:** The builder must work through the `archery`
+`SharedPointerKind` abstraction so it supports both `ArcK` and `ArcTK`.
+The `FromIterator` impls should use the builder internally for optimal
+performance.
+
+**Validation:** Benchmark bulk construction (1K/10K/100K/1M elements) via
+builder vs direct insertion vs `FromIterator`.
+
+**Complexity:** Moderate.
+
+**Affects:** All five collection types.
+
+**Prerequisites:** 3.1 (Arc::get_mut — provides the internal mechanism).
+
+**References:** Clojure transients (clojure.org/reference/transients);
+Bifurcan linear/forked (github.com/lacuna/bifurcan); immer
+`transient_rvalue` policy.
+
+---
+
+## Phase 4 — Data structure internals {#phase-4}
+
+Structural changes to individual data structures. Each is a significant
+body of work. Items within this phase are independent of each other and
+can proceed in parallel.
+
+### 4.1 Vector prefix buffer
+
+**What:** Add a prefix (head) buffer to complement the existing tail
+buffer. The current RRB structure has 4 buffers (`outer_f`, `inner_f`,
+`inner_b`, `outer_b`) flanking a `middle` tree. Despite having front
+buffers, prepend still requires tree modification in many cases. A true
+prefix buffer would give O(1) amortised prepend symmetric with append.
+
+**Why:** Scala 2.13 measured 2-3× faster sequential prepend and 35-40×
+faster alternating append/prepend with their radix-balanced finger tree
+rewrite.
+
+**Ordering rationale:** Must follow 2.1 (concat fix) because both modify
+the RRB tree structure. The concat fix should land on the current
+representation before the prefix buffer changes it.
+
+**Complexity:** Low-moderate. The tail buffer mechanism exists; the prefix
+buffer is symmetric. Interaction with concat, split, and indexed access
+needs care.
+
+**Affects:** `Vector<A>`.
+
+**Prerequisites:** 2.1 (concat fix), 0.3 (prepend benchmarks).
+
+**References:** Scala 2.13 `Vector` — Zeiger, "The New Collections
+Implementation"; Hinze and Paterson, "Finger Trees" (JFP 2006).
+
+---
+
+### 4.2 CHAMP prototype benchmark
+
+**Important context:** The current HAMT is NOT a textbook bitmap trie. It
+is a SIMD-accelerated hybrid with a 3-tier node hierarchy:
+1. `SmallSimdNode` — 16 slots, 1×u8x16 SIMD control group for parallel
+   probe. Used for small/leaf nodes.
+2. `LargeSimdNode` — 32 slots, 2×u8x16 SIMD groups. Promoted from Small
+   when full.
+3. `HamtNode` — classic bitmap-indexed SparseChunk, 32 slots. Promoted
+   from Large when full. This is the only level that has child pointers.
+
+The `Entry` enum has 5 variants: `Value`, `SmallSimdNode`, `LargeSimdNode`,
+`HamtNode`, `Collision`. This architecture was introduced in v6.1 (Sep 2025)
+and v7.0 (Jan 2026) with explicit performance tuning.
+
+**Why CHAMP may still win:** CHAMP's benefits are architectural (canonical
+form, contiguous data layout enabling O(1) equality short-circuit and cache-
+friendly iteration). The current SIMD approach optimises lookup latency but
+doesn't address memory density or canonical form. However, the SIMD probing
+may partially offset CHAMP's iteration advantage. **This is uncertain and
+must be benchmarked before committing.**
+
+**What:** Build a standalone CHAMP implementation (two-bitmap encoding,
+canonical deletion) and benchmark it against the current SIMD HAMT across
+all operations (insert, remove, lookup, iteration, equality, memory usage)
+at sizes 100, 1K, 10K, 100K, 1M. This is a go/no-go gate for 4.3.
+
+**Decision rule:** Only proceed to 4.3 if CHAMP shows material improvement
+in at least one dimension without regression in others.
+
+**Complexity:** Moderate. Standalone prototype, not yet integrated.
+
+**Affects:** `HashMap<K, V>`, `HashSet<A>`.
+
+**Prerequisites:** 0.3 (HashMap benchmarks + memory profiling), 0.4 (HAMT
+architecture docs).
+
+**References:** Steindorfer and Vinju, "Optimizing Hash-Array Mapped Tries
+for Fast and Lean Immutable JVM Collections" (OOPSLA 2015); Scala 2.13
+`scala.collection.immutable.HashMap`; Bagwell, "Ideal Hash Trees" (2001);
+Capsule reference implementation (github.com/usethesource/capsule); imbl
+issue #154.
+
+---
+
+### 4.3 CHAMP integration
+
+**What:** If 4.2 benchmarks justify it, replace the SIMD HAMT with CHAMP.
+This includes both the two-bitmap encoding (OOPSLA 2015, Section 3) and
+canonical deletion (OOPSLA 2015, §4.2). These are inseparable —
+canonical form is a key benefit of CHAMP and only works with the two-bitmap
+layout.
+
+**Complexity:** High. Replaces the entire node layer for HashMap/HashSet.
+The current SIMD architecture is ~1100 lines with extensive optimisation.
+
+**Affects:** `HashMap<K, V>`, `HashSet<A>`.
+
+**Prerequisites:** 4.2 (prototype must show improvement), 0.1 (CI/miri),
+0.2 (HashMap fuzz target).
+
+**Ordering note:** Must land BEFORE 5.3 (const generic branching) and 5.4
+(no_std), because both would need to accommodate whatever node architecture
+exists. If CHAMP lands first, 5.3 parameterises the CHAMP nodes. If 5.3
+landed first, CHAMP would need to be generic from day one.
+
+**References:** Same as 4.2.
+
+---
+
+## Phase 5 — Breaking API changes (v8.0.0) {#phase-5}
+
+All items in this phase are breaking changes. They must be batched into a
+single major version bump to minimise disruption for downstream users.
+Ship as v8.0.0 when all are ready.
+
+### 5.1 Default to triomphe::Arc
+
+**What:** Change `DefaultSharedPtr` from `ArcK` (std::sync::Arc) to `ArcTK`
+(triomphe::Arc). triomphe's Arc omits the weak reference count, saving
+8 bytes per allocation and removing one atomic RMW from every clone/drop.
+
+**Breaking because:** The concrete type of internal pointers changes.
+Any downstream code that extracts or inspects the pointer type (rare but
+possible) will break. Code using `Arc::downgrade` on extracted pointers
+will break (triomphe has no weak references).
+
+**Validation:** Memory profiling benchmarks (from 0.3) must show the
+expected ~8 bytes/node reduction. Throughput benchmarks must not regress.
+
+**Complexity:** Low. The feature already exists and works. The change is
+flipping the default in `shared_ptr.rs`.
+
+**Affects:** All five collection types.
+
+**Prerequisites:** 0.3 (memory profiling benchmarks).
+
+**References:** triomphe (docs.rs/triomphe); archery (docs.rs/archery).
+
+---
+
+### 5.2 Remove unnecessary Clone bounds (issue [#72](https://github.com/jneem/imbl/issues/72))
+
+**What:** Several trait implementations (`Deserialize`, `FromIterator`,
+`Extend`) require `A: Clone` even when the operation doesn't call `.clone()`.
+
+**Breaking because:** Relaxing a bound is technically a minor change, but
+the interaction with the `SharedPointerKind` generic parameter means some
+downstream type inference may change.
+
+**Design consideration:** Must be coordinated with 3.1 (Arc::get_mut). The
+`get_mut` → `make_mut` fallback requires `Clone`. For operations that don't
+need the fallback (e.g. building from an iterator of owned values), the
+bound can be removed. For operations that do need it, it must stay.
+
+**Approach:** Audit each trait impl individually. Start with the obvious
+wins (`FromIterator`, `Extend`) where no cloning occurs. Leave structural-
+sharing operations (insert, update) with the Clone bound.
+
+**Complexity:** Moderate.
+
+**Affects:** All five collection types.
+
+**Prerequisites:** 3.1 (Arc::get_mut — clarifies which paths need Clone).
+
+**References:** imbl issue #72.
+
+---
+
+### 5.3 Configurable branching factor (issue [#145](https://github.com/jneem/imbl/issues/145))
+
+**What:** Replace compile-time constants and the binary `small-chunks`
+feature flag with const generic parameters. Current constants in `config.rs`:
+- `VECTOR_CHUNK_SIZE`: 64 (or 4 with `small-chunks`)
+- `ORD_CHUNK_SIZE`: 16 (or 6 with `small-chunks`)
+- `HASH_LEVEL_SIZE`: 5 (or 3 with `small-chunks`)
+
+**Breaking because:** Adds a const generic parameter to every collection
+type. Mitigated by using a default value: `Vector<A, 64>`.
+
+**Design:** The maintainer prefers const generics over feature flags (issue
+#145 / PR #155 discussion). The `small-chunks` feature can be preserved as
+a type alias for backwards compatibility: `type SmallVector<A> = Vector<A, 4>`.
+
+**Ordering rationale:** Must land AFTER 4.3 (CHAMP integration) if CHAMP
+proceeds, because the branching factor parameterisation needs to target
+whatever node architecture exists at that point.
+
+**Complexity:** Moderate. Threading a const generic through all types and
+iterators. May impact compile times.
+
+**Affects:** All five collection types.
+
+**Prerequisites:** 4.3 (CHAMP integration, if proceeding — otherwise
+independent).
+
+**References:** imbl issue #145; PR #155; immer `BL` template parameter.
+
+---
+
+### 5.4 `no_std` support (PR [#149](https://github.com/jneem/imbl/pull/149))
+
+**What:** Make imbl usable in `no_std + alloc` environments.
+
+**Breaking because:** `RandomState` (the default hasher for HashMap/HashSet)
+comes from `std`. A `no_std` build needs a different default hasher or a
+mandatory type parameter. Either changes the public API.
+
+**Design:** Follow `hashbrown`'s approach: default hasher is a no_std-
+compatible hasher (e.g. `ahash`) when `std` feature is disabled, and
+`RandomState` when `std` is enabled. The `std` feature is on by default.
+
+**Ordering rationale:** Must land AFTER 4.3 (CHAMP integration) if CHAMP
+proceeds. The CHAMP implementation should be designed with `no_std` in mind
+from the start rather than retrofitted.
+
+**Complexity:** Moderate. Core data structures are pure; the blocker is
+the hasher default.
+
+**Affects:** All five collection types (HashMap/HashSet most directly).
+
+**Prerequisites:** 4.3 (CHAMP integration, if proceeding — otherwise
+independent).
+
+**References:** imbl PR #149; hashbrown crate; rpds `no_std` support.
+
+---
+
+## Phase 6 — Research & speculative {#phase-6}
+
+High-complexity items with uncertain payoff. Each requires a prototype and
+benchmark before committing to integration.
+
+### 6.1 Persistent Adaptive Radix Tree for OrdMap
+
+**What:** Replace OrdMap's B+ tree with a persistent ART.
+
+**Caveats:**
+- ART works best with byte-string keys. Arbitrary `Ord` types need encoding.
+- The B+ tree was rewritten in v6.0 with significant improvements.
+- ART is less proven in production for general-purpose ordered maps.
+
+**Approach:** Prototype as a standalone crate, benchmark against current
+OrdMap across all operations and key types.
+
+**Complexity:** High.
+
+**Affects:** `OrdMap<K, V>`, `OrdSet<A>`.
+
+**Prerequisites:** 0.2 (OrdMap fuzz target), 0.3 (OrdMap/OrdSet benchmarks).
+
+**References:** Ankur Dave, "PART"; Leis et al., "The Adaptive Radix Tree"
+(ICDE 2013).
+
+---
+
+### 6.2 HHAMT inline storage
+
+**What:** Store small values inline in HAMT nodes instead of behind Arc
+pointers.
+
+**Caveats:** Rust lacks specialisation (nightly-only). A size-threshold
+approach via const generics is possible but awkward.
+
+**Complexity:** High. Requires reworking node memory layout.
+
+**Affects:** `HashMap<K, V>`, `HashSet<A>`.
+
+**Prerequisites:** 4.3 (CHAMP integration — builds on whatever node layout
+exists).
+
+**References:** Steindorfer, "Efficient Immutable Collections" (PhD thesis,
+2017), Chapter 5.
+
+---
+
+### 6.3 ThinArc for node pointers
+
+**What:** Use `triomphe::ThinArc` for internal nodes (header + variable-
+length array behind a single thin pointer). Saves 8 bytes per pointer.
+
+**Complexity:** Moderate. All node pointer types change.
+
+**Affects:** All five collection types.
+
+**Prerequisites:** 5.1 (triomphe default — ThinArc is triomphe-specific).
+
+**References:** triomphe `ThinArc` (docs.rs/triomphe).
+
+---
+
+### 6.4 `dupe::Dupe` trait support (issue [#113](https://github.com/jneem/imbl/issues/113))
+
+**What:** Implement Meta's `Dupe` trait. Mechanical — delegates to `clone()`.
+
+**Complexity:** Trivial.
+
+**Affects:** All five collection types.
+
+**References:** imbl issue #113; `dupe` crate.
+
+---
+
+## Dependency map {#dependency-map}
+
+```
+Phase 0 (foundations)
+  0.1 CI/miri ─────────────────────┬──────────────────────────────────────┐
+  0.2 fuzz coverage ───────────────┤                                      │
+  0.3 benchmark coverage ──────────┤                                      │
+  0.4 architecture docs ───────────┤                                      │
+                                   │                                      │
+Phase 1 (housekeeping)             │ (parallel with Phase 0)              │
+  1.1 dependabot PRs               │                                      │
+  1.2 dead pool code               │                                      │
+  1.3 bincode deprecation          │                                      │
+  1.4 edition 2021                 │                                      │
+                                   ▼                                      │
+Phase 2 (correctness + API)                                               │
+  2.1 RRB concat fix ◄── 0.1, 0.3, 0.4                                   │
+  2.2 get_next_exclusive ◄── 0.1                                          │
+  2.3 OrdMap iter_mut ◄── 0.1, 0.4                                        │
+                                   │                                      │
+Phase 3 (mutation perf)            │                                      │
+  3.1 Arc::get_mut ◄── 0.1, 0.3, 0.4                                     │
+  3.2 unsafe audit ◄── 0.1, 0.2, 0.4                                     │
+  3.3 transient/builder ◄── 3.1                                           │
+                                   │                                      │
+Phase 4 (internals)                │                                      │
+  4.1 prefix buffer ◄── 2.1                                               │
+  4.2 CHAMP prototype ◄── 0.3, 0.4                                        │
+  4.3 CHAMP integration ◄── 4.2, 0.1, 0.2 (only if benchmarks justify)   │
+                                   │                                      │
+Phase 5 (breaking — v8.0.0)        │                                      │
+  5.1 triomphe default ◄── 0.3                                            │
+  5.2 remove Clone bounds ◄── 3.1                                         │
+  5.3 const generic branching ◄── 4.3 (if proceeding)                     │
+  5.4 no_std ◄── 4.3 (if proceeding)                                      │
+                                   │                                      │
+Phase 6 (research)                 │                                      │
+  6.1 ART for OrdMap ◄── 0.2, 0.3                                         │
+  6.2 HHAMT inline ◄── 4.3                                                │
+  6.3 ThinArc ◄── 5.1                                                     │
+  6.4 Dupe trait ◄── (none)                                                │
+```
+
+### Parallel tracks
+
+Once Phase 0 is complete, three independent tracks can proceed in parallel:
+
+1. **Vector track:** 2.1 → 4.1
+2. **Hash track:** 4.2 → (4.3 if justified) → 5.3, 5.4
+3. **Mutation track:** 3.1 → 3.2, 3.3 → 5.2
+
+Items 2.2, 2.3, 1.x, and 6.4 are independent and can be done at any time
+after their prerequisites.
+
+---
+
+## References {#references}
+
+### Papers and theses
+
+- Phil Bagwell, "Ideal Hash Trees" (2001). The original HAMT paper.
+- Michael J. Steindorfer and Jurgen J. Vinju, "Optimizing Hash-Array Mapped
+  Tries for Fast and Lean Immutable JVM Collections" (OOPSLA 2015). CHAMP.
+- Michael J. Steindorfer, "Efficient Immutable Collections" (PhD thesis,
+  University of Amsterdam, 2017). HHAMT, multi-maps.
+- Jean Niklas L'orange, "Improving RRB-Tree Performance through Transience"
+  (master's thesis, University of Oslo, 2014). RRB concatenation.
+- Nicolas Stucki, Tiark Rompf, Vlad Ureche, Phil Bagwell, "RRB Vector: A
+  Practical General Purpose Immutable Sequence" (ICFP 2015).
+- Viktor Leis, Alfons Kemper, Thomas Neumann, "The Adaptive Radix Tree:
+  ARTful Indexing for Main-Memory Databases" (ICDE 2013).
+- Ralf Hinze and Ross Paterson, "Finger Trees: A Simple General-purpose
+  Data Structure" (JFP 2006).
+
+### Implementations
+
+- **Clojure** — persistent collections (github.com/clojure/clojure).
+  Transients, HAMT, RRB vector.
+- **Scala 2.13** — `scala.collection.immutable` (github.com/scala/scala).
+  CHAMP HashMap/HashSet, radix-balanced finger-tree Vector.
+- **Capsule** — CHAMP reference implementation in Java
+  (github.com/usethesource/capsule).
+- **immer** — C++ persistent collections (github.com/arximboldi/immer).
+  Memory policy system, RRB trees, transient r-values.
+- **Bifurcan** — Java persistent collections (github.com/lacuna/bifurcan).
+  Linear/forked ownership model.
+- **librrb** — C RRB tree implementation (github.com/hyPiRion/c-rrb).
+  L'orange's concatenation algorithm.
+
+### Rust crates
+
+- **imbl** — github.com/jneem/imbl (the subject of this document)
+- **im** — github.com/bodil/im-rs (unmaintained predecessor)
+- **rpds** — github.com/orium/rpds (alternative, has `no_std`)
+- **triomphe** — docs.rs/triomphe (Arc without weak count)
+- **archery** — docs.rs/archery (shared pointer abstraction)
+- **hashbrown** — docs.rs/hashbrown (no_std hash map precedent)
+- **dhat** — docs.rs/dhat (heap profiling for benchmarks)

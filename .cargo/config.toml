@@ -1,0 +1,3 @@
+# The global ~/.cargo/config.toml sets -Z threads=14 (nightly-only).
+# imbl uses stable Rust, so flake.nix exports RUSTFLAGS to override.
+# This file is intentionally empty — all config is via flake.nix shellHook.

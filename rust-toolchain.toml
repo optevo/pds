@@ -1,0 +1,5 @@
+# Documentation only — the local dev environment uses the Nix-provided toolchain.
+# This records the expected version for environments without Nix (e.g. CI).
+[toolchain]
+channel    = "stable"
+components = ["rustfmt", "clippy", "rust-src"]

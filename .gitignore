@@ -3,12 +3,16 @@ dist/
 **/*.rs.bk
 /im-rc
 
-# Devenv
+# Nix / devenv
 .devenv*
 devenv.local.nix
+result
 
 # direnv
 .direnv
 
 # pre-commit
 .pre-commit-config.yaml
+
+# Virtual environments (should not exist, but guard against it)
+.venv/
