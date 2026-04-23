@@ -88,3 +88,46 @@ and `nix develop .#nightly` respectively.
 **Consequences:**
 Miri and fuzzing workflows require explicitly entering the nightly shell.
 CI continues to use its own toolchain installation (dtolnay/rust-toolchain).
+
+## DEC-003: Dependency audit — defer breaking updates
+
+**Date:** 2026-04-24
+**Status:** Accepted
+
+**Context:**
+Phase 0.4 dependency audit. All semver-compatible dependencies are current
+(cargo update is a no-op). Several breaking updates are available:
+
+| Dep | Current | Available | Impact |
+|-----|---------|-----------|--------|
+| rand/rand_core/rand_xoshiro | 0.9.x | 0.10.x | Coordinated ecosystem bump |
+| wide | 0.7 | 1.3 | SIMD for HAMT; may be removed by CHAMP (4.3) |
+| criterion | 0.7 | 0.8 | Dev-dep, benchmarks |
+| proptest-derive | 0.6 | 0.8 | Dev-dep, test macros |
+| bincode | 2.0.1 | 3.0.0 | RUSTSEC-2025-0141 unmaintained |
+
+Duplicate crate: `getrandom` v0.3/v0.4 (transitive from different rand_core
+versions — harmless, resolves with rand update).
+
+**Decision:**
+- Do not update breaking dependencies now. All are non-urgent.
+- **bincode**: deprecation tracked in item 1.3 — remove in v8.0.0, not update.
+- **wide 0.7 → 1.3**: defer until after CHAMP evaluation (4.2). If CHAMP
+  replaces the SIMD HAMT, `wide` is removed entirely.
+- **rand ecosystem 0.9 → 0.10**: defer until the ecosystem stabilises.
+  imbl only uses rand_core for hash seeding and rand_xoshiro for PRNG.
+  The API surface consumed is minimal.
+- **criterion 0.7 → 0.8**: evaluate when starting benchmark-heavy work.
+  Current version is functional.
+- **proptest-derive 0.6 → 0.8**: evaluate alongside proptest updates.
+- **cargo-audit** added to default Nix devShell for local use.
+  CI already has it via `rustsec/audit-check`.
+
+**Alternatives considered:**
+- Update everything now — risk breakage across multiple subsystems
+  simultaneously with no functional benefit.
+
+**Consequences:**
+Breaking updates are deferred to natural integration points (CHAMP work
+for wide, v8.0.0 for bincode removal). The semver-compatible deps are
+all current and audit-clean except the known bincode advisory.

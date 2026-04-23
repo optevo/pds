@@ -64,6 +64,12 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 0.4: Dependency audit.** All semver-compatible deps current.
+  No security vulnerabilities. Breaking updates (rand 0.10, wide 1.3,
+  criterion 0.8, proptest-derive 0.8) deferred to natural integration points.
+  bincode unmaintained advisory tracked in item 1.3. cargo-audit added to
+  Nix devShell. See DEC-003.
+
 - **[2026-04-24] 0.3: Complete benchmark coverage.** Added `benches/hashset.rs`
   (HashSet vs std, i64 + string keys, set operations: union/intersection/
   difference) and `benches/ordset.rs` (OrdSet vs BTreeSet, i64 + string keys,
@@ -91,7 +97,7 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 0 — Foundations (0.4 dependency audit, 0.5 architecture docs remaining).
+Phase 0 — Foundations (0.5 architecture docs remaining).
 
 ---
 

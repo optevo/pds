@@ -29,7 +29,7 @@
         devShells = {
           # Default shell — stable toolchain for everyday development.
           default = pkgs.mkShell {
-            packages = [ stableToolchain pkgs.sccache ];
+            packages = [ stableToolchain pkgs.sccache pkgs.cargo-audit ];
             # Route compilations through the shared sccache instance.
             RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
             shellHook = ''
