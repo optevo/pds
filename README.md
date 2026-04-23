@@ -1,36 +1,72 @@
 # imbl
 
 [![crates.io](https://img.shields.io/crates/v/imbl)](https://crates.io/crates/imbl)
-![tests](https://github.com/jneem/imbl/actions/workflows/ci.yml/badge.svg)
+![tests](https://github.com/optevo/imbl/actions/workflows/ci.yml/badge.svg)
 [![docs.rs](https://docs.rs/imbl/badge.svg)](https://docs.rs/imbl/)
-[![coverage](https://coveralls.io/repos/github/jneem/imbl/badge.svg)](https://coveralls.io/github/jneem/imbl)
 
 Blazing fast immutable collection datatypes for Rust.
 
-This is originally a fork of the [`im`](https://github.com/bodil/im-rs) crate, which is unmaintained. The `1.0` release of `imbl` is compatible with the
-`15.0.0` release of `im`, but with some fixes to `OrdMap` and `OrdSet`.
+This is a fork of [jneem/imbl](https://github.com/jneem/imbl), itself a fork
+of the [`im`](https://github.com/bodil/im-rs) crate. Changes are structured
+as independent, upstreamable PRs (see [DEC-001](docs/decisions.md)).
 
-Changes from `im` include:
+## Collections
 
-* Bug fixes on OrdMap/OrdSet
-* Bug fixes on Vector
-* Significant performance improvements for HashMap/HashSet
-* Significant performance improvements for OrdMap/OrdSet
-* Supports using [`triomphe::Arc`](https://docs.rs/triomphe/latest/triomphe/struct.Arc.html) for the shared pointer implementation
+| Type | Backing structure | Key operations |
+|------|-------------------|----------------|
+| `Vector<A>` | RRB tree | O(log n) index, push, split, concat |
+| `HashMap<K, V>` | SIMD HAMT | O(log n) insert, lookup, set operations |
+| `HashSet<A>` | SIMD HAMT | O(log n) insert, lookup, set operations |
+| `OrdMap<K, V>` | B+ tree | O(log n) insert, lookup, range queries |
+| `OrdSet<A>` | B+ tree | O(log n) insert, lookup, range queries |
+
+All collections use structural sharing for efficient cloning — cloning a
+collection is O(1), and modified versions share unchanged subtrees with the
+original.
 
 ## Documentation
 
-* [API docs](https://docs.rs/imbl/)
+- [API docs (docs.rs)](https://docs.rs/imbl/)
+- [Architecture](docs/architecture.md) — internal data structure design
+- [Decision log](docs/decisions.md) — architectural choices and rationale
+- [Glossary](docs/glossary.md) — project terminology
+- [Implementation plan](docs/impl-plan.md) — phased improvement roadmap
+- [References](docs/references.md) — papers and external resources
 
-## Minimum supported rust version
+## Feature flags
 
-This crate supports rust 1.85 and later. As const generics become more useful,
-the minimum supported rust version will increase.
+| Feature | Description |
+|---------|-------------|
+| `proptest` | Proptest strategies for all collection types |
+| `quickcheck` | `Arbitrary` implementations for all collection types |
+| `rayon` | Parallel iterators for `Vector` |
+| `serde` | `Serialize` / `Deserialize` for all collection types |
+| `triomphe` | Use `triomphe::Arc` (no weak count, 8 bytes smaller per node) |
+| `arbitrary` | `Arbitrary` implementations for fuzzing |
+| `bincode` | **Deprecated** — will be removed in v8.0.0. Use serde instead. |
+
+## Building
+
+```bash
+# Development (requires Nix)
+nix develop              # enter devShell with stable Rust + sccache
+bash test.sh             # run full quality gate (tests + clippy + doc)
+bash bench.sh            # run criterion benchmarks
+bash bench.sh vector     # run a single benchmark suite
+
+# Nightly tools (miri, fuzzing)
+nix develop .#nightly    # enter nightly devShell
+cargo miri test          # run tests under miri
+cd fuzz && cargo fuzz list  # list fuzz targets
+```
+
+## Minimum supported Rust version
+
+This crate supports Rust 1.85 and later.
 
 ## Licence
 
-Copyright 2017--2021 Bodil Stokke
-
+Copyright 2017–2021 Bodil Stokke
 Copyright 2021 Joe Neeman
 
 This software is subject to the terms of the Mozilla Public

@@ -64,6 +64,22 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 1.4: Edition 2021 migration.** Updated `Cargo.toml`
+  edition from 2018 to 2021. `cargo fix --edition` found no code changes
+  needed. Edition 2021 enables resolver v2 (fewer unnecessary features on
+  transitive deps).
+
+- **[2026-04-24] 1.3: Deprecate bincode feature.** Added `#[deprecated]`
+  attribute on the `bincode` module in `lib.rs` with deprecation notice
+  pointing to serde. Updated feature table in lib.rs doc comment. Feature
+  will be removed entirely in v8.0.0.
+
+- **[2026-04-24] 1.2: Remove dead pool code.** Deleted `src/fakepool.rs`
+  (no-op stub, orphaned — no `mod` declaration) and `src/vector/pool.rs`
+  (referenced non-existent `POOL_SIZE` and `util::Pool`, also orphaned).
+  Removed Pool/RRBPool glossary entry. No code in the module tree
+  referenced either file.
+
 - **[2026-04-24] 0.5: Architecture documentation.** Documented internal
   architecture of all core modules in `docs/architecture.md`: HAMT 3-tier
   SIMD hybrid (SmallSimdNode/LargeSimdNode/HamtNode), RRB tree 4-buffer
@@ -104,7 +120,8 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 0 complete. Starting Phase 1 (housekeeping) and Phase 2 (correctness + API).
+Phase 1 — items 1.2, 1.3, 1.4 complete. Item 1.1 (dependabot PRs) is
+upstream-only. Starting Phase 2 (correctness + API).
 
 ---
 

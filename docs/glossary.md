@@ -40,6 +40,3 @@ comments, and documentation — do not substitute synonyms.
 **SparseChunk** — Bitmap-indexed sparse array backed by a `Chunk`. Used in
   HAMT nodes and internally for compact storage.
 
-**Pool / RRBPool** — Object pool for reusing `Chunk` allocations. Reduces
-  allocation pressure during bulk operations. Located in `src/util/pool.rs`
-  and `src/vector/pool.rs`.
