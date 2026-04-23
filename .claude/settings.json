@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(/Users/rd/projects/imbl/**)",
+      "Edit(/Users/rd/projects/imbl/**)",
+      "Write(/Users/rd/projects/imbl/**)",
+      "Glob(/Users/rd/projects/imbl/**)",
+      "Grep(/Users/rd/projects/imbl/**)",
+      "Bash(cargo *)",
+      "Bash(git *)",
+      "Bash(bash build.sh*)",
+      "Bash(bash test.sh*)",
+      "Bash(bash bench.sh*)",
+      "Bash(direnv exec *)",
+      "Bash(ls *)",
+      "Bash(rm *)",
+      "Bash(tail *)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:arxiv.org)",
+      "WebSearch",
+      "Agent"
+    ]
+  }
+}

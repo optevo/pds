@@ -45,15 +45,57 @@ single v8.0.0 release in Phase 5.
 
 ## Contents
 
-- [Phase 0 — Foundations](#phase-0)
-- [Phase 1 — Housekeeping](#phase-1)
-- [Phase 2 — Correctness fixes & quick API wins](#phase-2)
-- [Phase 3 — Mutation performance](#phase-3)
-- [Phase 4 — Data structure internals](#phase-4)
-- [Phase 5 — Breaking API changes (v8.0.0)](#phase-5)
-- [Phase 6 — Research & speculative](#phase-6)
+- [Done](#done)
+- [Current](#current)
+- [Future](#future)
+  - [Phase 0 — Foundations](#phase-0)
+  - [Phase 1 — Housekeeping](#phase-1)
+  - [Phase 2 — Correctness fixes & quick API wins](#phase-2)
+  - [Phase 3 — Mutation & parallel performance](#phase-3)
+  - [Phase 4 — Data structure internals](#phase-4)
+  - [Phase 5 — Breaking API changes (v8.0.0)](#phase-5)
+  - [Phase 6 — Research & speculative](#phase-6)
 - [Dependency map](#dependency-map)
 - [References](#references)
+
+---
+
+## Done {#done}
+
+*Newest first.*
+
+- **[2026-04-24] 0.3: Complete benchmark coverage.** Added `benches/hashset.rs`
+  (HashSet vs std, i64 + string keys, set operations: union/intersection/
+  difference) and `benches/ordset.rs` (OrdSet vs BTreeSet, i64 + string keys,
+  remove_min/remove_max). Registered in Cargo.toml.
+
+- **[2026-04-24] 0.2: Complete fuzz coverage.** Added `fuzz/fuzz_targets/hashmap.rs`
+  (insert, remove, get, union, symmetric_difference, intersection vs std HashMap)
+  and `fuzz/fuzz_targets/ordmap.rs` (insert, remove, get, range iteration with
+  bidirectional traversal vs BTreeMap). Extended `fuzz/fuzz_targets/vector.rs`
+  with `FocusGet` and `FocusMutSet` actions exercising Focus/FocusMut cursors.
+
+- **[2026-04-24] 0.1: CI pipeline.** Updated `.github/workflows/ci.yml`:
+  actions/checkout v4, added miri job (nightly), added `small-chunks` testing,
+  clippy with `-D warnings` + upstream lint allowances, cargo doc with
+  `-D warnings`, cargo audit via rustsec/audit-check, modernised fuzz job.
+
+- **[2026-04-24] Project infrastructure setup.** Nix devShells (stable +
+  nightly), build.sh, test.sh, bench.sh, directives.md, CLAUDE.md, docs/
+  (decisions, glossary, references, baselines). Dependency update
+  (`cargo update`), dead `version_check` build-dep removed, Cargo profiles
+  tuned (split-debuginfo, LTO, codegen-units), `target-cpu=native` for
+  benchmarks.
+
+---
+
+## Current {#current}
+
+Phase 0 — Foundations (0.4 dependency audit, 0.5 architecture docs remaining).
+
+---
+
+## Future {#future}
 
 ---
 
@@ -157,7 +199,41 @@ buffer), 4.2 (CHAMP prototype), 5.1 (triomphe default).
 
 ---
 
-### 0.4 Architecture documentation
+### 0.4 Dependency audit
+
+**What:** Full review of all dependencies in `Cargo.toml` — both direct and
+transitive — for security, performance, staleness, and compatibility issues.
+
+**Scope:**
+- **Direct deps audit:** Review each dependency for:
+  - Available updates (semver-compatible and breaking)
+  - Known security advisories (`cargo audit`)
+  - Performance-relevant changes in newer versions
+  - MSRV compatibility with the project's Rust 1.85 minimum
+  - Whether the dep is still needed (e.g. `version_check` was a dead
+    build-dep — already removed)
+- **Transitive dep review:** Check for duplicate versions of the same crate
+  in the dependency tree (`cargo tree -d`) — these increase compile time
+  and binary size
+- **Feature flag review:** Ensure optional deps use `default-features = false`
+  where appropriate and that feature combinations are tested
+- **Dev-dep review:** Ensure benchmark comparison targets (rpds) and test
+  tooling (proptest, criterion) are current
+- **Add `cargo audit` to CI** — automated security advisory checking
+
+**Why:** The project had stale deps (5 unmerged dependabot PRs, a dead
+build-dependency). Keeping deps current prevents security debt from
+accumulating and ensures compatibility with the evolving Rust ecosystem.
+Updates to core deps like `archery` and `triomphe` may include performance
+fixes that benefit imbl directly.
+
+**Complexity:** Low.
+
+**Prerequisite for:** 1.1 (dependabot PR triage), 5.1 (triomphe default).
+
+---
+
+### 0.5 Architecture documentation
 
 **What:** Document the current internal architecture of each data structure
 module before modifying it. This is a prerequisite for making safe changes,
@@ -302,7 +378,7 @@ The issue has been open since October 2021.
 
 **Affects:** `Vector<A>`.
 
-**Prerequisites:** 0.1 (CI/miri), 0.3 (concat-depth benchmarks), 0.4
+**Prerequisites:** 0.1 (CI/miri), 0.3 (concat-depth benchmarks), 0.5
 (RRB architecture docs).
 
 **References:** L'orange, "Improving RRB-Tree Performance through
@@ -355,16 +431,17 @@ position across nodes, yielding references) needs to be written.
 
 **Affects:** `OrdMap<K, V>`, `OrdSet<A>`.
 
-**Prerequisites:** 0.1 (CI), 0.4 (B+ tree architecture docs).
+**Prerequisites:** 0.1 (CI), 0.5 (B+ tree architecture docs).
 
 **References:** imbl issue #156.
 
 ---
 
-## Phase 3 — Mutation performance {#phase-3}
+## Phase 3 — Mutation & parallel performance {#phase-3}
 
 The core performance track. 3.1 is the foundation, 3.2 validates safety,
-3.3 builds the user-facing API on top.
+3.3 builds the user-facing API on top, and 3.4 extends parallelism across
+all collection types.
 
 ### 3.1 `Arc::get_mut` in-place mutation
 
@@ -400,7 +477,7 @@ threaded through all mutation paths consistently.
 
 **Affects:** All five collection types.
 
-**Prerequisites:** 0.1 (CI/miri), 0.3 (sole-owner benchmarks), 0.4
+**Prerequisites:** 0.1 (CI/miri), 0.3 (sole-owner benchmarks), 0.5
 (architecture docs for all three data structures).
 
 **References:** Clojure transients — Rich Hickey; immer memory policy —
@@ -446,7 +523,7 @@ liability. Issue open since August 2021.
 **Affects:** Primarily `Vector<A>` (Focus/FocusMut), also nodes/hamt.rs
 and nodes/btree.rs.
 
-**Prerequisites:** 0.1 (CI/miri), 0.2 (Focus/FocusMut fuzz coverage), 0.4
+**Prerequisites:** 0.1 (CI/miri), 0.2 (Focus/FocusMut fuzz coverage), 0.5
 (Focus/FocusMut architecture docs).
 
 **References:** imbl issue #27; Rust unsafe code guidelines.
@@ -481,6 +558,72 @@ builder vs direct insertion vs `FromIterator`.
 **References:** Clojure transients (clojure.org/reference/transients);
 Bifurcan linear/forked (github.com/lacuna/bifurcan); immer
 `transient_rvalue` policy.
+
+---
+
+### 3.4 Parallel iterators and bulk operations (rayon)
+
+**What:** Extend rayon support beyond Vector to all collection types.
+Currently only `Vector` has `par_iter()` and `par_iter_mut()`. HashMap,
+HashSet, OrdMap, and OrdSet have no parallel support despite being
+naturally parallelisable tree structures.
+
+**Scope:**
+
+1. **HashMap/HashSet `par_iter()`** — The HAMT is a tree of independent
+   subtrees. The 32-way branching factor at the root lets rayon split into
+   up to 32 parallel tasks. Implement `IntoParallelRefIterator`,
+   `IntoParallelRefMutIterator` (HashMap only), and `ParallelExtend`.
+   Highest-impact addition for multi-core machines.
+
+2. **OrdMap/OrdSet `par_iter()`** — The B+ tree structure allows splitting
+   at internal nodes. Less natural than HAMT (no random-access split) but
+   the tree depth provides log(n) split points. Implement
+   `IntoParallelRefIterator` and `IntoParallelRefMutIterator` (OrdMap only).
+
+3. **Parallel `FromIterator` / `collect()`** — Construct collections from
+   parallel iterators via rayon's `FromParallelIterator`. Persistent data
+   structures support this naturally: build subtrees in parallel, merge at
+   the end. For HashMap/HashSet, parallel subtree construction is
+   straightforward since hash partitioning is embarrassingly parallel.
+
+4. **Parallel bulk operations** — `union`, `intersection`, `difference`,
+   `symmetric_difference` on HashMap/HashSet can process independent HAMT
+   subtrees in parallel. The hash-prefix partitioning means subtrees at the
+   same position can be merged independently.
+
+5. **Parallel sort for Vector** — Replace the sequential `sort()` with a
+   parallel merge-sort that exploits RRB tree split/concat. Split into
+   chunks, sort in parallel, concat results. The O(log n) concat makes
+   the merge phase efficient.
+
+**Why:** Persistent data structures are naturally suited to parallelism
+because subtrees are immutable and independently traversable. On an
+18-core M5 Max, HashMap operations with 32-way root branching can
+theoretically saturate all cores. The current `rayon` feature flag exists
+but only covers Vector — extending it to all types is a high-value,
+moderate-effort improvement.
+
+**Validation:**
+- Benchmark each parallel operation against its sequential counterpart
+  at 1K/10K/100K/1M elements
+- Measure scaling efficiency: how many cores are actually utilised
+- Ensure `par_iter()` produces identical results to `iter()` (proptest)
+- Test with `--features small-chunks` (smaller branching = more splits)
+
+**Complexity:** Moderate per collection type. Vector's existing rayon.rs
+provides the template. HashMap/HashSet are the highest priority (natural
+HAMT parallelism). OrdMap/OrdSet are lower priority (less natural split).
+
+**Affects:** All five collection types.
+
+**Prerequisites:** 0.1 (CI), 0.3 (benchmarks for before/after comparison).
+Items 3.4.3–3.4.5 benefit from but do not require 3.1 (Arc::get_mut) and
+3.3 (transient/builder).
+
+**References:** rayon crate (docs.rs/rayon); Vector's existing
+`src/vector/rayon.rs`; Scala parallel collections
+(docs.scala-lang.org/overviews/parallel-collections).
 
 ---
 
@@ -553,7 +696,7 @@ in at least one dimension without regression in others.
 
 **Affects:** `HashMap<K, V>`, `HashSet<A>`.
 
-**Prerequisites:** 0.3 (HashMap benchmarks + memory profiling), 0.4 (HAMT
+**Prerequisites:** 0.3 (HashMap benchmarks + memory profiling), 0.5 (HAMT
 architecture docs).
 
 **References:** Steindorfer and Vinju, "Optimizing Hash-Array Mapped Tries
@@ -789,31 +932,33 @@ Phase 0 (foundations)
   0.1 CI/miri ─────────────────────┬──────────────────────────────────────┐
   0.2 fuzz coverage ───────────────┤                                      │
   0.3 benchmark coverage ──────────┤                                      │
-  0.4 architecture docs ───────────┤                                      │
+  0.4 dependency audit ────────────┤                                      │
+  0.5 architecture docs ───────────┤                                      │
                                    │                                      │
 Phase 1 (housekeeping)             │ (parallel with Phase 0)              │
-  1.1 dependabot PRs               │                                      │
+  1.1 dependabot PRs ◄── 0.4      │                                      │
   1.2 dead pool code               │                                      │
   1.3 bincode deprecation          │                                      │
   1.4 edition 2021                 │                                      │
                                    ▼                                      │
 Phase 2 (correctness + API)                                               │
-  2.1 RRB concat fix ◄── 0.1, 0.3, 0.4                                   │
+  2.1 RRB concat fix ◄── 0.1, 0.3, 0.5                                   │
   2.2 get_next_exclusive ◄── 0.1                                          │
-  2.3 OrdMap iter_mut ◄── 0.1, 0.4                                        │
+  2.3 OrdMap iter_mut ◄── 0.1, 0.5                                        │
                                    │                                      │
-Phase 3 (mutation perf)            │                                      │
-  3.1 Arc::get_mut ◄── 0.1, 0.3, 0.4                                     │
-  3.2 unsafe audit ◄── 0.1, 0.2, 0.4                                     │
+Phase 3 (mutation + parallel perf)  │                                      │
+  3.1 Arc::get_mut ◄── 0.1, 0.3, 0.5                                     │
+  3.2 unsafe audit ◄── 0.1, 0.2, 0.5                                     │
   3.3 transient/builder ◄── 3.1                                           │
+  3.4 parallel iterators ◄── 0.1, 0.3                                     │
                                    │                                      │
 Phase 4 (internals)                │                                      │
   4.1 prefix buffer ◄── 2.1                                               │
-  4.2 CHAMP prototype ◄── 0.3, 0.4                                        │
+  4.2 CHAMP prototype ◄── 0.3, 0.5                                        │
   4.3 CHAMP integration ◄── 4.2, 0.1, 0.2 (only if benchmarks justify)   │
                                    │                                      │
 Phase 5 (breaking — v8.0.0)        │                                      │
-  5.1 triomphe default ◄── 0.3                                            │
+  5.1 triomphe default ◄── 0.3, 0.4                                       │
   5.2 remove Clone bounds ◄── 3.1                                         │
   5.3 const generic branching ◄── 4.3 (if proceeding)                     │
   5.4 no_std ◄── 4.3 (if proceeding)                                      │
@@ -827,11 +972,13 @@ Phase 6 (research)                 │                                      │
 
 ### Parallel tracks
 
-Once Phase 0 is complete, three independent tracks can proceed in parallel:
+Once Phase 0 is complete, four independent tracks can proceed in parallel:
 
 1. **Vector track:** 2.1 → 4.1
 2. **Hash track:** 4.2 → (4.3 if justified) → 5.3, 5.4
 3. **Mutation track:** 3.1 → 3.2, 3.3 → 5.2
+4. **Parallel track:** 3.4 (HashMap/HashSet par_iter first, then OrdMap/OrdSet,
+   then bulk ops and parallel sort). Benefits from but does not block on 3.1/3.3.
 
 Items 2.2, 2.3, 1.x, and 6.4 are independent and can be done at any time
 after their prerequisites.
@@ -840,43 +987,5 @@ after their prerequisites.
 
 ## References {#references}
 
-### Papers and theses
-
-- Phil Bagwell, "Ideal Hash Trees" (2001). The original HAMT paper.
-- Michael J. Steindorfer and Jurgen J. Vinju, "Optimizing Hash-Array Mapped
-  Tries for Fast and Lean Immutable JVM Collections" (OOPSLA 2015). CHAMP.
-- Michael J. Steindorfer, "Efficient Immutable Collections" (PhD thesis,
-  University of Amsterdam, 2017). HHAMT, multi-maps.
-- Jean Niklas L'orange, "Improving RRB-Tree Performance through Transience"
-  (master's thesis, University of Oslo, 2014). RRB concatenation.
-- Nicolas Stucki, Tiark Rompf, Vlad Ureche, Phil Bagwell, "RRB Vector: A
-  Practical General Purpose Immutable Sequence" (ICFP 2015).
-- Viktor Leis, Alfons Kemper, Thomas Neumann, "The Adaptive Radix Tree:
-  ARTful Indexing for Main-Memory Databases" (ICDE 2013).
-- Ralf Hinze and Ross Paterson, "Finger Trees: A Simple General-purpose
-  Data Structure" (JFP 2006).
-
-### Implementations
-
-- **Clojure** — persistent collections (github.com/clojure/clojure).
-  Transients, HAMT, RRB vector.
-- **Scala 2.13** — `scala.collection.immutable` (github.com/scala/scala).
-  CHAMP HashMap/HashSet, radix-balanced finger-tree Vector.
-- **Capsule** — CHAMP reference implementation in Java
-  (github.com/usethesource/capsule).
-- **immer** — C++ persistent collections (github.com/arximboldi/immer).
-  Memory policy system, RRB trees, transient r-values.
-- **Bifurcan** — Java persistent collections (github.com/lacuna/bifurcan).
-  Linear/forked ownership model.
-- **librrb** — C RRB tree implementation (github.com/hyPiRion/c-rrb).
-  L'orange's concatenation algorithm.
-
-### Rust crates
-
-- **imbl** — github.com/jneem/imbl (the subject of this document)
-- **im** — github.com/bodil/im-rs (unmaintained predecessor)
-- **rpds** — github.com/orium/rpds (alternative, has `no_std`)
-- **triomphe** — docs.rs/triomphe (Arc without weak count)
-- **archery** — docs.rs/archery (shared pointer abstraction)
-- **hashbrown** — docs.rs/hashbrown (no_std hash map precedent)
-- **dhat** — docs.rs/dhat (heap profiling for benchmarks)
+See `docs/references.md` for the full bibliography — papers, implementations,
+and Rust crates referenced by plan items above.

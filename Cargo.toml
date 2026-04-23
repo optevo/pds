@@ -30,9 +30,6 @@ all-features = true
 [lib]
 path = "./src/lib.rs"
 
-[build-dependencies]
-version_check = "0.9"
-
 [features]
 debug = []
 serde = ["dep:serde_core"]
@@ -68,8 +65,22 @@ criterion = "0.7"
 rpds = { version = "1.1.0" }
 half = "2.6"
 
-# Include debug symbols when benchmarking, this is useful for profiling
+# --- Profiles ---
+
+[profile.dev]
+# Split debuginfo into separate files — dramatically faster incremental
+# linking on macOS (avoids re-merging a monolithic dSYM on every build).
+split-debuginfo = "unpacked"
+
+[profile.release]
+# Thin LTO: good code quality with reasonable link times.
+lto = "thin"
+# Fewer codegen units = better optimisation at the cost of compile time.
+codegen-units = 16
+
 [profile.bench]
+# Inherit release optimisations (opt-level=3, lto, codegen-units).
+# Add debug symbols so profiling tools (Instruments, samply) can resolve frames.
 debug = true
 
 [lints.rust]
@@ -80,7 +91,15 @@ name = "ordmap"
 harness = false
 
 [[bench]]
+name = "ordset"
+harness = false
+
+[[bench]]
 name = "hashmap"
+harness = false
+
+[[bench]]
+name = "hashset"
 harness = false
 
 [[bench]]

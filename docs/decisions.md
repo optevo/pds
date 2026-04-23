@@ -49,7 +49,8 @@ new entry explaining why the earlier reasoning no longer holds.
 
 **Context:**
 imbl is a fork of jneem/imbl. The upstream maintainer is responsive to PRs but
-not driving a roadmap. This fork has an extensive improvement plan (TODO.md).
+not driving a roadmap. This fork has an extensive improvement plan
+(`docs/impl-plan.md`).
 
 **Decision:**
 Structure every change as an independent, upstreamable PR: small, focused,

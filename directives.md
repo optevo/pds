@@ -14,6 +14,7 @@ Persistent/immutable collection datatypes for Rust. Fork of
 - [Documentation](#documentation-docs)
 - [Living documents](#living-documents)
 - [Implementation plan review](#implementation-plan-review)
+- [Dependency management](#dependency-management)
 - [Project maintenance](#project-maintenance)
 
 ---
@@ -103,15 +104,16 @@ caught by review. They are listed because they recur in AI-assisted development.
 
 ### Plan first
 
-Before writing tests for a TODO item, review the item's rationale and
-dependencies in `TODO.md`. State what needs to be tested, why (what failure
-mode it guards against), and how (unit, integration, property, fuzz, benchmark).
+Before writing tests for an implementation plan item, review the item's
+rationale and dependencies in `docs/impl-plan.md`. State what needs to be
+tested, why (what failure mode it guards against), and how (unit, integration,
+property, fuzz, benchmark).
 
 ### Completion gate
 
-Every work item in `TODO.md` should define its acceptance criteria as tests
-where feasible. An item moves from planned to done only when `test.sh` passes
-with those tests in place. Items that cannot be meaningfully tested
+Every work item in `docs/impl-plan.md` should define its acceptance criteria
+as tests where feasible. An item moves from planned to done only when
+`test.sh` passes with those tests in place. Items that cannot be meaningfully tested
 (scaffolding, documentation, tooling setup) must state why in lieu of test
 criteria.
 
@@ -236,9 +238,8 @@ All project documentation lives under `docs/` as Markdown.
 | `decisions.md` | Decision log — what was decided and why |
 | `glossary.md` | Project terminology (data structures, internals) |
 | `references.md` | Papers, implementations, external resources |
-
-The implementation plan lives in `TODO.md` at the project root (not
-`docs/impl-plan.md`) because of its size and central role in this fork.
+| `baselines.md` | Build speed, test speed, and benchmark baselines for periodic comparison |
+| `impl-plan.md` | Phased implementation plan (Phase 0–6) with dependency tracking |
 
 Subdirectories are permitted for images (`docs/img/`) or large topic areas.
 
@@ -259,12 +260,12 @@ Subdirectories are permitted for images (`docs/img/`) or large topic areas.
 
 ## Living documents
 
-### Implementation plan (`TODO.md`)
+### Implementation plan (`docs/impl-plan.md`)
 
-`TODO.md` is a phased implementation plan (Phase 0–6) with dependency tracking.
-It serves as both a backlog and a sequencing guide. Items are numbered by phase
-(e.g. 0.1, 3.2, 5.4). Dependencies between items are documented in the
-dependency map at the end of the file.
+`docs/impl-plan.md` is a phased implementation plan (Phase 0–6) with dependency
+tracking. It serves as both a backlog and a sequencing guide. Items are numbered
+by phase (e.g. 0.1, 3.2, 5.4). Dependencies between items are documented in
+the dependency map at the end of the file.
 
 ### Decision log (`docs/decisions.md`)
 
@@ -292,15 +293,15 @@ including AI-assisted work on this project.
 
 ## Implementation plan review {#sec:plan-review}
 
-The implementation plan (`TODO.md`) is long and its items are interdependent.
-It must be kept current as work progresses:
+The implementation plan (`docs/impl-plan.md`) is long and its items are
+interdependent. It must be kept current as work progresses:
 
-- **After completing any TODO item**, review surrounding items for cascading
+- **After completing any plan item**, review surrounding items for cascading
   effects. Update dependencies, sequencing, and rationale as needed.
 - **When unexpected findings emerge** during research or implementation (e.g.
   an optimisation proves infeasible, a dependency turns out to be unnecessary,
-  or a new prerequisite is discovered), update `TODO.md` immediately — do not
-  defer until the item is "done".
+  or a new prerequisite is discovered), update `docs/impl-plan.md` immediately
+  — do not defer until the item is "done".
 - **At the start of each new phase**, re-read the entire plan to check whether
   completed work has changed the assumptions of upcoming items.
 - **Periodically review** the dependency map and parallel-tracks section to
@@ -312,18 +313,77 @@ It must be kept current as work progresses:
 - **Record surprises** in `docs/decisions.md`. If an item's outcome differed
   significantly from what was planned, capture what changed and why.
 
-The goal is that `TODO.md` always reflects current understanding, not the
-assumptions from the day it was written.
+The goal is that `docs/impl-plan.md` always reflects current understanding,
+not the assumptions from the day it was written.
+
+---
+
+## Dependency management
+
+### Regular review
+
+Dependencies must be reviewed regularly — not just when something breaks.
+At the start of any significant work session, or at minimum monthly:
+
+1. **`cargo update --dry-run`** — check for available semver-compatible updates
+2. **`cargo audit`** — check for known security advisories (add to CI if not
+   already present)
+3. **`cargo tree -d`** — check for duplicate crate versions (increases compile
+   time and binary size)
+4. **Review changelogs** for direct dependencies before updating — look for
+   performance improvements, bug fixes, deprecations, and breaking changes
+   in upcoming major versions
+
+### Safe update process
+
+- Run `cargo update` to apply semver-compatible updates
+- Run `test.sh` to verify nothing breaks
+- For major version bumps: review the changelog, update call sites, record
+  the decision in `docs/decisions.md`
+
+### Test coverage enables safe updates
+
+Dependency updates are only safe when the test suite exercises the dependency
+at its integration points. When adding or evaluating a dependency:
+
+- Ensure tests cover the code paths that use it
+- If a dependency is used in unsafe code, ensure fuzz/miri coverage exists
+- If a dependency affects serialisation (serde, bincode), ensure round-trip
+  tests exist
+
+### CI enforcement
+
+`test.sh` is the quality gate for dependency updates. If `test.sh` passes
+after `cargo update`, the update is safe to commit. Add `cargo audit` to
+CI to catch advisories automatically.
 
 ---
 
 ## Project maintenance
 
+### Commit on success
+
+After each incremental success — a work item completed, `test.sh` green,
+a meaningful chunk of functionality working — commit and push immediately.
+Do not batch unrelated successes into a single commit.
+
+- **Commit message:** Describe *what changed and why*, not "wip" or "updates".
+  Reference the `docs/impl-plan.md` item if applicable (e.g. "0.3: add
+  hashset benchmarks").
+- **Push:** Push to remote after each commit. Small, frequent pushes are
+  safer than large batches.
+- **Report:** After committing, state what was completed so progress is
+  visible in the conversation.
+- **Update the plan:** Move the completed item from Current to Done in
+  `docs/impl-plan.md` in the same commit or immediately after.
+
+### General rules
+
 - Keep `README.md` current whenever the public API, usage, dependencies, or
   architecture changes.
 - `build.sh` and `test.sh` must remain runnable without arguments and exit
   non-zero on failure.
-- When making changes, update both `TODO.md` (mark items done, adjust
-  dependencies) and `docs/decisions.md` (record non-obvious choices).
+- When making changes, update both `docs/impl-plan.md` (mark items done,
+  adjust dependencies) and `docs/decisions.md` (record non-obvious choices).
 - CI (`.github/workflows/ci.yml`) is the upstream CI configuration. Keep it
   working but do not add local-only checks to it — those belong in `test.sh`.

@@ -25,8 +25,16 @@ features = ["debug"]
 members = ["."]
 
 [[bin]]
+name = "hashmap"
+path = "fuzz_targets/hashmap.rs"
+
+[[bin]]
 name = "hashset"
 path = "fuzz_targets/hashset.rs"
+
+[[bin]]
+name = "ordmap"
+path = "fuzz_targets/ordmap.rs"
 
 [[bin]]
 name = "ordset"

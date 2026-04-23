@@ -20,6 +20,10 @@ enum Action<A> {
     JoinRight(Vec<A>),
     SplitLeft(usize),
     SplitRight(usize),
+    // Focus: read-only indexed access via focus cursor
+    FocusGet(usize),
+    // FocusMut: mutable indexed access via focus_mut cursor
+    FocusMutSet(usize, A),
 }
 
 fn cap_index(len: usize, index: usize) -> usize {
@@ -119,6 +123,21 @@ fuzz_target!(|actions: Vec<Action<u32>>| {
                 assert_eq!(Vector::<_>::from_iter(nat.iter().cloned()), vec);
                 vec = vec_right;
                 nat = nat_right;
+            }
+            Action::FocusGet(index) => {
+                if !vec.is_empty() {
+                    let index = cap_index(vec.len(), index);
+                    let mut focus = vec.focus();
+                    assert_eq!(focus.get(index), Some(&nat[index]));
+                }
+            }
+            Action::FocusMutSet(index, value) => {
+                if !vec.is_empty() {
+                    let index = cap_index(vec.len(), index);
+                    let mut focus = vec.focus_mut();
+                    focus.set(index, value);
+                    nat[index] = value;
+                }
             }
         }
         assert_eq!(nat.len(), vec.len());

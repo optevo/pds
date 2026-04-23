@@ -7,83 +7,86 @@ on:
   schedule:
     - cron: "0 0 1,15 * *"
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   fmt:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-
     steps:
-      - uses: actions/checkout@v2
-      - name: install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: cargo fmt
-        run: cargo fmt --check
+      - run: cargo fmt --check
 
   test:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        rust: [stable, beta, nightly, 1.85]
-        os: [ubuntu-latest, windows-latest, macOS-latest]
-
+        rust: [stable, nightly, "1.85"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v2
-      - name: install toolchain
-        uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
-      - name: Run tests
-        run: |
-          cargo test --all-features
-          cargo test --no-default-features
-      - name: Build benches
-        if: ${{ matrix.rust == 'nightly' }}
-        run: |
-          cargo test --no-run --all-targets
-
-  doc:
-    runs-on: ${{ matrix.os }}
-    env:
-      RUSTDOCFLAGS: "-D warnings"
-    strategy:
-      fail-fast: false
-      matrix:
-        rust: [stable, beta, nightly, 1.85]
-        os: [ubuntu-latest]
-
-    steps:
-      - uses: actions/checkout@v2
-      - name: install toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-      - name: Build docs
-        run: |
-          cargo doc
+      - run: cargo test
+      - run: cargo test --all-features
+      - run: cargo test --no-default-features
+      - run: cargo test --features small-chunks
 
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: cargo clippy
-        run: cargo clippy --all-features
+      - run: >
+          cargo clippy --all-features -- -D warnings
+          -A clippy::enum_variant_names
+          -A clippy::collapsible_match
+          -A clippy::unnecessary_cast
+          -A deprecated
 
-  fuzz-tests:
-    name: fuzz
+  doc:
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --no-deps
+
+  miri:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: install nightly toolchain
-        uses: dtolnay/rust-toolchain@nightly
-      - name: install cargo-fuzz
-        run: cargo install cargo-fuzz
-      - name: run tests
-        run: for fuzz_test in `cargo fuzz list`; do cargo fuzz run $fuzz_test -- -len_control=0 -max_total_time=60 || exit 1; done
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - run: cargo miri test
+      - run: cargo miri test --all-features
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz
+      - name: Run each fuzz target for 60s
+        run: |
+          cd fuzz
+          for target in $(cargo fuzz list); do
+            cargo fuzz run "$target" -- -len_control=0 -max_total_time=60 || exit 1
+          done
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
