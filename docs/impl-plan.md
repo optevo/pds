@@ -64,6 +64,17 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 2.3: OrdMap iter_mut.** Added `iter_mut()` to OrdMap,
+  yielding `(&K, &mut V)` pairs in key order. Implementation uses a
+  stack-based depth-first traversal with `SharedPointer::make_mut` at
+  each node (copy-on-write, same pattern as HashMap's IterMut). Three
+  stack item variants: LeafEntries (slice iter over kv-pairs),
+  LeafChildren (slice iter over leaf pointers), BranchChildren (slice
+  iter over branch pointers). Implements ExactSizeIterator and
+  FusedIterator. Tests cover basic mutation, empty maps, ordering,
+  shared-structure isolation, and exact size tracking. Addresses
+  issue #156.
+
 - **[2026-04-24] 2.2: get_next_exclusive / get_prev_exclusive.** Added
   `get_prev_exclusive`, `get_next_exclusive`, `get_prev_exclusive_mut`,
   `get_next_exclusive_mut` to OrdMap and `get_prev_exclusive`,
@@ -128,8 +139,8 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 1 — items 1.2, 1.3, 1.4 complete. Item 1.1 (dependabot PRs) is
-upstream-only. Starting Phase 2 (correctness + API).
+Phase 2 — items 2.2 and 2.3 complete. Item 2.1 (RRB concat fix) is the
+remaining Phase 2 item. Phase 3 items 3.1-3.4 are now unblocked.
 
 ---
 

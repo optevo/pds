@@ -31,7 +31,8 @@ use equivalent::Comparable;
 
 use crate::hashmap::GenericHashMap;
 use crate::nodes::btree::{
-    ConsumingIter as NodeConsumingIter, Cursor, InsertAction, Iter as NodeIter, Node,
+    ConsumingIter as NodeConsumingIter, Cursor, InsertAction, Iter as NodeIter,
+    IterMut as NodeIterMut, Node,
 };
 use crate::shared_ptr::DefaultSharedPtr;
 
@@ -644,6 +645,29 @@ where
         Q: Comparable<K> + ?Sized,
     {
         self.root.as_mut()?.lookup_mut(key)
+    }
+
+    /// Get a mutable iterator over the key/value pairs of a map.
+    ///
+    /// Each node on the path is made exclusive via copy-on-write, so
+    /// iterating mutably over a shared map will clone the tree structure
+    /// (but not values that aren't modified).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::OrdMap;
+    /// let mut map = ordmap![1 => 10, 2 => 20, 3 => 30];
+    /// for (k, v) in map.iter_mut() {
+    ///     *v += *k;
+    /// }
+    /// assert_eq!(ordmap![1 => 11, 2 => 22, 3 => 33], map);
+    /// ```
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V, P> {
+        IterMut {
+            it: NodeIterMut::new(self.root.as_mut(), self.size),
+        }
     }
 
     /// Get the closest smaller entry in a map to a given key
@@ -1998,6 +2022,47 @@ where
 }
 impl<'a, K, V, P> FusedIterator for RangedIter<'a, K, V, P> where P: SharedPointerKind {}
 
+/// A mutable iterator over the key/value pairs of a map.
+///
+/// Values can be modified in place. Keys are immutable because changing
+/// a key would violate the ordering invariant.
+pub struct IterMut<'a, K, V, P: SharedPointerKind> {
+    it: NodeIterMut<'a, K, V, P>,
+}
+
+impl<'a, K, V, P> Iterator for IterMut<'a, K, V, P>
+where
+    K: Ord + Clone + 'a,
+    V: Clone + 'a,
+    P: SharedPointerKind,
+{
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.it.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.it.size_hint()
+    }
+}
+
+impl<'a, K, V, P> ExactSizeIterator for IterMut<'a, K, V, P>
+where
+    K: Ord + Clone + 'a,
+    V: Clone + 'a,
+    P: SharedPointerKind,
+{
+}
+
+impl<'a, K, V, P> FusedIterator for IterMut<'a, K, V, P>
+where
+    K: Ord + Clone + 'a,
+    V: Clone + 'a,
+    P: SharedPointerKind,
+{
+}
+
 /// An iterator over the differences between two maps.
 pub struct DiffIter<'a, 'b, K, V, P: SharedPointerKind> {
     it1: Cursor<'a, K, V, P>,
@@ -3050,5 +3115,61 @@ mod test {
             *v = 88;
         }
         assert_eq!(map.get(&7), Some(&88));
+    }
+
+    #[test]
+    fn iter_mut_basic() {
+        let mut map = ordmap![1 => 10, 2 => 20, 3 => 30, 4 => 40, 5 => 50];
+
+        // Mutate all values
+        for (k, v) in map.iter_mut() {
+            *v += *k;
+        }
+        assert_eq!(map, ordmap![1 => 11, 2 => 22, 3 => 33, 4 => 44, 5 => 55]);
+    }
+
+    #[test]
+    fn iter_mut_empty() {
+        let mut map: OrdMap<i32, i32> = OrdMap::new();
+        assert_eq!(map.iter_mut().count(), 0);
+    }
+
+    #[test]
+    fn iter_mut_preserves_order() {
+        let mut map = OrdMap::new();
+        for i in (0..100).rev() {
+            map.insert(i, i * 10);
+        }
+
+        let keys: Vec<i32> = map.iter_mut().map(|(k, _)| *k).collect();
+        let expected: Vec<i32> = (0..100).collect();
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
+    fn iter_mut_shared_structure() {
+        // Verify that iter_mut on a shared map doesn't affect the original
+        let original = ordmap![1 => 10, 2 => 20, 3 => 30];
+        let mut clone = original.clone();
+
+        for (_, v) in clone.iter_mut() {
+            *v *= 2;
+        }
+
+        assert_eq!(original, ordmap![1 => 10, 2 => 20, 3 => 30]);
+        assert_eq!(clone, ordmap![1 => 20, 2 => 40, 3 => 60]);
+    }
+
+    #[test]
+    fn iter_mut_exact_size() {
+        let mut map = ordmap![1 => 1, 2 => 2, 3 => 3];
+        let mut it = map.iter_mut();
+        assert_eq!(it.len(), 3);
+        it.next();
+        assert_eq!(it.len(), 2);
+        it.next();
+        assert_eq!(it.len(), 1);
+        it.next();
+        assert_eq!(it.len(), 0);
     }
 }

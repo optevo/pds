@@ -3,7 +3,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 use std::collections::VecDeque;
-use std::iter::FromIterator;
+use std::iter::{FromIterator, FusedIterator};
 use std::mem;
 use std::num::NonZeroUsize;
 use std::ops::{Bound, RangeBounds};
@@ -1271,6 +1271,140 @@ impl<'a, K, V, P: SharedPointerKind> Cursor<'a, K, V, P> {
             None
         }
     }
+}
+
+/// A mutable iterator over a B+ tree, yielding `(&K, &mut V)` pairs.
+///
+/// Each node on the traversal path is made exclusive via `SharedPointer::make_mut`
+/// (copy-on-write). This is the same pattern HashMap uses for its `IterMut`.
+enum IterMutItem<'a, K, V, P: SharedPointerKind> {
+    /// Iterating over leaf key-value pairs.
+    LeafEntries(std::slice::IterMut<'a, (K, V)>),
+    /// Iterating over leaf children of a branch node.
+    LeafChildren(std::slice::IterMut<'a, SharedPointer<Leaf<K, V>, P>>),
+    /// Iterating over branch children of a branch node.
+    BranchChildren(std::slice::IterMut<'a, SharedPointer<Branch<K, V, P>, P>>),
+}
+
+pub(crate) struct IterMut<'a, K, V, P: SharedPointerKind> {
+    count: usize,
+    stack: Vec<IterMutItem<'a, K, V, P>>,
+}
+
+impl<'a, K, V, P> IterMut<'a, K, V, P>
+where
+    K: Ord + Clone + 'a,
+    V: Clone + 'a,
+    P: SharedPointerKind,
+{
+    pub(crate) fn new(root: Option<&'a mut Node<K, V, P>>, size: usize) -> Self {
+        let mut result = IterMut {
+            count: size,
+            stack: Vec::new(),
+        };
+        if let Some(node) = root {
+            result.push_node(node);
+        }
+        result
+    }
+
+    fn push_node(&mut self, node: &'a mut Node<K, V, P>) {
+        match node {
+            Node::Branch(branch_ref) => {
+                let branch = SharedPointer::make_mut(branch_ref);
+                self.push_branch_children(branch);
+            }
+            Node::Leaf(leaf_ref) => {
+                let leaf = SharedPointer::make_mut(leaf_ref);
+                self.stack
+                    .push(IterMutItem::LeafEntries(leaf.keys.as_mut_slice().iter_mut()));
+            }
+        }
+    }
+
+    fn push_branch_children(&mut self, branch: &'a mut Branch<K, V, P>) {
+        match &mut branch.children {
+            Children::Leaves { leaves } => {
+                self.stack
+                    .push(IterMutItem::LeafChildren(leaves.as_mut_slice().iter_mut()));
+            }
+            Children::Branches { branches, .. } => {
+                self.stack.push(IterMutItem::BranchChildren(
+                    branches.as_mut_slice().iter_mut(),
+                ));
+            }
+        }
+    }
+}
+
+impl<'a, K, V, P> Iterator for IterMut<'a, K, V, P>
+where
+    K: Ord + Clone + 'a,
+    V: Clone + 'a,
+    P: SharedPointerKind,
+{
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.stack.last_mut()? {
+                IterMutItem::LeafEntries(iter) => {
+                    if let Some((k, v)) = iter.next() {
+                        self.count -= 1;
+                        return Some((k, v));
+                    }
+                    self.stack.pop();
+                }
+                IterMutItem::LeafChildren(iter) => {
+                    if let Some(leaf_ref) = iter.next() {
+                        let leaf = SharedPointer::make_mut(leaf_ref);
+                        self.stack.push(IterMutItem::LeafEntries(
+                            leaf.keys.as_mut_slice().iter_mut(),
+                        ));
+                    } else {
+                        self.stack.pop();
+                    }
+                }
+                IterMutItem::BranchChildren(iter) => {
+                    if let Some(branch_ref) = iter.next() {
+                        let branch = SharedPointer::make_mut(branch_ref);
+                        match &mut branch.children {
+                            Children::Leaves { leaves } => {
+                                self.stack.push(IterMutItem::LeafChildren(
+                                    leaves.as_mut_slice().iter_mut(),
+                                ));
+                            }
+                            Children::Branches { branches, .. } => {
+                                self.stack.push(IterMutItem::BranchChildren(
+                                    branches.as_mut_slice().iter_mut(),
+                                ));
+                            }
+                        }
+                    } else {
+                        self.stack.pop();
+                    }
+                }
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.count, Some(self.count))
+    }
+}
+
+impl<'a, K, V, P: SharedPointerKind> ExactSizeIterator for IterMut<'a, K, V, P>
+where
+    K: Ord + Clone + 'a,
+    V: Clone + 'a,
+{
+}
+
+impl<'a, K, V, P: SharedPointerKind> FusedIterator for IterMut<'a, K, V, P>
+where
+    K: Ord + Clone + 'a,
+    V: Clone + 'a,
+{
 }
 
 mod slice_ext {
