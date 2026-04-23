@@ -64,6 +64,14 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 2.2: get_next_exclusive / get_prev_exclusive.** Added
+  `get_prev_exclusive`, `get_next_exclusive`, `get_prev_exclusive_mut`,
+  `get_next_exclusive_mut` to OrdMap and `get_prev_exclusive`,
+  `get_next_exclusive` to OrdSet. Uses `Bound::Excluded` instead of
+  `Bound::Included` for strictly-less / strictly-greater semantics.
+  Unit tests cover key present/absent, boundaries, empty collections.
+  Addresses issue #157.
+
 - **[2026-04-24] 1.4: Edition 2021 migration.** Updated `Cargo.toml`
   edition from 2018 to 2021. `cargo fix --edition` found no code changes
   needed. Edition 2021 enables resolver v2 (fewer unnecessary features on

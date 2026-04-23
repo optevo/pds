@@ -352,6 +352,50 @@ where
         self.map.get_next(value).map(|(k, _)| k)
     }
 
+    /// Get the closest strictly smaller value in a set to a given value.
+    ///
+    /// Unlike [`get_prev`][Self::get_prev], this never returns the given
+    /// value itself — it uses `Bound::Excluded`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::OrdSet;
+    /// let set = ordset![1, 3, 5, 7, 9];
+    /// assert_eq!(Some(&1), set.get_prev_exclusive(&3));
+    /// assert_eq!(Some(&3), set.get_prev_exclusive(&4));
+    /// ```
+    #[must_use]
+    pub fn get_prev_exclusive<Q>(&self, value: &Q) -> Option<&A>
+    where
+        Q: Comparable<A> + ?Sized,
+    {
+        self.map.get_prev_exclusive(value).map(|(k, _)| k)
+    }
+
+    /// Get the closest strictly larger value in a set to a given value.
+    ///
+    /// Unlike [`get_next`][Self::get_next], this never returns the given
+    /// value itself — it uses `Bound::Excluded`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::OrdSet;
+    /// let set = ordset![1, 3, 5, 7, 9];
+    /// assert_eq!(Some(&5), set.get_next_exclusive(&3));
+    /// assert_eq!(Some(&5), set.get_next_exclusive(&4));
+    /// ```
+    #[must_use]
+    pub fn get_next_exclusive<Q>(&self, value: &Q) -> Option<&A>
+    where
+        Q: Comparable<A> + ?Sized,
+    {
+        self.map.get_next_exclusive(value).map(|(k, _)| k)
+    }
+
     /// Test whether a set is a subset of another set, meaning that
     /// all values in our set must also be in the other set.
     ///
@@ -1201,5 +1245,27 @@ mod test {
             let result: Vec<i32> = set.range::<_, i32>(..).rev().cloned().collect();
             assert_eq!(expected, result);
         }
+    }
+
+    #[test]
+    fn get_prev_exclusive_and_get_next_exclusive() {
+        let set = ordset![1, 3, 5, 7, 9];
+
+        // Value present — exclusive skips the value itself
+        assert_eq!(set.get_prev_exclusive(&5), Some(&3));
+        assert_eq!(set.get_next_exclusive(&5), Some(&7));
+
+        // Value absent — same as inclusive variants
+        assert_eq!(set.get_prev_exclusive(&6), Some(&5));
+        assert_eq!(set.get_next_exclusive(&6), Some(&7));
+
+        // Boundaries
+        assert_eq!(set.get_prev_exclusive(&1), None);
+        assert_eq!(set.get_next_exclusive(&9), None);
+
+        // Empty set
+        let empty: OrdSet<i32> = OrdSet::new();
+        assert_eq!(empty.get_prev_exclusive(&5), None);
+        assert_eq!(empty.get_next_exclusive(&5), None);
     }
 }

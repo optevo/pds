@@ -389,10 +389,10 @@ where
     /// Get a reference to the closest larger entry in a map
     /// to a given key.
     ///
-    /// If the set contains the given value, this is returned.
-    /// Otherwise, the closest value in the set larger than the
-    /// given value is returned. If the largest value in the set
-    /// is smaller than the given value, `None` is returned.
+    /// If the map contains the given key, this is returned.
+    /// Otherwise, the closest key in the map larger than the
+    /// given value is returned. If the largest key in the map
+    /// is smaller than the given key, `None` is returned.
     ///
     /// # Examples
     ///
@@ -408,6 +408,54 @@ where
         Q: Comparable<K> + ?Sized,
     {
         self.range::<_, Q>((Bound::Included(key), Bound::Unbounded))
+            .next()
+    }
+
+    /// Get a reference to the closest strictly smaller entry in a map
+    /// to a given key.
+    ///
+    /// Unlike [`get_prev`][Self::get_prev], this never returns the entry
+    /// for `key` itself — it uses `Bound::Excluded`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::OrdMap;
+    /// let map = ordmap![1 => 1, 3 => 3, 5 => 5];
+    /// assert_eq!(Some((&1, &1)), map.get_prev_exclusive(&3));
+    /// assert_eq!(Some((&3, &3)), map.get_prev_exclusive(&4));
+    /// ```
+    #[must_use]
+    pub fn get_prev_exclusive<Q>(&self, key: &Q) -> Option<(&K, &V)>
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        self.range::<_, Q>((Bound::Unbounded, Bound::Excluded(key)))
+            .next_back()
+    }
+
+    /// Get a reference to the closest strictly larger entry in a map
+    /// to a given key.
+    ///
+    /// Unlike [`get_next`][Self::get_next], this never returns the entry
+    /// for `key` itself — it uses `Bound::Excluded`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::OrdMap;
+    /// let map = ordmap![1 => 1, 3 => 3, 5 => 5];
+    /// assert_eq!(Some((&5, &5)), map.get_next_exclusive(&3));
+    /// assert_eq!(Some((&5, &5)), map.get_next_exclusive(&4));
+    /// ```
+    #[must_use]
+    pub fn get_next_exclusive<Q>(&self, key: &Q) -> Option<(&K, &V)>
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        self.range::<_, Q>((Bound::Excluded(key), Bound::Unbounded))
             .next()
     }
 
@@ -630,10 +678,10 @@ where
     /// Get the closest larger entry in a map to a given key
     /// as a mutable reference.
     ///
-    /// If the set contains the given value, this is returned.
-    /// Otherwise, the closest value in the set larger than the
-    /// given value is returned. If the largest value in the set
-    /// is smaller than the given value, `None` is returned.
+    /// If the map contains the given key, this is returned.
+    /// Otherwise, the closest key in the map larger than the
+    /// given value is returned. If the largest key in the map
+    /// is smaller than the given key, `None` is returned.
     ///
     /// # Examples
     ///
@@ -652,6 +700,60 @@ where
         Q: Comparable<K> + ?Sized,
     {
         let next = self.get_next(key)?.0.clone();
+        let root = self.root.as_mut()?;
+        root.lookup_mut(next.borrow())
+    }
+
+    /// Get the closest strictly smaller entry in a map to a given key
+    /// as a mutable reference.
+    ///
+    /// Unlike [`get_prev_mut`][Self::get_prev_mut], this never returns the
+    /// entry for `key` itself.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::OrdMap;
+    /// let mut map = ordmap![1 => 1, 3 => 3, 5 => 5];
+    /// if let Some((key, value)) = map.get_prev_exclusive_mut(&3) {
+    ///     *value = 2;
+    /// }
+    /// assert_eq!(ordmap![1 => 2, 3 => 3, 5 => 5], map);
+    /// ```
+    #[must_use]
+    pub fn get_prev_exclusive_mut<Q>(&mut self, key: &Q) -> Option<(&K, &mut V)>
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        let prev = self.get_prev_exclusive(key)?.0.clone();
+        let root = self.root.as_mut()?;
+        root.lookup_mut(prev.borrow())
+    }
+
+    /// Get the closest strictly larger entry in a map to a given key
+    /// as a mutable reference.
+    ///
+    /// Unlike [`get_next_mut`][Self::get_next_mut], this never returns the
+    /// entry for `key` itself.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::OrdMap;
+    /// let mut map = ordmap![1 => 1, 3 => 3, 5 => 5];
+    /// if let Some((key, value)) = map.get_next_exclusive_mut(&3) {
+    ///     *value = 4;
+    /// }
+    /// assert_eq!(ordmap![1 => 1, 3 => 3, 5 => 4], map);
+    /// ```
+    #[must_use]
+    pub fn get_next_exclusive_mut<Q>(&mut self, key: &Q) -> Option<(&K, &mut V)>
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        let next = self.get_next_exclusive(key)?.0.clone();
         let root = self.root.as_mut()?;
         root.lookup_mut(next.borrow())
     }
@@ -2907,5 +3009,46 @@ mod test {
                 assert_eq!(v, map1.get(k).or_else(|| map2.get(k)).unwrap());
             }
         }
+    }
+
+    #[test]
+    fn get_prev_exclusive_and_get_next_exclusive() {
+        let map = ordmap![1 => 10, 3 => 30, 5 => 50, 7 => 70, 9 => 90];
+
+        // Key present — exclusive skips the key itself
+        assert_eq!(map.get_prev_exclusive(&5), Some((&3, &30)));
+        assert_eq!(map.get_next_exclusive(&5), Some((&7, &70)));
+
+        // Key absent — same as inclusive variants
+        assert_eq!(map.get_prev_exclusive(&6), Some((&5, &50)));
+        assert_eq!(map.get_next_exclusive(&6), Some((&7, &70)));
+
+        // Boundaries
+        assert_eq!(map.get_prev_exclusive(&1), None);
+        assert_eq!(map.get_next_exclusive(&9), None);
+        assert_eq!(map.get_prev_exclusive(&0), None);
+        assert_eq!(map.get_next_exclusive(&10), None);
+
+        // Empty map
+        let empty: OrdMap<i32, i32> = OrdMap::new();
+        assert_eq!(empty.get_prev_exclusive(&5), None);
+        assert_eq!(empty.get_next_exclusive(&5), None);
+    }
+
+    #[test]
+    fn get_prev_exclusive_mut_and_get_next_exclusive_mut() {
+        let mut map = ordmap![1 => 10, 3 => 30, 5 => 50, 7 => 70];
+
+        // Mutate the strictly previous entry
+        if let Some((_, v)) = map.get_prev_exclusive_mut(&5) {
+            *v = 99;
+        }
+        assert_eq!(map.get(&3), Some(&99));
+
+        // Mutate the strictly next entry
+        if let Some((_, v)) = map.get_next_exclusive_mut(&5) {
+            *v = 88;
+        }
+        assert_eq!(map.get(&7), Some(&88));
     }
 }
