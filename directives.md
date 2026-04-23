@@ -97,6 +97,62 @@ caught by review. They are listed because they recur in AI-assisted development.
   not already present, without explicit approval. Consult `Cargo.toml` for
   the authoritative list of available crates and their pinned versions; do
   not assume API knowledge from training data.
+- **Unnecessary clones.** AI-generated Rust defaults to `.clone()` to escape
+  the borrow checker. This compiles and passes clippy but introduces hidden
+  allocation and copying overhead — especially costly in hot paths and with
+  heap-allocated types (`String`, `Vec`, `HashMap`). Prefer borrowing (`&T`)
+  over owned values in function signatures, use `&str` instead of `String`
+  for read-only access, pass slices (`&[T]`) instead of `Vec<T>`, and use
+  `Cow<'_, T>` when a function sometimes needs ownership and sometimes does
+  not. After completing any work item, review the changed code for clones
+  that can be replaced with references. This is a regular review obligation,
+  not a one-off check.
+- **Collecting iterators unnecessarily.** AI materialises intermediate
+  collections compulsively — `.collect::<Vec<_>>()` followed by `.iter()`
+  when the iterators could just be chained. Each unnecessary collect is a
+  heap allocation plus a copy that does nothing. Prefer chaining iterator
+  adaptors (`.map()`, `.filter()`, `.flat_map()`) and collecting only at
+  the final consumer. Also watch for `.collect()` into a `Vec` just to call
+  `.len()` — use `.count()` on the iterator instead.
+- **Allocating in loops.** Creating `String`, `Vec`, `HashMap`, or other
+  heap types inside a loop body when they could be allocated once outside
+  the loop and reused via `.clear()`. AI treats each iteration as
+  independent and does not consider reuse across iterations. For string
+  building, allocate a `String` before the loop and use `write!()` or
+  `.push_str()` with `.clear()` between iterations.
+- **Owned types in structs to avoid lifetimes.** AI avoids lifetime
+  parameters on structs by making every field owned (`String` instead of
+  `&str`, `Vec<T>` instead of `&[T]`, `PathBuf` instead of `&Path`). For
+  long-lived or static data (configuration, CLI args, constants),
+  `&'static str` or `&'a str` eliminates allocation entirely. Use owned
+  types when the struct genuinely needs to own the data; use references
+  when the data outlives the struct.
+- **`format!()` in hot paths.** Every `format!()` allocates a new `String`.
+  In logging, error construction, or display paths that run frequently,
+  prefer `write!()` to a reusable buffer or `std::fmt::Display`
+  implementations. Reserve `format!()` for one-off string construction
+  where the allocation cost is negligible.
+- **`Mutex` where `RwLock` suffices.** AI defaults to `Mutex` for any
+  shared state. When reads vastly outnumber writes (the common case),
+  `RwLock` allows concurrent readers and only blocks for writers. Use
+  `Mutex` only when every access is a write, or when the critical section
+  is so short that the overhead of `RwLock`'s reader tracking exceeds the
+  benefit.
+- **Missing `with_capacity`.** When the output size is known or bounded,
+  `Vec::with_capacity(n)` avoids reallocations during growth. AI creates
+  empty `Vec::new()` then pushes in a loop of known length. The same
+  applies to `String::with_capacity()` and `HashMap::with_capacity()`.
+- **`unwrap()` in non-test code.** The `expect()` rule above covers
+  intent, but AI also scatters bare `.unwrap()` on `Option` and `Result`
+  in production paths. These are silent panics with no diagnostic message.
+  In production code, use `?` to propagate, or match/`if let` to handle.
+  `.unwrap()` is acceptable only in tests and in code paths where the
+  invariant is documented.
+
+All of the above are regular review obligations — after completing any
+work item, review the changed code for these patterns. Fixing them may
+require reworking function signatures or data flow, so ensure the test
+suite covers the affected paths before and after the change.
 
 ---
 
@@ -239,6 +295,7 @@ All project documentation lives under `docs/` as Markdown.
 | `glossary.md` | Project terminology (data structures, internals) |
 | `references.md` | Papers, implementations, external resources |
 | `baselines.md` | Build speed, test speed, and benchmark baselines for periodic comparison |
+| `architecture.md` | Internal architecture of core data structure modules |
 | `impl-plan.md` | Phased implementation plan (Phase 0–6) with dependency tracking |
 
 Subdirectories are permitted for images (`docs/img/`) or large topic areas.
@@ -333,6 +390,33 @@ At the start of any significant work session, or at minimum monthly:
 4. **Review changelogs** for direct dependencies before updating — look for
    performance improvements, bug fixes, deprecations, and breaking changes
    in upcoming major versions
+
+### Suitability review
+
+Beyond version updates, periodically assess whether each dependency is still
+the right choice. At minimum quarterly, or when starting a major new work item:
+
+1. **Maintenance health** — check the crate's repository for recent commits,
+   open issue response times, and release cadence. A crate with no releases
+   in 12+ months and unaddressed issues is a candidate for replacement.
+2. **Deprecation signals** — look for deprecation notices in the README,
+   `docs.rs` page, or Rust community channels (URLO, Reddit, This Week in
+   Rust). Some crates are superseded quietly without a formal deprecation.
+3. **Better alternatives** — search crates.io and lib.rs for newer crates
+   that serve the same purpose. The Rust ecosystem moves fast; a crate
+   chosen 6 months ago may now have a more performant, better-maintained,
+   or more ergonomic competitor.
+4. **Dependency weight** — run `cargo tree` and check whether any dependency
+   pulls in a disproportionate transitive tree for what it provides. A
+   utility crate that adds 30 transitive dependencies may not be worth it
+   when a 10-line local implementation would suffice.
+5. **Feature flag audit** — check whether enabled feature flags are still
+   needed. Unused features pull in unnecessary code and dependencies.
+
+When a dependency is identified as unsuitable, record the finding and the
+proposed replacement in `docs/decisions.md` before making the change.
+Replacements must pass `test.sh` and should not be batched with unrelated
+work.
 
 ### Safe update process
 

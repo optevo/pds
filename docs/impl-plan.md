@@ -64,6 +64,13 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 0.5: Architecture documentation.** Documented internal
+  architecture of all core modules in `docs/architecture.md`: HAMT 3-tier
+  SIMD hybrid (SmallSimdNode/LargeSimdNode/HamtNode), RRB tree 4-buffer
+  structure and VectorInner representation, B+ tree node types and Cursor
+  navigation, Focus/FocusMut unsafe invariants and caching strategy,
+  SharedPointer abstraction. Full unsafe inventory (22 sites across 4 files).
+
 - **[2026-04-24] 0.4: Dependency audit.** All semver-compatible deps current.
   No security vulnerabilities. Breaking updates (rand 0.10, wide 1.3,
   criterion 0.8, proptest-derive 0.8) deferred to natural integration points.
@@ -97,7 +104,7 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 0 — Foundations (0.5 architecture docs remaining).
+Phase 0 complete. Starting Phase 1 (housekeeping) and Phase 2 (correctness + API).
 
 ---
 
