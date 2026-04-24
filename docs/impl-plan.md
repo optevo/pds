@@ -64,6 +64,13 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 3.4 (partial): HashMap/HashSet parallel iterators.**
+  Added `IntoParallelRefIterator` for GenericHashMap and GenericHashSet
+  via rayon's `UnindexedProducer`. Splits work at the HAMT root level
+  (up to 32-way parallelism), recursively expanding HamtNode children
+  for deeper splitting. Remaining 3.4 items: OrdMap/OrdSet par_iter,
+  ParallelExtend, parallel bulk ops, parallel sort for Vector.
+
 - **[2026-04-24] 2.11: Companion collection types.** Added four new types:
   `PBag<A>` (persistent multiset backed by HashMap<A, usize>),
   `Atom<T>` (thread-safe atomic state holder wrapping arc-swap, behind
@@ -209,8 +216,10 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — all items complete except 2.1 (RRB concat fix). Phase 3
-item 3.5 complete. Items 3.1–3.4 and 3.6 unblocked.
+Phase 2 — all items complete except 2.1 (RRB concat fix). Phase 3:
+3.4 partially complete (HashMap/HashSet par_iter done; OrdMap/OrdSet,
+ParallelExtend, bulk ops, parallel sort remaining). 3.5 complete.
+Items 3.1, 3.2, 3.6 unblocked.
 
 ---
 
