@@ -28,6 +28,14 @@
 | Stucki, Rompf, Ureche, Bagwell, "RRB Vector: A Practical General Purpose Immutable Sequence" (ICFP 2015) | Current RRB algorithm used in imbl |
 | Viktor Leis et al., "The Adaptive Radix Tree: ARTful Indexing for Main-Memory Databases" (ICDE 2013) | Potential OrdMap replacement (Phase 6) |
 | Hinze & Paterson, "Finger Trees: A Simple General-purpose Data Structure" (JFP 2006) | Theoretical background for ordered sequences |
+| Steindorfer, "Code Specialization for Memory Efficient Hash Tries" (GPCE 2014) | Inline storage, 55% memory reduction for maps |
+| Steindorfer, "To-Many or To-One? All-in-One!" (PLDI 2018) | AXIOM — heterogeneous hash tries |
+| Torosyan, Zeppieri, Flatt, "Runtime and Compiler Support for HAMTs" (DLS 2021) | Stencil vectors — bitmap-indexed compact arrays |
+| Ullrich & de Moura, "Counting Immutable Beans" (arXiv:1908.05647, 2019) | Lean 4's automatic destructive update via RC analysis |
+| Filliâtre & Conchon, "Type-Safe Modular Hash-Consing" (ML Workshop 2006) | Foundational hash consing paper |
+| Appel, "Hash-Consing Garbage Collection" (Princeton TR-412-93, 1993) | GC-integrated hash consing, only intern survivors |
+| Anderson, Blelloch & Wei, "Turning Manual Concurrent Memory Reclamation into Automatic Reference Counting" (2022) | CDRC — validates Arc-based approach |
+| Ankur Dave, "Persistent Adaptive Radix Trees" (UC Berkeley) | PART — persistent ART for analytics (byte-string keys only) |
 
 ---
 
@@ -41,6 +49,17 @@
 | immer | github.com/arximboldi/immer | C++ persistent collections, memory policy, RRB trees |
 | Bifurcan | github.com/lacuna/bifurcan | Java persistent collections, linear/forked ownership |
 | librrb | github.com/hyPiRion/c-rrb | C RRB tree implementation |
+| Swift Collections | github.com/apple/swift-collections | CHAMP TreeDictionary/TreeSet (PR #31 by Steindorfer), dual-end buffer |
+| Kotlin kotlinx.collections.immutable | github.com/Kotlin/kotlinx.collections.immutable | CHAMP-based persistent collections |
+| rpds | github.com/orium/rpds | Rust persistent data structures, HAMT + red-black tree |
+| immutable-chunkmap | github.com/estokes/immutable-chunkmap | Rust persistent ordered map, B-tree-like |
+| hashconsing | github.com/AdrienChampion/hashconsing | Rust hash consing (Filliâtre/Conchon port) |
+| weak-table | docs.rs/weak-table | Rust WeakHashSet for intern tables |
+| rkyv | rkyv.org | Zero-copy serialisation with Sharing/Pooling for Arc deduplication |
+| tagged-pointer | docs.rs/tagged-pointer | Safe pointer tagging using alignment bits |
+| Haskell unordered-containers | github.com/haskell-unordered-containers/unordered-containers | HAMT with Full node specialisation |
+| Lean PersistentHashMap | leanprover-community.github.io/mathlib4_docs/Lean/Data/PersistentHashMap.html | HAMT with "Counting Immutable Beans" RC |
+| Pony persistent collections | ponylang.io/blog/2026/03/persistent-data-structures-for-concurrent-programs/ | CHAMP Map, March 2026 |
 
 ---
 

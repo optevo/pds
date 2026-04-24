@@ -76,20 +76,43 @@ round-trips) are exercised.
 Selected results from criterion benchmarks (`cargo bench -- --quick`).
 Full results are stored in `target/criterion/` by criterion automatically.
 
-### HashMap (i64 keys)
+### HashMap — imbl vs std (2026-04-25)
 
-| Operation | 100 | 1K | 10K | 100K |
-|-----------|-----|-----|------|------|
-| Lookup | 0.65 us | 7.9 us | 95 us | 796 us |
-| Insert (mut) | 20 us | 270 us | 3.7 ms | 25 ms |
-| Remove (mut) | 15 us | 273 us | 4.1 ms | 30 ms |
-| Iter | — | 2.4 us | 38 us | 678 us |
+**i64 keys:**
+
+| Operation | 100 | 1K | 10K | 100K | vs std 10K | vs std 100K |
+|-----------|-----|-----|------|------|-----------|------------|
+| Lookup | 679ns | 7.2µs | 84µs | 1.24ms | 1.4x | 1.6x |
+| Insert (mut) | 2.3µs | 31µs | 219µs | 3.83ms | 0.7x | 1.6x |
+| Remove (mut) | 2.4µs | 25.6µs | 254µs | — | 1.9x | — |
+| Iter | — | 2.1µs | 32µs | 620µs | 3.6x | **5.3x** |
+| From iter | — | 29.5µs | 216µs | 4.55ms | 2.8x | **5.0x** |
+
+**Arc<String> keys:**
+
+| Operation | 100 | 1K | 10K | 100K | vs std 10K | vs std 100K |
+|-----------|-----|-----|------|------|-----------|------------|
+| Lookup | 794ns | 8.7µs | 151µs | 3.02ms | 1.6x | 1.6x |
+| Insert (mut) | 2.7µs | 40µs | 346µs | 6.36ms | 0.7x | 1.2x |
+| Remove (mut) | 2.6µs | 29µs | 363µs | — | 1.9x | — |
+| Iter | — | 2.0µs | 32µs | 595µs | 3.6x | **5.1x** |
+| From iter | — | 39.2µs | 334µs | 6.29ms | 2.1x | 2.6x |
+
+**Performance gap analysis:**
+
+| Priority | Gap | Cause (hypothesis) | Plan item |
+|----------|-----|-------------------|-----------|
+| **P1** | iter 4-5x | HAMT 3-tier enum dispatch + pointer chasing | — |
+| **P1** | from_iter 3-5x | Per-node Arc::new + insert loop | 6.8 (arena) |
+| **P2** | remove_mut 2-3x at small sizes | CoW overhead on small nodes | — |
+| **P3** | lookup 1.5-2x at large sizes | SIMD probe + hash bits exhaustion | 4.7 (u64 hash) |
+| **Win** | insert_mut 0.7x at ≤10K | imbl outperforms std at small-mid sizes | — |
 
 ### OrdMap (i64 keys)
 
 | Operation | 100 | 1K | 10K | 100K |
 |-----------|-----|-----|------|------|
-| Lookup | 0.74 us | 13 us | 202 us | 3.4 ms |
+| Lookup | 0.74µs | 13µs | 202µs | 3.4ms |
 | Insert (mut) | — | — | — | — |
 
 ### Vector

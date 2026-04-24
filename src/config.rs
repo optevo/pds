@@ -14,12 +14,16 @@ pub(crate) const VECTOR_CHUNK_SIZE: usize = 64;
 // Must be an even number!
 #[cfg(feature = "small-chunks")]
 pub(crate) const ORD_CHUNK_SIZE: usize = 6;
-// Value of 16 chosen based on performance analysis. Larger nodes might improve lookup slightly
-// and bulk mutable operations more so, but suffers severe copy overhead for small mutations.
-// Under typical workloads (e.g. 70% lookup, 25% small mutation, 5% bulk mutation), 16 arguably
-// provides the best balance.
+// Value of 32 chosen based on Apple Silicon (M5 Max, 128-byte cache lines) benchmarks across
+// sizes 16/24/32/48 — see DEC-017 in docs/decisions.md for full data.
+//
+// vs size 16: lookup 8-21% faster (larger collections benefit more from fewer tree levels),
+// mutable ops 10-37% faster, iteration 10-12% faster. Persistent single-insert/remove is
+// 15-25% slower (more bytes copied per path-copy), but the breakeven is only ~6-30 lookups
+// per insert depending on collection size — easily exceeded in most real workloads.
+// Size 48 shows diminishing lookup returns with accelerating persistent-op regression.
 #[cfg(not(feature = "small-chunks"))]
-pub(crate) const ORD_CHUNK_SIZE: usize = 16;
+pub(crate) const ORD_CHUNK_SIZE: usize = 32;
 
 /// The level size of HAMTs, in bits
 /// Branching factor is 2 ^ HashLevelSize.

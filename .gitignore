@@ -16,3 +16,6 @@ result
 
 # Virtual environments (should not exist, but guard against it)
 .venv/
+
+# Profiling artefacts
+*.json.gz

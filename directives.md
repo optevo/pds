@@ -223,6 +223,22 @@ failure names what went wrong, a panic only confirms something blew up.
 Do not mock internal boundaries. Mock at the system edge (external I/O, network)
 only — internal mocking masks integration failures that only appear at runtime.
 
+### Periodic code coverage analysis
+
+Run `cargo llvm-cov --all-features --summary-only` periodically (at minimum
+before and after any significant work item) to identify untested code paths.
+This requires `cargo-llvm-cov` in the flake's `packages` and the
+`llvm-tools-preview` component on the Rust toolchain.
+
+Use coverage data to:
+- Identify uncovered functions and dead code paths
+- Prioritise test additions for critical code with low coverage
+- Verify that new code is exercised by existing or new tests
+
+Coverage is a diagnostic tool, not a target — 100% line coverage does not mean
+correct code. Focus coverage efforts on code paths that matter: error handling,
+edge cases, upgrade/downgrade paths, and rarely-exercised branches.
+
 ### Property-based testing
 
 imbl already uses `proptest` extensively. When adding or modifying data structure
@@ -268,6 +284,74 @@ functionality that has performance implications:
 - **Review benchmark coverage** after completing any work item, just as you
   review test coverage. If a change affects a hot path that lacks a benchmark,
   add one.
+
+### Profile before optimising
+
+Never optimise based on assumptions about where time is spent. Before any
+performance work:
+
+1. **Establish a baseline** — run the relevant benchmark and record the number
+2. **Profile the hot path** — use `samply record cargo bench --bench <name> -- <filter>`
+   to capture a CPU profile, or `cargo flamegraph` for a flamegraph SVG
+3. **Identify the bottleneck** — the profile shows where time actually goes.
+   Optimise that, not what you think is slow
+4. **Measure after** — re-run the same benchmark. If the number didn't move,
+   the optimisation missed the real bottleneck
+
+Both `samply` and `cargo-flamegraph` are in the Nix devShell. `samply` opens
+an interactive profile viewer; `cargo flamegraph` produces an SVG file.
+
+### Allocation profiling
+
+For data structure libraries, heap allocation count and pattern often matter
+more than CPU time. Use `dhat` (via `#[global_allocator]` in a benchmark
+binary) to count allocations per operation.
+
+When investigating `from_iter`, `collect`, or bulk construction performance,
+allocation profiling reveals whether the bottleneck is allocation overhead
+(many small `Arc::new` calls) vs computation (hashing, tree traversal).
+
+### Benchmark result persistence
+
+Benchmark results must be saved to durable files immediately upon completion.
+Never hold benchmark data only in conversation context — it is lost during
+context compaction and re-running benchmarks wastes 5-15 minutes per suite.
+
+- **Always pipe output to a file:**
+  `cargo bench ... 2>&1 | tee /private/tmp/bench_<name>_$(date +%s).txt`
+- **Use criterion baselines** for before/after comparison:
+  `bench.sh -- --save-baseline before` then `bench.sh -- --baseline before`
+- **Write summary tables** to `docs/baselines.md` immediately after benchmarks
+  complete — before any other work
+- **Never run benchmarks in the background** without file output capture
+
+### Benchmark regression detection
+
+Use criterion's baseline comparison to detect regressions:
+
+```bash
+# Save a baseline before changes
+bench.sh -- --save-baseline before
+
+# Make changes, then compare
+bench.sh -- --baseline before
+```
+
+When completing a work item that touches performance-sensitive code, save a
+baseline before starting and compare after. Record significant changes
+(>5% in either direction) in `docs/decisions.md`.
+
+### Proptest configuration
+
+Property tests are the primary correctness tool for data structure operations.
+Configure case counts based on test criticality:
+
+- **Default:** 256 cases (proptest default) — sufficient for most operations
+- **Critical paths** (node promotion/demotion, tree rebalancing, unsafe-adjacent
+  code): set `PROPTEST_CASES=1000` or use `proptest::test_runner::Config` with
+  `cases: 1000`
+- **Flake investigation:** temporarily increase to 10,000+ cases to reproduce
+  rare failures, then add a targeted regression test for the specific input
 
 ---
 

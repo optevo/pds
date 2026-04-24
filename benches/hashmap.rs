@@ -342,6 +342,21 @@ where
     })
 }
 
+fn bench_from_iter<M, K, V>(b: &mut Bencher, size: usize)
+where
+    M: BenchMap<K, V>,
+    K: TestData,
+    V: TestData,
+{
+    let keys = K::generate(size);
+    let values = V::generate(size);
+    let pairs: Vec<(K, V)> = keys.into_iter().zip(values).collect();
+    b.iter(|| {
+        let m: M = black_box(pairs.clone()).into_iter().collect();
+        black_box(m);
+    })
+}
+
 // Benchmark functions for each map type
 fn bench_hashmap(c: &mut Criterion) {
     bench_group::<HashMap<i64, i64>, i64, i64>(c, "hashmap_i64");
@@ -399,6 +414,9 @@ where
     for size in &[1000, 10000, 100000] {
         group.bench_function(format!("iter_{}", size), |b| {
             bench_iter::<M, K, V>(b, *size)
+        });
+        group.bench_function(format!("from_iter_{}", size), |b| {
+            bench_from_iter::<M, K, V>(b, *size)
         });
     }
 

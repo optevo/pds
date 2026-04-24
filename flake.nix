@@ -18,7 +18,7 @@
 
         # Stable toolchain for normal development.
         stableToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [ "rustfmt" "rust-src" "rust-analyzer" "clippy" ];
+          extensions = [ "rustfmt" "rust-src" "rust-analyzer" "clippy" "llvm-tools-preview" ];
         };
 
         # Nightly toolchain for miri and cargo-fuzz.
@@ -29,7 +29,14 @@
         devShells = {
           # Default shell — stable toolchain for everyday development.
           default = pkgs.mkShell {
-            packages = [ stableToolchain pkgs.sccache pkgs.cargo-audit ];
+            packages = [
+              stableToolchain
+              pkgs.sccache
+              pkgs.cargo-audit
+              pkgs.cargo-llvm-cov
+              pkgs.samply           # CPU profiling — `samply record cargo bench ...`
+              pkgs.cargo-flamegraph # Flamegraph generation from perf/dtrace data
+            ];
             # Route compilations through the shared sccache instance.
             RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
             shellHook = ''

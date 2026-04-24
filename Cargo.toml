@@ -113,6 +113,3 @@ harness = false
 name = "vector"
 harness = false
 
-[[bench]]
-name = "champ"
-harness = false

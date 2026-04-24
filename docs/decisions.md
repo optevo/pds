@@ -101,7 +101,7 @@ Phase 0.4 dependency audit. All semver-compatible dependencies are current
 | Dep | Current | Available | Impact |
 |-----|---------|-----------|--------|
 | rand/rand_core/rand_xoshiro | 0.9.x | 0.10.x | Coordinated ecosystem bump |
-| wide | 0.7 | 1.3 | SIMD for HAMT; may be removed by CHAMP (4.3) |
+| wide | 0.7 | 1.3 | SIMD for HAMT (CHAMP killed — DEC-007/015/020) |
 | criterion | 0.7 | 0.8 | Dev-dep, benchmarks |
 | proptest-derive | 0.6 | 0.8 | Dev-dep, test macros |
 | bincode | 2.0.1 | 3.0.0 | RUSTSEC-2025-0141 unmaintained |
@@ -112,8 +112,8 @@ versions — harmless, resolves with rand update).
 **Decision:**
 - Do not update breaking dependencies now. All are non-urgent.
 - **bincode**: deprecation tracked in item 1.3 — remove in v8.0.0, not update.
-- **wide 0.7 → 1.3**: defer until after CHAMP evaluation (4.2). If CHAMP
-  replaces the SIMD HAMT, `wide` is removed entirely.
+- **wide 0.7 → 1.3**: CHAMP evaluation complete (DEC-007, DEC-015) —
+  HAMT retained, `wide` stays. Update to 1.3 can proceed when convenient.
 - **rand ecosystem 0.9 → 0.10**: defer until the ecosystem stabilises.
   imbl only uses rand_core for hash seeding and rand_xoshiro for PRNG.
   The API surface consumed is minimal.
@@ -128,9 +128,9 @@ versions — harmless, resolves with rand update).
   simultaneously with no functional benefit.
 
 **Consequences:**
-Breaking updates are deferred to natural integration points (CHAMP work
-for wide, v8.0.0 for bincode removal). The semver-compatible deps are
-all current and audit-clean except the known bincode advisory.
+Breaking updates are deferred to natural integration points (v8.0.0
+for bincode removal). The semver-compatible deps are all current and
+audit-clean except the known bincode advisory.
 
 ---
 
@@ -324,8 +324,7 @@ indexing.
 **Consequences:**
 - 4.3 (CHAMP integration) is deferred indefinitely. The current SIMD
   HAMT remains.
-- The prototype (`src/champ.rs`) is retained for future reference and
-  benchmarking.
+- The prototype (`src/champ.rs`) was removed in DEC-020.
 - The CHAMP iteration advantage (36-44%) motivates investigating whether
   the SIMD HAMT's iteration can be improved independently (the current
   3-tier node hierarchy fragments iteration across node types).
@@ -583,7 +582,6 @@ Feature `std` is on by default.
 - `default-features = false` gives no_std + alloc support.
 - Users must provide their own `BuildHasher` in no_std (no `RandomState`).
 - The `atom` feature requires `std` (depends on `arc-swap` which needs `std`).
-- The `champ` module is gated behind `std` (uses `RandomState` internally).
 - SpinMutex is only used by `FocusMut` which needs interior mutability for its
   tree reference; the lock is very short-held so spin is acceptable.
 
@@ -629,5 +627,480 @@ the default regardless of the `foldhash` feature.
 - New optional feature `foldhash` (not in `default`).
 - Three-tier type alias resolution: std → RandomState; !std + foldhash →
   foldhash::fast::RandomState; !std + !foldhash → no alias (use Generic*).
-- The `champ` module could be unblocked for no_std by accepting generic
-  `BuildHasher` (future work).
+
+## DEC-014: Phase 6 research outcomes — April 2026
+
+**Date:** 2026-04-24
+
+**Context:** Comprehensive research sweep across all Phase 6 items and
+broader state-of-the-art persistent data structures (2022–2026). Four
+parallel research threads covering: (1) persistent ART for OrdMap, (2)
+HAMT/CHAMP optimisations and inline storage, (3) Dupe trait / hash
+consing / sharing-preserving serialisation, (4) novel techniques from
+other languages and recent papers. Included detailed comparison of
+lookup implementations across Clojure, Scala CHAMP, Haskell, Lean 4,
+rpds, hashbrown, and imbl.
+
+### 6.1 ART for OrdMap — **deprioritised (not recommended)**
+
+ART fundamentally operates on byte sequences, not abstract `Ord`
+comparisons. Replacing the B+ tree would require changing the key bound
+from `K: Ord + Clone` to `K: ByteEncodable + Clone` — a breaking API
+change affecting ~280 downstream crates. No production-quality persistent
+ART for generic keys exists (PART, VART, rart all target database-style
+byte-string or fixed-integer keys). DuckDB's experience confirms ART has
+range-scan limitations vs B-trees even in a database context.
+
+Better investments for OrdMap: tuning `ORD_CHUNK_SIZE` (experiment with
+24 or 32), branch-free intra-node binary search, and bulk operations
+exploiting sorted structure.
+
+### 6.2 HAMT inline storage — **validated, deferred to hybrid CHAMP**
+
+Steindorfer's GPCE 2014 paper measured 55% median memory reduction for
+maps, 78% for sets. Implemented in Capsule (Java), Scala 2.13, Kotlin,
+and Swift Collections 1.1 (PR #31 by Steindorfer). However, these all
+use CHAMP as the base structure. imbl's current three-tier architecture
+(SmallSimdNode → LargeSimdNode → HamtNode) already captures the spirit
+of inline specialisation. The key finding is that **inline storage is
+best pursued as part of a CHAMP-based redesign**, not bolted onto the
+current HAMT.
+
+### 6.3 ThinArc — **recommended, moderate priority**
+
+`triomphe::ThinArc` saves 8 bytes per child pointer throughout the tree.
+For a HamtNode with up to 32 children, worst case saves 256 bytes per
+full node. Average HAMT node (2–4 children) saves 16–32 bytes. Compounds
+across the tree. Also: `tagged-pointer` crate enables pointer tagging
+using alignment bits — could eliminate the 8-byte Entry enum discriminant
+entirely (high complexity, requires unsafe).
+
+### 6.4 Dupe trait — **low priority, trivial if wanted**
+
+The `dupe` crate's ecosystem is narrow (almost entirely Meta-internal:
+Buck2, Starlark-Rust). A newer `light_clone` crate (Feb 2026) already
+provides `LightClone` for imbl types from the outside without imbl
+needing to do anything. If proceeding: optional `dupe` feature flag, 5
+`impl Dupe for X` blocks that call `clone()`. Zero impact on default
+builds.
+
+### 6.5 Hash consing — **design validated, medium priority**
+
+Research confirms the plan's design (thread-local
+`HashMap<u64, Weak<Node>>`, optional sharded global table) is well-aligned
+with Filliâtre & Conchon (2006) and the `hashconsing` Rust crate. The
+10–30ns per-lookup overhead estimate is reasonable. The `weak-table`
+crate provides `WeakHashSet` that handles stale entry cleanup. Appel's
+insight: only intern nodes that survive initial creation (not ephemeral
+intermediates during bulk operations). 64-bit Merkle hash collision risk
+is ~1 in 2^32 at 2^32 nodes (birthday bound) — acceptable.
+
+A 2025 symbolic computation study measured 2.5x initial memory overhead
+but 5–100x downstream speedups for repeated traversals.
+
+### 6.6 Sharing-preserving serialisation — **rkyv is the path**
+
+serde's data model is tree-structured — it cannot preserve sharing
+natively (confirmed: issues #194, #1073 closed without resolution).
+rkyv's `Sharing`/`Pooling` traits already solve pointer deduplication
+and are the architecturally closest match. Apache Fury (now Fory) also
+provides automatic reference identity preservation. Cap'n Proto and
+FlatBuffers do not support DAG serialisation. immer's `persist.hpp`
+(pool-based approach) is a good design reference but JSON-only.
+
+Recommended approach: pool-based like immer, but use rkyv for the binary
+format and a custom serde wrapper for the JSON-compatible format. If
+Merkle hashing (4.4, done) is used for node IDs, deduplication works
+even across separate serialisation sessions.
+
+### Lookup comparison — key finding
+
+The 5-variant Entry enum match on every HamtNode visit is imbl's main
+structural disadvantage vs other implementations:
+
+| Implementation | Type discrimination per level |
+|---|---|
+| CHAMP (Scala/Java) | 2 bitmap tests (no dispatch) |
+| Clojure HAMT | 1 null-sentinel check |
+| imbl HAMT | 5-way enum match |
+| Haskell | 5-way constructor tag |
+
+CHAMP's two-bitmap design (`dataMap` + `nodemap`) eliminates type
+discrimination entirely. A bit in `dataMap` means "inline data, compare
+key"; a bit in `nodemap` means "child node, recurse." No enum dispatch.
+
+imbl's SIMD leaf nodes are unique among persistent HAMTs (no other
+implementation does SIMD at the leaf level). The cold-function workaround
+(`get_terminal`) is pragmatic but CHAMP solves the problem structurally.
+
+### Highest-priority new finding: hybrid SIMD-CHAMP
+
+The CHAMP prototype (DEC-007) showed 26–41% faster insert/remove and
+36–44% faster iteration, but 10–64% slower lookups. The lookup regression
+was the reason for retaining the SIMD HAMT.
+
+**A hybrid approach has not been explored and is the single highest-
+potential structural improvement:** use CHAMP's two-bitmap trie structure
+(eliminating the 5-way enum match) with SIMD probing retained at the
+leaf level for dense nodes. This combines CHAMP's lean traversal with
+imbl's unique SIMD filtering.
+
+This should be added as a new research/prototype item.
+
+### Other notable findings
+
+- **Lean 4** uses "Counting Immutable Beans" (Ullrich & de Moura, 2019)
+  for automatic destructive update when refcount == 1. This is what
+  `Arc::make_mut` already provides in imbl. Validates our approach.
+- **Swift Collections 1.1** uses CHAMP with a dual-end buffer layout
+  (children from start, values from end of single buffer). Worth
+  benchmarking if CHAMP is revisited.
+- **Haskell's `Full` node** specialisation eliminates popcount for dense
+  (all-32-slots-filled) nodes. Low-complexity optimisation imbl could
+  adopt.
+- **Arena-backed batch construction** (new item): allocating nodes from a
+  bump arena during `FromIterator`/`collect()` eliminates per-node Arc
+  overhead during construction.
+- **Apple Silicon note:** cache lines are 128 bytes (not 64). Node
+  alignment via `#[repr(align(128))]` could improve cache utilisation.
+
+**Alternatives considered:** See individual subsections above.
+
+**Consequences:**
+- 6.1 deprioritised. B+ tree retained for OrdMap.
+- 6.2 merged into hybrid CHAMP research track.
+- 6.3 ThinArc validated, can proceed (prerequisite 5.1 already done).
+- 6.4 Dupe low-priority; `light_clone` crate covers the need externally.
+- 6.5 hash consing design validated; awaits prioritisation.
+- 6.6 rkyv identified as primary path; immer's pool design as reference.
+- New item: hybrid SIMD-CHAMP prototype (highest-potential structural
+  improvement).
+- New item: arena-backed batch construction.
+- References updated in `docs/references.md`.
+
+---
+
+## DEC-015: Hybrid SIMD-CHAMP — PoC gate failed, not integrating {#sec:dec-015}
+
+**Date:** 2026-04-24
+**Status:** Accepted (supersedes hybrid approach from DEC-014)
+
+**Context:**
+DEC-014 identified a hybrid SIMD-CHAMP as the "single highest-potential
+structural improvement": CHAMP's two-bitmap trie structure (eliminating the
+5-way Entry enum match) with SIMD probing at the leaf level. DEC-007 had
+shown the basic CHAMP prototype was 10-64% slower for lookups but 26-44%
+faster for mutations/iteration. The hybrid was expected to resolve the lookup
+regression by adding SIMD leaves.
+
+A full prototype was built in `src/nodes/champ_node.rs` with:
+- Two-bitmap InnerNode (datamap/nodemap via SparseChunk)
+- SIMD LeafNode with `wide::u8x16` parallel probing, 32-entry capacity
+  (2 SIMD groups of 16), control-byte hashing
+- Leaf expansion to InnerNode when full
+- Canonical deletion (inline single-entry children)
+- Incremental Merkle hash (wyhash-style mixer)
+- Mutable and persistent insert/remove paths
+
+LEAF_WIDTH was initially 16, then increased to 32 (matching BRANCH_FACTOR)
+to reduce trie depth — at 1000 entries with 32-way branching, each root
+position has ~31 entries, overflowing a 16-entry leaf.
+
+**PoC gate question:** Does the hybrid SIMD-CHAMP achieve ≥20% lookup
+improvement over the existing HAMT, with no insert/remove regression?
+
+**Benchmark results (criterion, Apple M5 Max, i64 keys):**
+
+| Operation | Size | CHAMP v2 | HAMT | Ratio |
+|-----------|------|----------|------|-------|
+| lookup | 100 | 700 ns | 688 ns | 1.02x slower |
+| lookup | 1000 | 8.37 µs | 7.27 µs | 1.15x slower |
+| lookup | 10000 | 92.6 µs | 85.8 µs | 1.08x slower |
+| lookup | 100000 | 2.42 ms | 1.35 ms | 1.79x slower |
+| insert_mut | 100 | 2.82 µs | 2.32 µs | 1.22x slower |
+| insert_mut | 1000 | 33.0 µs | 31.6 µs | 1.05x slower |
+| insert_mut | 10000 | 273 µs | 228 µs | 1.20x slower |
+| insert_mut | 100000 | 6.11 ms | 3.93 ms | 1.55x slower |
+| remove_mut | 100 | 3.93 µs | 2.39 µs | 1.64x slower |
+| remove_mut | 1000 | 39.7 µs | 26.4 µs | 1.50x slower |
+| remove_mut | 10000 | 370 µs | 258 µs | 1.43x slower |
+| iter | 10000 | 27.2 µs | 33.8 µs | **0.80x faster** |
+| insert_once | 100000 | 55.6 µs | 43.9 µs | 1.27x slower |
+| remove_once | 100000 | 55.8 µs | 44.9 µs | 1.24x slower |
+
+**PoC gate: FAILED.** Lookup target was ≥20% improvement; actual is 2-79%
+regression. Insert/remove also regressed 5-64% (unlike the basic CHAMP
+prototype from DEC-007 which was faster for mutations).
+
+**Decision:**
+Do not integrate the hybrid SIMD-CHAMP. The existing SIMD HAMT is
+structurally superior for this Rust implementation. Kill Item 1 from the
+Phase 6 plan.
+
+**Root cause analysis:**
+
+1. **Inline SIMD nodes vs pointer-chased Leaf nodes.** The HAMT stores
+   SmallSimdNode (16 entries) and LargeSimdNode (32 entries) inline within
+   the Entry enum — zero extra pointer indirection. The CHAMP puts Leaf
+   nodes behind `SharedPointer`, adding an extra pointer chase and cache
+   miss at every bottom-level access. At 100K entries (deep tries), this
+   compounds to 79% lookup regression.
+
+2. **Two-bitmap indexing is not cheaper than enum dispatch in Rust.** The
+   CHAMP paper's theoretical advantage (two bitmap tests vs type dispatch)
+   does not materialise in Rust: the Entry enum's discriminant is a single
+   byte, branch prediction handles it efficiently, and the compiler can
+   optimise the match into a computed jump. Two popcount + mask operations
+   are not faster.
+
+3. **Mutation regression.** The basic CHAMP prototype (DEC-007) was 26-41%
+   faster for mutations because its contiguous arrays reduced allocation
+   overhead. The hybrid version's SparseChunk-based layout eliminates that
+   advantage — SparseChunk has the same allocation characteristics as the
+   HAMT's SparseChunk.
+
+4. **LEAF_WIDTH=32 helped but was insufficient.** Increasing from 16 to 32
+   improved 1000-entry lookup from 43% slower to 15% slower, confirming the
+   depth hypothesis. But the pointer indirection penalty at leaf level
+   cannot be resolved without fundamentally changing the node layout to
+   inline leaf data (which would essentially recreate the HAMT's Entry
+   approach).
+
+**Alternatives considered:**
+- **LEAF_WIDTH=64 or larger** — would reduce depth further but increase
+  SIMD probe cost per leaf (4+ groups) and waste memory for sparse leaves.
+  Does not address the pointer indirection problem.
+- **Inline leaf data in InnerNode** (three-bitmap: datamap + leafmap +
+  nodemap) — would eliminate the pointer chase but requires variable-size
+  inline arrays, essentially recreating the HAMT's Entry enum with extra
+  complexity.
+- **ThinArc for leaf pointers** — saves 8 bytes per pointer but does not
+  eliminate the pointer chase that causes the cache miss penalty.
+
+**Consequences:**
+- Item 1 (hybrid SIMD-CHAMP) is killed.
+- The existing SIMD HAMT (`src/nodes/hamt.rs`) remains the production
+  implementation.
+- `src/nodes/champ_node.rs`, `src/champ_v2.rs`, `src/champ.rs`, and
+  `benches/champ.rs` were removed in DEC-020.
+- Items 2 (ThinArc) and 4 (Arena) proceed targeting the existing HAMT.
+- The `wide` crate dependency decision (DEC-003) stands — it remains
+  needed for the HAMT's SIMD nodes.
+- Key lesson: in Rust, storing variant data inline (enum) with branch
+  prediction is more cache-friendly than storing it behind shared pointers
+  with bitmap indexing. The JVM-centric CHAMP design does not translate
+  to a Rust performance advantage because JVM already pays pointer
+  indirection for all objects.
+
+---
+
+## DEC-017: OrdMap B+ tree node size — 32 {#sec:dec-017}
+
+**Date:** 2026-04-24
+**Status:** Accepted (supersedes prior size-16 choice)
+
+**Context:**
+`ORD_CHUNK_SIZE` controls B+ tree node capacity. Was 16, chosen without
+Apple Silicon benchmarks. Apple Silicon has 128-byte cache lines (vs 64 on
+x86), potentially favouring larger nodes.
+
+**Decision:**
+Increase `ORD_CHUNK_SIZE` from 16 to 32. Benchmarked sizes 16, 24, 32, 48
+on Apple Silicon M5 Max with i64 keys/values. Size 32 provides the best
+overall profile: large lookup and mutable-op improvements outweigh the
+persistent single-op regression in all workloads where lookups exceed
+~6-30× inserts (nearly all real workloads).
+
+**Benchmark summary** (i64 keys, % change vs size 16):
+
+| Operation (N=10K) | Size 24 | Size 32 | Size 48 |
+|--------------------|---------|---------|---------|
+| lookup             | +11.5%  | **-7.6%**  | **-12.8%** |
+| lookup (N=100K)    | +3.0%   | **-21.0%** | **-10.4%** |
+| insert_mut         | -18.3%  | **-27.2%** | **-33.5%** |
+| insert_mut (N=100K)| -19.3%  | **-36.9%** | **-38.4%** |
+| remove_mut         | -11.0%  | **-13.4%** | -12.9%  |
+| iter               | -9.6%   | **-11.6%** | -10.9%  |
+| range_iter         | -6.0%   | **-11.0%** | -11.1%  |
+| insert_once        | +12.9%  | +23.0%  | +40.5%  |
+| remove_once        | +15.3%  | +24.5%  | +39.9%  |
+
+Negative = faster, positive = slower. Bold = best or near-best.
+
+**Breakeven analysis:** At N=100K, a persistent insert costs ~254 ns (size 32)
+vs ~220 ns (size 16) — a 34 ns penalty. A lookup saves ~6.1 ns (22.7 vs 28.8).
+Breakeven: 34/6.1 ≈ 5.6 lookups per insert. At N=10K: ~30 lookups per insert.
+
+**Alternatives considered:**
+- **Keep 16** — better for persistent-mutation-dominated workloads, but those
+  are rare in practice and the lookup regression at large sizes is severe.
+- **24** — inconsistent results; lookup at 1K/10K regressed vs 16 despite better
+  at 100. Likely unfavourable cache alignment.
+- **48** — diminishing lookup returns with accelerating persistent-op regression
+  (35-52% slower). Bulk immutable build also regressed 16-27%.
+- **64** — not tested; 48 already showed clear diminishing returns.
+
+**Consequences:**
+- `src/config.rs` updated to `ORD_CHUNK_SIZE = 32`.
+- All three test configurations pass (default, all-features, small-chunks).
+- Derived constants: `MEDIAN = 16`, `THIRD = 10`, `NUM_CHILDREN = 33`.
+- Leaf nodes: `Chunk<(K,V), 32>` — 512 bytes for `(i64, i64)`.
+- Branch nodes: 32 keys + 33 children — fits in ~4 Apple Silicon cache lines.
+
+## DEC-018: ThinArc for HAMT pointers — killed, premise invalid {#sec:dec-018}
+
+**Date:** 2026-04-25
+**Status:** Killed
+
+**Context:**
+Item 2 of the Phase 6 performance plan proposed replacing archery's
+`SharedPointer<T, P>` with `triomphe::ThinArc` to reduce child pointers from
+a claimed 16 bytes to 8 bytes. The premise was that `SharedPointerKind`'s type
+erasure added vtable/metadata overhead making pointers fat.
+
+**Decision:**
+Kill the item. The premise is wrong — `SharedPointer<T, ArcTK>` is already
+8 bytes. archery's `ArcTK` backend wraps `triomphe::Arc<()>` via type erasure
+(`ManuallyDrop<UntypedArc>`) with zero size overhead. Measured sizes:
+
+| Type | Size |
+|------|------|
+| `SharedPointer<HamtNode<(i32,i32)>>` | 8 bytes |
+| `SharedPointer<SmallSimdNode<(i32,i32)>>` | 8 bytes |
+| `SharedPointer<CollisionNode<(i32,i32)>>` | 8 bytes |
+| `Entry<(i32,i32)>` | 16 bytes |
+| `std::sync::Arc<u64>` | 8 bytes |
+
+**Alternatives considered:**
+- **Remove P parameter from HashMap/HashSet** — still valid as an API
+  simplification, but provides no performance benefit. Can be done as part
+  of the v8.0.0 API cleanup (Phase 5) rather than as a performance item.
+- **Use triomphe::Arc directly** — archery already delegates to triomphe::Arc
+  when the `triomphe` feature is enabled (which is the default). The ManuallyDrop
+  transmute in archery is zero-cost.
+
+**Consequences:**
+- Item 2 removed from the performance plan.
+- Item 4 (Arena) no longer blocked on Item 2.
+- The `P: SharedPointerKind` parameter remains on all collection types.
+
+## DEC-019: Arena/bulk batch construction for from_iter — killed {#sec:dec-019}
+
+**Date:** 2026-04-25
+**Status:** Killed
+
+**Context:**
+Item 6.8 proposed arena-backed batch construction for `HashMap::from_iter` to
+close the 3-5x gap vs `std::HashMap`. Allocation profiling showed imbl makes
+~30K heap allocations for 100K elements vs 1 for std.
+
+**Decision:**
+Kill the item. Three approaches were prototyped and all failed the PoC gate
+(≥15% improvement on `from_iter`):
+
+1. **Vec-of-Vecs partitioning** — partition items into 32 bucket Vecs per level,
+   build bottom-up. Created ~60K temporary Vec allocations (worse than the 30K
+   node allocations it replaced). 2x slower than original at all sizes.
+
+2. **Pre-allocated partition Vecs** — same approach with `Vec::with_capacity`.
+   Reduced to ~60K allocations but still 2x slower due to partition overhead.
+
+3. **In-place American Flag sort + slice-based build** — zero-allocation
+   partitioning via swap-based radix sort, clone items from slices at leaf
+   level. Same allocation count as original but 10-25% slower due to
+   partitioning + cloning overhead.
+
+Allocation profiling data (100K i64 pairs):
+
+| Approach | Allocs | Time | vs Original |
+|----------|--------|------|-------------|
+| Original (insert loop) | 29,657 | 3.3ms | baseline |
+| Bulk v1 (Vec-of-Vecs) | 71,718 | 2.8ms | -15% time but 2.4x allocs |
+| Bulk v2 (with_capacity) | 59,847 | 2.5ms | similar |
+| Bulk v3 (in-place partition) | 27,575 | 3.0ms | same allocs, 10% slower |
+| std::HashMap | 1 | 0.7ms | — |
+
+For string keys, all bulk approaches are significantly worse because cloning
+strings from slices doubles heap allocations (each string clone = separate alloc).
+
+**Root cause:** The from_iter gap is inherent to HAMT structure, not to
+construction algorithm. HAMT requires ~0.3 node allocations per element
+(SmallSimdNode, HamtNode pointers), each via Arc::new. The insert-one-at-a-time
+path is already well-optimised: Arc::get_mut always succeeds (unique ownership
+during from_iter), SIMD lookups are fast, and tree depth is only 3-4 levels.
+
+**Alternatives considered:**
+- **Sort-then-insert** — sort elements by hash to improve cache locality during
+  insert. Comparison sort cost (~2ms for 100K) exceeds the entire current
+  from_iter time. Not viable.
+- **True arena allocator** — pre-allocate a single memory block for all nodes,
+  bump-allocate during construction, promote to Arc at the end. This would
+  reduce per-allocation overhead but requires deep changes to SharedPointer/Arc
+  and a promotion pass. The profiling shows allocation overhead is only ~25% of
+  total cost — the majority is tree traversal and SIMD operations. Maximum
+  benefit: ~25% improvement, at high complexity cost.
+
+**Consequences:**
+- Item 6.8 (Arena batch construction) killed.
+- The from_iter 3-5x gap vs std is accepted as inherent to HAMT.
+- Focus shifts to other optimisation targets (4.7 hash width, iteration speed).
+
+Profiling data preserved at:
+- `/private/tmp/bench_alloc_profile_*.txt` — allocation counts + timings
+- `/private/tmp/bench_alloc_bulk_*.txt` — bulk construction variants
+
+## DEC-020: Remove CHAMP PoC artefacts {#sec:dec-020}
+
+**Date:** 2026-04-25
+**Status:** Accepted
+
+**Context:**
+Three CHAMP-related PoC items have been conclusively killed:
+- DEC-007: Basic CHAMP prototype — lookup regression too large (10-64%)
+- DEC-015: Hybrid SIMD-CHAMP — PoC gate failed (2-79% slower lookups)
+- DEC-019: Arena batch construction — PoC gate failed (inherent HAMT gap)
+
+The prototype files totalled 3,406 lines across four files:
+- `src/champ.rs` (1,039 lines) — basic CHAMP from DEC-007
+- `src/nodes/champ_node.rs` (1,749 lines) — hybrid SIMD-CHAMP from DEC-015
+- `src/champ_v2.rs` (205 lines) — public wrapper for champ_node benchmarking
+- `benches/champ.rs` (413 lines) — CHAMP benchmark harness
+
+These were originally retained "for reference and benchmark comparison" but
+no future plan item depends on them. The HAMT is the permanent production
+structure (confirmed by three independent failed attempts to replace it).
+
+**Decision:**
+Delete all four files and their module declarations. The benchmark data,
+analysis, and lessons learned are fully captured in DEC-007, DEC-014,
+DEC-015, and DEC-019.
+
+**Why remove rather than keep for reference:**
+1. **Dead code accumulates maintenance cost.** Module declarations, feature
+   gates, and Cargo.toml entries must be kept compiling across refactors.
+   The 4.7 (hash width) plan included a step to update champ_node.rs —
+   unnecessary work for dead code.
+2. **Decisions are the reference, not code.** The lessons (inline enum >
+   pointer-chased leaves in Rust; HAMT's SIMD probing is non-replicable
+   in CHAMP; from_iter gap is structural) are recorded in decisions.md
+   where they prevent future rework. The code itself adds nothing over
+   the written analysis.
+3. **3,406 lines removed** from the build and search surface. Reduces
+   noise in grep results, IDE navigation, and crate-level documentation.
+
+**Alternatives considered:**
+- **Keep behind a `champ` feature flag** — still compiles, still needs
+  maintenance, still appears in searches. No benefit over git history.
+- **Move to `examples/`** — the code depends on crate internals
+  (`nodes::champ_node`, `SparseChunk`, `SharedPointer`) and cannot
+  be an independent example.
+
+**Consequences:**
+- `src/champ.rs`, `src/champ_v2.rs`, `src/nodes/champ_node.rs`, and
+  `benches/champ.rs` deleted.
+- Module declarations removed from `src/lib.rs`, `src/nodes/mod.rs`.
+- Bench entry removed from `Cargo.toml`.
+- `docs/impl-plan.md` updated: 6.7 "prototype retained" → "prototype
+  removed", 4.7 step referencing champ files removed, 6.8 and 6.9
+  cross-references to dead items cleaned up, dependency map updated.
+- Code remains accessible via git history if ever needed.

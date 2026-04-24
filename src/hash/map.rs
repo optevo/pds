@@ -3119,6 +3119,7 @@ mod test {
     assert_covariant!(HashMap<T, i32> in T);
     assert_covariant!(HashMap<i32, T> in T);
 
+
     #[test]
     fn safe_mutation() {
         let v1: HashMap<usize, usize> = GenericHashMap::from_iter((0..131_072).map(|i| (i, i)));

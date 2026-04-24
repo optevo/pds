@@ -363,6 +363,7 @@ where
         self.data.len()
     }
 
+
     #[inline]
     fn mask(hash: HashBits, shift: usize) -> HashBits {
         let mask = (HASH_WIDTH - 1) as HashBits;
@@ -746,6 +747,7 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
         }
         removed
     }
+
 }
 
 #[derive(Clone)]

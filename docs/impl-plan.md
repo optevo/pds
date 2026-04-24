@@ -64,6 +64,31 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] CHAMP PoC artefacts removed (DEC-020).** Deleted
+  `src/champ.rs`, `src/champ_v2.rs`, `src/nodes/champ_node.rs`, and
+  `benches/champ.rs` (3,406 lines total). Three independent PoC attempts
+  to replace/improve the HAMT all failed their gates (DEC-007, DEC-015,
+  DEC-019). Dead code accrues maintenance cost; the analysis and lessons
+  are preserved in decisions.md.
+
+- **[2026-04-25] 6.8: Arena batch construction — KILLED (DEC-019).**
+  Three approaches tried; all failed ≥15% improvement gate. The from_iter
+  gap vs std is inherent to HAMT structure (~0.3 node allocs per element).
+
+- **[2026-04-25] 6.3: ThinArc for node pointers — KILLED (DEC-018).**
+  Premise invalid. `SharedPointer<T, ArcTK>` is already 8 bytes — archery's
+  ArcTK backend wraps `triomphe::Arc<()>` with zero size overhead. No memory
+  to save.
+
+- **[2026-04-25] 6.7: Hybrid SIMD-CHAMP — KILLED (DEC-015).** Full prototype
+  built and benchmarked. CHAMP v2 is 2-79% slower for lookups, 5-64% slower
+  for mutations. Root cause: HAMT inline SIMD nodes avoid pointer indirection
+  that CHAMP leaf nodes behind SharedPointer cannot match.
+
+- **[2026-04-25] OrdMap B+ tree node size tuning (DEC-017).**
+  `ORD_CHUNK_SIZE` increased from 16 to 32 based on Apple Silicon benchmarks.
+  Lookup 8-21% faster, mutable ops 10-37% faster, iteration 10-12% faster.
+
 - **[2026-04-24] 5.4: no_std support.**
   `#![cfg_attr(not(feature = "std"), no_std)]` with `extern crate alloc`.
   Replaced `std::` imports with `core::`/`alloc::` across ~30 files. Gated
@@ -105,8 +130,8 @@ single v8.0.0 release in Phase 5.
   36-44% faster for iteration (contiguous value arrays), but 10-64%
   slower for lookups (popcount vs SIMD parallel probe). Decision
   (DEC-007): do not proceed to 4.3 — the lookup regression is too
-  large for a general-purpose library. The SIMD HAMT remains. The
-  prototype is retained for future hybrid-SIMD-CHAMP research.
+  large for a general-purpose library. The SIMD HAMT remains.
+  Prototype removed (DEC-020).
 
 - **[2026-04-24] 4.5: SharedPointer-wrapped hasher.** Wrapped the hasher
   in `SharedPointer<S, P>` in both `GenericHashMap` and `GenericHashSet`.
@@ -359,17 +384,25 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phases 0–4 complete. Phase 5 complete — 5.1 done (triomphe default,
-DEC-010), 5.2 done (Clone bounds), 5.3 deferred (DEC-011, stable Rust
-blocker), 5.4 done (no_std, DEC-012).
+Phases 0–5 complete. Phase 6 research complete (DEC-014). Three research
+items killed (6.3, 6.7, and 6.2 by inheritance), one deprioritised (6.1).
 
-Phase 3 status: All resolved. 3.4 partially complete (par_iter done for
-all types; par_iter_mut for HashMap; par_sort for Vector; parallel bulk
-ops deferred to Phase 6).
-Phase 4: All resolved. SIMD HAMT retained (DEC-007). Merkle caching
-accepted (DEC-009). SharedPointer-wrapped hasher done.
-Phase 5: All resolved. 5.1 done (DEC-010). 5.2 done. 5.3 deferred
-(DEC-011). 5.4 done (DEC-012).
+**Prioritised next items (Apr 2026):**
+
+1. ~~6.8 Arena batch construction~~ — **KILLED** (DEC-019). PoC failed:
+   partitioning + clone overhead negated tree-traversal savings. Gap is
+   inherent to HAMT structure.
+2. [ ] 4.7 Pluggable hash width — stage 1 (widen `HashBits` to u64) is
+   non-breaking. Reduces collision probability at large sizes.
+3. [ ] 6.9 Persistent trie — to be explored (research + PoC gate)
+4. [ ] 4.6 Vector Merkle hash caching — PoC gate needed (overhead vs gain)
+5. [ ] Test coverage gaps — ord/set.rs at 58% line coverage, ord/map.rs
+   at 72%. HAMT uncovered paths: `upgrade_to_large`, `pop_value`.
+6. [ ] Proptest stability — demotion edge case regression tests. Root
+   cause identified: only Value entries can be safely demoted from child
+   HamtNode to parent (shift-dependent upgrade paths).
+7. [ ] Memory profiling benchmarks — `dhat` integration (from 0.3 scope,
+   never implemented). Needed for arena work and future memory claims.
 
 ---
 
@@ -426,15 +459,14 @@ unsafe-heavy code paths.
   unsafe code (raw pointers, manual Send/Sync impls, AtomicPtr) and have
   zero fuzz coverage today.
 
-**Why:** HashMap and OrdMap have no fuzz targets. The CHAMP rewrite (4.3)
-replaces the entire HAMT node layout — the most invasive change in this plan.
-Focus/FocusMut are the highest-risk unsafe code and are exercised by the
-unsafe audit (3.2). Without fuzz coverage, subtle bugs in node manipulation
-or pointer arithmetic will not be caught.
+**Why:** HashMap and OrdMap have no fuzz targets. Focus/FocusMut are the
+highest-risk unsafe code and are exercised by the unsafe audit (3.2).
+Without fuzz coverage, subtle bugs in node manipulation or pointer
+arithmetic will not be caught.
 
 **Complexity:** Low. Existing targets provide templates.
 
-**Prerequisite for:** 3.2 (unsafe audit), 4.3 (CHAMP integration), 6.1 (ART).
+**Prerequisite for:** 3.2 (unsafe audit).
 
 ---
 
@@ -531,7 +563,7 @@ not a polish step.
   Nodes promote: Small→Large→Hamt as they fill. The `Entry` enum has 5
   variants: `Value`, `SmallSimdNode`, `LargeSimdNode`, `HamtNode`,
   `Collision`. This is significantly more complex than described in the
-  academic papers and must be understood before the CHAMP rewrite (4.2/4.3).
+  academic papers.
 - **B+ tree (nodes/btree.rs, ord/map.rs):** Document the node structure
   (rewritten in v6.0), split/merge/rebalance logic, and the `Cursor` type.
   Needed before `iter_mut` (2.3) and any future OrdMap work.
@@ -1365,28 +1397,13 @@ issue #154.
 
 ---
 
-### 4.3 CHAMP integration
+### 4.3 CHAMP integration — KILLED
 
-**What:** If 4.2 benchmarks justify it, replace the SIMD HAMT with CHAMP.
-This includes both the two-bitmap encoding (OOPSLA 2015, Section 3) and
-canonical deletion (OOPSLA 2015, §4.2). These are inseparable —
-canonical form is a key benefit of CHAMP and only works with the two-bitmap
-layout.
-
-**Complexity:** High. Replaces the entire node layer for HashMap/HashSet.
-The current SIMD architecture is ~1100 lines with extensive optimisation.
-
-**Affects:** `HashMap<K, V>`, `HashSet<A>`.
-
-**Prerequisites:** 4.2 (prototype must show improvement), 0.1 (CI/miri),
-0.2 (HashMap fuzz target).
-
-**Ordering note:** Must land BEFORE 5.3 (const generic branching) and 5.4
-(no_std), because both would need to accommodate whatever node architecture
-exists. If CHAMP lands first, 5.3 parameterises the CHAMP nodes. If 5.3
-landed first, CHAMP would need to be generic from day one.
-
-**References:** Same as 4.2.
+**Status:** Permanently closed. Both 4.2 (basic CHAMP, DEC-007) and 6.7
+(hybrid SIMD-CHAMP, DEC-015) showed that CHAMP does not outperform
+imbl's SIMD HAMT in Rust. The HAMT's inline SIMD nodes and efficient
+enum dispatch are structurally superior to CHAMP's pointer-chased leaf
+nodes and dual-bitmap indexing. The existing HAMT is retained.
 
 ---
 
@@ -1430,6 +1447,331 @@ aligns with structural sharing philosophy.
 **Affects:** `HashMap<K, V, S>`, `HashSet<A, S>`.
 
 **Prerequisites:** 5.2 (Clone bounds audit — completed).
+
+---
+
+### 4.6 Vector Merkle hash caching
+
+**What:** Maintain an incremental `u64` hash per RRB tree node, analogous
+to 4.4 (HAMT Merkle hash). When comparing two Vectors, if root hashes
+differ → definitely not equal → return `false` in O(1) without element
+traversal.
+
+**PoC gate:** Benchmark the per-mutation overhead (hash maintenance cost)
+vs the equality fast-path gain. Go/no-go question: does the overhead pay
+for itself when Vectors are frequently compared but rarely equal?
+
+#### Design
+
+**Key difference from HAMT:** The HAMT Merkle hash is commutative
+(addition-based, order-independent) because hash maps are unordered.
+Vector hashes must be **order-sensitive** — `[a, b]` and `[b, a]` must
+produce different hashes. Use position-dependent mixing:
+`hash(chunk) = XOR of fmix64(global_index ^ hash(element))`.
+
+**Node structure change** (`src/nodes/rrb.rs`):
+
+```rust
+// Current: Node { children: Entry<A, P> }
+// Proposed:
+pub(crate) struct Node<A, P: SharedPointerKind> {
+    children: Entry<A, P>,
+    merkle_hash: u64,       // subtree hash, 0 if not computed
+}
+```
+
+**Hash computation:**
+- Leaf chunks (`Entry::Values`): `XOR of fmix64(global_offset + i) ^ hash(element[i])`
+  for each element. Global offset is passed down from the parent during
+  construction/mutation.
+- Internal nodes (`Entry::Nodes`): `XOR of child.merkle_hash` values.
+- Empty/Inline vectors: hash = 0 (sentinel, not used for comparison).
+
+**Incremental maintenance:** Each mutation operation already does
+path-copy (copy-on-write via `SharedPointer::make_mut`). The hash update
+piggybacks on this path — after mutating a child, recompute the affected
+leaf hash and propagate up. Cost: O(log n) hash recomputations per
+mutation, same as the structural update.
+
+**PartialEq fast path** (`src/vector/mod.rs` line 2123):
+
+```rust
+fn eq(&self, other: &Self) -> bool {
+    self.ptr_eq(other)                                   // O(1) positive
+    || (self.len() == other.len()
+        && self.root_hashes_match(other)                 // O(1) negative
+        && self.iter().eq(other.iter()))                  // O(n) fallback
+}
+```
+
+Where `root_hashes_match` returns `true` if either hash is 0 (unknown)
+or both hashes are equal. Only returns `false` (triggering the fast
+negative) when both hashes are non-zero and differ.
+
+**Constraint:** `A: Hash` is needed to compute element hashes. Since
+`Vector<A>` does not require `Hash`, the hash is computed opportunistically:
+- The field exists on all Nodes (8 bytes overhead)
+- Hash is 0 (sentinel) unless explicitly set
+- `Vector::with_merkle_hash()` constructor computes the hash once
+- `push_back`/`set` etc. maintain the hash if the source had one
+- `PartialEq` only uses the fast path when both sides have non-zero hashes
+
+This avoids adding `A: Hash` to the type signature while still enabling
+the fast path for types that do implement Hash.
+
+#### Implementation steps
+
+**Step 1: Add `merkle_hash` field to `Node`** (`src/nodes/rrb.rs`)
+- Add `merkle_hash: u64` field to the `Node` struct (line 231)
+- Initialize to 0 in all `Node` constructors: `new()`, `from_chunk()`,
+  `single_parent()`, `join_dense()`, `join_branches()`, `parent()`
+- Update `Clone`, `Debug`, and any derived impls
+- **Files:** `src/nodes/rrb.rs`
+
+**Step 2: Add hash computation for leaf chunks**
+- Add `fn compute_leaf_hash(chunk: &Chunk<A>, global_offset: usize) -> u64`
+  where `A: Hash`
+- Uses `fmix64` from `src/nodes/hamt.rs` (make it `pub(crate)`)
+- Position-dependent: `xor_fold(fmix64(offset + i) ^ std_hash(element))`
+- **Files:** `src/nodes/rrb.rs`, `src/nodes/hamt.rs` (export fmix64)
+
+**Step 3: Propagate hash through mutation operations**
+- `Node::push_chunk` (line 644): after pushing, update parent merkle
+- `Node::pop_chunk` (line 786): after popping, update parent merkle
+- `Node::split` (line 847): recompute hash for both halves
+- `Node::merge` / `concat_rebalance` (lines 966, 1153): recompute
+- `Node::index_mut` (line 596): invalidate hash to 0 (can't recompute
+  without `A: Hash` bound on `index_mut`)
+- `RRB::push_back` / `push_front`: update outer buffer hash if maintained
+- **Key insight:** `index_mut` cannot maintain the hash because it doesn't
+  have `A: Hash` bound. Solution: invalidate to 0 on mutable access.
+  The hash is most valuable for cloned-then-compared patterns where
+  mutable access is infrequent.
+- **Files:** `src/nodes/rrb.rs`, `src/vector/mod.rs`
+
+**Step 4: Hash for the 4-buffer structure**
+- RRB has 4 chunk buffers outside the tree (`outer_f`, `inner_f`,
+  `inner_b`, `outer_b`). The top-level hash must incorporate these.
+- Option A: Push buffers into tree before comparison (expensive)
+- Option B: Store a separate `u64` for each buffer, combine at comparison
+- Option C: Only use tree-level merkle for the `middle` node, combine
+  with buffer hashes lazily
+- **Recommendation:** Option B — 32 bytes of additional fields on RRB,
+  but avoids any structural changes for comparison.
+- **Files:** `src/vector/mod.rs` (RRB struct)
+
+**Step 5: PartialEq fast path**
+- Modify `GenericVector::eq()` to check root hashes before element
+  comparison (only when both are non-zero)
+- **Files:** `src/vector/mod.rs`
+
+**Step 6: Public API**
+- Add `Vector::merkle_hash() -> Option<u64>` — returns `Some` if hash
+  is computed, `None` if invalidated (0)
+- Add `Vector::compute_merkle_hash(&mut self)` where `A: Hash` —
+  forces hash computation from scratch
+- **Files:** `src/vector/mod.rs`
+
+**Step 7: Benchmarks and PoC gate**
+- Benchmark `push_back` overhead with merkle hash (before/after)
+- Benchmark `PartialEq` for structurally-shared vectors with hash
+- Go/no-go: if per-mutation overhead exceeds 10% on push_back, kill
+- **Files:** `benches/vector.rs`
+
+#### Test plan
+
+- **Correctness:** Hash of `[a, b]` ≠ hash of `[b, a]`
+- **Incremental:** Hash after `push_back(x)` matches full recompute
+- **Invalidation:** Hash becomes 0 after `index_mut` access
+- **PartialEq:** Fast negative on different-hash vectors
+- **PartialEq:** No false negatives (same content, both with hash)
+- **Proptest:** For `A: Hash`, `v1 == v2` iff element-by-element equal
+
+**Affects:** `Vector<A>`.
+
+**Prerequisites:** 0.1 ✓ (CI), 0.3 ✓ (Vector benchmarks), 0.5 ✓ (RRB
+architecture docs). Benefits from 4.4 ✓ (HAMT Merkle hash — established
+pattern).
+
+**References:** Merkle trees (Merkle, 1987); 4.4 (HAMT Merkle hash —
+implementation pattern and overhead analysis).
+
+---
+
+### 4.7 Pluggable hash width and fast-path hashing
+
+**What:** Abstract the HAMT's internal hash representation to support
+wider hashes and provide convenience hashers for well-distributed key
+types.
+
+**Current limitation:** `HashBits` is `u32` — `hash_key()` truncates
+the `u64` output of `BuildHasher::hash_one()` to 32 bits. With 5 bits
+per trie level, this gives 6.4 usable levels before hash exhaustion
+triggers collision nodes. 32 bits of entropy means collision probability
+reaches ~50% at ~65K entries (birthday bound) — collision nodes are hit
+earlier and more often than the branching factor suggests.
+
+**Design — three stages:**
+
+1. **Widen HashBits to u64 (non-breaking).** Change `HashBits` from
+   `u32` to `u64`. This eliminates a truncation that discards half the
+   entropy `BuildHasher::hash_one()` already computes. 12.8 trie levels
+   before exhaustion. Cost: +4 bytes per SIMD node entry. Go/no-go:
+   benchmark the per-entry storage increase vs collision reduction at
+   large collection sizes (100K+).
+
+2. **Abstract hash width (breaking — v8.0.0).** Replace the concrete
+   `HashBits` type with an associated type on a `HashWidth` trait:
+   ```rust
+   trait HashWidth {
+       type Bits: Copy + Eq + ...;
+       fn mask(hash: Self::Bits, shift: usize) -> usize;
+       fn ctrl_hash(hash: Self::Bits) -> u8;
+   }
+   ```
+   Default implementation uses `u64`. A `Wide` implementation uses
+   `u128`. This is the const-generic-free path to configurable hash
+   width — avoids the `generic_const_exprs` blocker that killed 5.3.
+
+3. **Identity hasher for u128/UUID keys.** Provide an `IdentityHasher`
+   (or integrate with `foldhash`'s passthrough path) that returns the
+   key bytes directly as the hash value. For u128 keys that are already
+   well-distributed (UUID v4/v7), this eliminates hash computation
+   entirely. Combined with `HashWidth::Wide`, gives 25.6 trie levels
+   from 128 bits of native key entropy — virtually zero collisions.
+
+**Motivation:** Systems whose keys are inherently well-distributed
+(UUIDs, cryptographic hashes, content-addressed identifiers) pay hash
+computation overhead for no benefit. The HAMT then discards most of the
+computed entropy via truncation. Both costs are avoidable. Azoth's data
+model uses u128 Ids as all Map keys — the identity-hash + wide-hash
+combination would eliminate both the hash computation and the collision
+overhead.
+
+**Scope:** Stage 1 (widen to u64) is a self-contained, non-breaking
+change that can ship as v7.x. Stage 2 (trait abstraction) is breaking
+and belongs in v8.0.0. Stage 3 (identity hasher) is a convenience
+addition that can land with either stage.
+
+#### Stage 1 implementation plan (widen to u64)
+
+**Go/no-go question:** Does the +4 bytes per SIMD entry overhead pay for
+itself via collision reduction at large collection sizes?
+
+**Step 1: Change `HashBits` type** (`src/nodes/hamt.rs` line 21)
+- Change: `pub(crate) type HashBits = u64;` (was derived from
+  `BitsImpl<HASH_WIDTH>` which resolved to `u32`)
+- Remove the `BitsImpl`/`Bits` machinery if it was only used for this
+- The `fmix64` Merkle mixer already operates on `u64` — no change needed
+- **Files:** `src/nodes/hamt.rs`
+
+**Step 2: Remove truncation in `hash_key`** (line 49-50)
+- Current: `bh.hash_one(key) as HashBits` — truncates u64 → u32
+- After: `bh.hash_one(key)` — identity, since HashBits is now u64
+- **Files:** `src/nodes/hamt.rs`
+
+**Step 3: Update SIMD node entry storage**
+- `GenericSimdNode` stores `SparseChunk<(A, HashBits), WIDTH>` — each
+  entry grows by 4 bytes (HashBits u32 → u64)
+- SmallSimdNode entry: was `(A, u32)`, now `(A, u64)` — alignment may
+  pad this further depending on `A`
+- LargeSimdNode: same growth pattern
+- **Measure:** SmallSimdNode size increase (currently 224 bytes),
+  LargeSimdNode (currently 432 bytes)
+- **Files:** `src/nodes/hamt.rs`
+
+**Step 4: Update hash bit extraction** (line 368)
+- `let mask = (HASH_WIDTH - 1) as HashBits;` — mask is 31 (0x1F) for
+  5-bit extraction. This works the same with u64.
+- `(hash >> shift) & mask` — shift and mask operate identically on u64
+- Verify all shift arithmetic is correct for 12.8 levels (max shift =
+  60, which fits in u64)
+- **Files:** `src/nodes/hamt.rs`
+
+**Step 5: Update SIMD control hash**
+- The SIMD control byte (`ctrl_hash`) uses the high bits of the hash to
+  create a 7-bit fingerprint for parallel probing. With u64, we have
+  more bits to work with — use bits 57-63 instead of bits 25-31
+- Search for `ctrl_hash` or control byte computation and update
+- **Files:** `src/nodes/hamt.rs`
+
+**Step 6: Update collision threshold**
+- Collision nodes are created when hash exhaustion occurs
+  (shift + HASH_SHIFT >= HASH_WIDTH). With u32 (HASH_WIDTH=32) and
+  HASH_SHIFT=5, this happened at shift=30 (6 levels). With u64
+  (HASH_WIDTH=64), this happens at shift=60 (12 levels) — collisions
+  become extremely rare
+- No code change needed — the threshold is computed from constants
+- **Benefit:** Virtually eliminates collision nodes for collections
+  under ~4 billion entries
+
+**Step 7: Update rayon module**
+- `src/hash/rayon.rs` imports HASH_SHIFT and HASH_WIDTH — verify
+  these still work correctly for work-splitting
+- **Files:** `src/hash/rayon.rs`
+
+**Step 8: Benchmark**
+- Compare all hashmap operations before/after at 100, 1K, 10K, 100K
+- Measure memory overhead: `std::mem::size_of` for SmallSimdNode,
+  LargeSimdNode, HamtNode before and after
+- Key metric: does collision reduction at 100K+ offset the per-entry
+  storage increase?
+- **Files:** `benches/hashmap.rs`
+
+#### Stage 2 design notes (breaking — v8.0.0)
+
+Abstract hash width behind a trait so users can choose u32/u64/u128:
+
+```rust
+pub trait HashWidth: Copy + 'static {
+    type Bits: Copy + Eq + Hash + Default + Debug
+        + BitAnd<Output = Self::Bits>
+        + Shr<usize, Output = Self::Bits>
+        + From<u8>;
+    const WIDTH: usize;
+    fn from_u64(hash: u64) -> Self::Bits;
+    fn ctrl_hash(hash: Self::Bits) -> u8;
+}
+```
+
+Default impl for u64 (non-breaking path from stage 1). Wide impl for
+u128 (for UUID/content-addressed keys). This affects GenericHashMap's
+type signature — breaking change.
+
+#### Stage 3: Identity hasher
+
+~50 lines. Provide `IdentityHasher` that passes through the key bytes
+directly. For u64/u128 keys that are already well-distributed (UUIDs,
+content hashes), this eliminates hash computation entirely.
+
+```rust
+pub struct IdentityHasher;
+impl BuildHasher for IdentityHasher {
+    type Hasher = IdentityHasherState;
+    // ...
+}
+```
+
+Can land with either stage 1 or stage 2.
+
+**Complexity:**
+
+- Stage 1: Low-moderate. Mechanical: change type, update ~20 sites,
+  benchmark. Estimated ~40 lines changed.
+- Stage 2: Moderate. Requires threading an associated type through the
+  HAMT node hierarchy. Similar scope to SharedPointer generics.
+- Stage 3: Low. ~50 lines for the hasher implementation.
+
+**Affects:** `HashMap<K, V>`, `HashSet<A>`.
+
+**Prerequisites:** 0.1 ✓ (CI), 0.3 ✓ (HashMap benchmarks), 0.5 ✓
+(HAMT architecture docs). Stage 1 is independent. Stage 2 should follow
+stage 1 benchmarks. Stage 3 is independent of both.
+
+**References:** foldhash crate (passthrough hashing for integer keys);
+hashbrown `FixedState`; Swiss Tables hash representation (7-bit ctrl +
+full hash); Steindorfer/Vinju OOPSLA 2015 (CHAMP uses full 32-bit hash,
+5 bits per level).
 
 ---
 
@@ -1512,167 +1854,269 @@ supply their own `BuildHasher`. Wrote `SpinMutex` fallback for
 High-complexity items with uncertain payoff. Each requires a prototype and
 benchmark before committing to integration.
 
-### 6.1 Persistent Adaptive Radix Tree for OrdMap
+### 6.1 Persistent Adaptive Radix Tree for OrdMap — DEPRIORITISED
 
 **What:** Replace OrdMap's B+ tree with a persistent ART.
 
-**Caveats:**
-- ART works best with byte-string keys. Arbitrary `Ord` types need encoding.
-- The B+ tree was rewritten in v6.0 with significant improvements.
-- ART is less proven in production for general-purpose ordered maps.
+**Research outcome (DEC-014):** Not recommended. ART requires byte-
+encodable keys (`K: ByteEncodable`), not generic `K: Ord` — a breaking
+API change affecting ~280 downstream crates. No production persistent
+ART for generic keys exists. Encoding overhead erodes ART's advantage
+for small collections. DuckDB confirms range-scan limitations vs B-trees.
+Better investments: tune `ORD_CHUNK_SIZE` ✓ (DEC-017, increased to 32),
+branch-free intra-node search, bulk operations.
 
-**Approach:** Prototype as a standalone crate, benchmark against current
-OrdMap across all operations and key types.
-
-**Complexity:** High.
-
-**Affects:** `OrdMap<K, V>`, `OrdSet<A>`.
-
-**Prerequisites:** 0.2 (OrdMap fuzz target), 0.3 (OrdMap/OrdSet benchmarks).
-
-**References:** Ankur Dave, "PART"; Leis et al., "The Adaptive Radix Tree"
-(ICDE 2013).
+**Status:** Research complete. Deprioritised. See DEC-014.
 
 ---
 
-### 6.2 HHAMT inline storage
+### 6.2 HHAMT inline storage — KILLED (via 6.7)
 
 **What:** Store small values inline in HAMT nodes instead of behind Arc
 pointers.
 
-**Caveats:** Rust lacks specialisation (nightly-only). A size-threshold
-approach via const generics is possible but awkward.
+**Research outcome (DEC-014):** Steindorfer's measurements show 55%
+median memory reduction (maps), 78% (sets). Implemented in Scala 2.13,
+Kotlin, Swift Collections 1.1. However, all use CHAMP as the base.
+imbl's three-tier architecture already captures the spirit of inline
+specialisation. Was merged into hybrid SIMD-CHAMP redesign (6.7).
 
-**Complexity:** High. Requires reworking node memory layout.
-
-**Affects:** `HashMap<K, V>`, `HashSet<A>`.
-
-**Prerequisites:** 4.3 (CHAMP integration — builds on whatever node layout
-exists).
-
-**References:** Steindorfer, "Efficient Immutable Collections" (PhD thesis,
-2017), Chapter 5.
+**Kill reason:** Parent item 6.7 killed (DEC-015). The HAMT's inline
+SIMD nodes already provide the performance benefits that HHAMT targets
+in other implementations. No viable integration path remains.
 
 ---
 
-### 6.3 ThinArc for node pointers
+### 6.3 ThinArc for node pointers — KILLED (DEC-018)
 
 **What:** Use `triomphe::ThinArc` for internal nodes (header + variable-
-length array behind a single thin pointer). Saves 8 bytes per pointer.
+length array behind a single thin pointer). Claimed to save 8 bytes per pointer.
 
-**Complexity:** Moderate. All node pointer types change.
-
-**Affects:** All five collection types.
-
-**Prerequisites:** 5.1 (triomphe default — ThinArc is triomphe-specific).
-
-**References:** triomphe `ThinArc` (docs.rs/triomphe).
+**Kill reason (DEC-018):** Premise invalid. `SharedPointer<T, ArcTK>` is
+already 8 bytes — archery's ArcTK backend wraps `triomphe::Arc<()>` with zero
+size overhead. Measured: all pointer types (HamtNode, SmallSimdNode,
+CollisionNode) are 8 bytes. No memory to save.
 
 ---
 
-### 6.4 `dupe::Dupe` trait support (issue [#113](https://github.com/jneem/imbl/issues/113))
+### 6.4 `dupe::Dupe` trait support (issue [#113](https://github.com/jneem/imbl/issues/113)) — LOW PRIORITY
 
 **What:** Implement Meta's `Dupe` trait. Mechanical — delegates to `clone()`.
+
+**Research outcome (DEC-014):** dupe ecosystem is narrow (Meta-internal).
+`light_clone` crate (Feb 2026) already provides `LightClone` for imbl
+types externally. If proceeding: optional feature flag, 5 impl blocks.
 
 **Complexity:** Trivial.
 
 **Affects:** All five collection types.
 
-**References:** imbl issue #113; `dupe` crate.
-
 ---
 
-### 6.5 Hash consing / interning (compile-time feature)
+### 6.5 Hash consing / interning (compile-time feature) — DESIGN VALIDATED
 
 **What:** An opt-in compile-time feature (`hash-intern`) that adds a
-global intern table for tree nodes. When creating a new node, look up
-its Merkle hash (from 4.4) in the table — if a live node with the same
-hash exists, return the existing `Arc` instead of allocating. This makes
-independently-constructed subtrees with identical content pointer-equal
-by construction.
+global intern table for tree nodes. Enables automatic structural
+deduplication and O(1) equality via Merkle hash identity.
 
-**Design:**
-- Gated by `#[cfg(feature = "hash-intern")]` — when disabled, zero
-  overhead (no hash field, no table, no code generated)
-- Intern table: `HashMap<u64, Weak<Node>>` — `Weak` references ensure
-  unused nodes are still collected by normal `Arc` drop
-- Thread-local tables by default (zero contention). Optional sharded
-  global table (`DashMap`-style) behind a sub-feature for cross-thread
-  deduplication
-- On node creation: compute Merkle hash (reuses 4.4 infrastructure),
-  check table, return existing `Arc` or insert new entry
-- All `ptr_eq` checks (3.5, 3.6) automatically benefit because interning
-  makes independently-equal subtrees the same pointer
+**Research outcome (DEC-014):** Design validated against Filliâtre &
+Conchon (2006), `hashconsing` Rust crate, and `weak-table` crate.
+10–30ns overhead estimate confirmed reasonable. Use `weak-table`'s
+`WeakHashSet` for stale entry cleanup. Appel's insight: only intern
+nodes that survive initial creation (not ephemeral intermediates).
+2025 study: 2.5x initial overhead, 5–100x downstream speedups for
+repeated traversals.
 
-**Why:** Completes the equality/deduplication story. Pointer equality
-(3.5, 3.6) handles shared-lineage subtrees. Merkle hashing (4.4) handles
-independently-equal subtrees via hash comparison. Interning goes further:
-it physically deduplicates them so all future operations (diff, equality,
-memory) benefit permanently. This is how git and content-addressable
-storage work. Particularly valuable for workloads with many similar
-collections (version history, branch-heavy workflows, caches of derived
-data).
+**Key capabilities enabled by interning + Merkle hashes:**
 
-**Trade-offs:**
-- Intern table lookup on every node creation (~10-30ns per lookup with
-  a good hash table)
-- `Weak` reference overhead per interned node
-- Thread-local tables don't deduplicate across threads
-- Hash collisions (vanishingly rare with 64-bit hash but non-zero risk)
+1. **Pointer consolidation after equality.** When two collections are
+   found equal by content, interning makes them share the same physical
+   nodes. Future comparisons between them (and any clones derived from
+   them) become O(1) via `ptr_eq`. Without interning, a dedicated
+   `consolidate(&mut self, &other)` method could achieve the same for
+   individual pairs — interning generalises it to all equal subtrees
+   system-wide.
 
-**Complexity:** Moderate. The intern table and `intern_or_alloc()` wrapper
-are straightforward. The complexity is in threading it through all node
-creation paths and ensuring the `Weak` cleanup is correct.
+2. **Equality verification levels.** Three levels of equality confidence,
+   all starting with Merkle hash as an O(1) negative fast path:
+   - **Verified** (default) — hash negative + full O(n) element comparison
+     for the positive case. Current `PartialEq` behaviour.
+   - **Sampled** — hash match + length match + k random sample checks
+     (default k=8). For a collection with d differing elements out of n,
+     false-equality probability is ~2^-64 x (1-d/n)^k — effectively
+     zero. For HashMap/OrdMap, sample k random keys and compare values.
+     For Vector, sample k random indices. O(k) total — catches both hash
+     collisions and single-element differences with near-certainty. This
+     is the sweet spot: orders of magnitude faster than O(n) with
+     probability guarantees stronger than hardware reliability.
+   - **HashOnly** — trust Merkle hash equality as content equality. O(1).
+     Collision probability ~10^-14 for <1M entries (64-bit hash), ~10^-29
+     with 128-bit hash (4.7 stage 2). Suitable for hash-consed (interned)
+     environments where nodes are identity-deduplicated.
+   API: `probably_eq(&self, &other) -> bool` (sampled), or configurable
+   via a type-level `EqualityPolicy` parameter on the collection.
+
+3. **Subtree-level deduplication.** Interning works at the node level,
+   not just the root. Two maps that differ overall but share a common
+   subtree will intern that subtree to the same pointer — reducing memory
+   and speeding up subsequent diffs.
+
+**Complexity:** Moderate.
 
 **Affects:** All five collection types (internal node allocation).
 
-**Prerequisites:** 4.4 (Merkle hash caching — provides the hash
-infrastructure that interning builds on).
+**Prerequisites:** 4.4 ✓ (Merkle hash caching — done). Benefits from
+4.6 (Vector Merkle hash — extends interning to RRB tree nodes).
 
-**References:** Hash consing (Goto, 1974; Filliâtre and Conchon, 2006);
-git content-addressable object store; immer memory policies.
+**References:** Filliâtre & Conchon (2006); `hashconsing` crate;
+`weak-table` crate; Appel (1993); arXiv:2509.20534.
 
 ---
 
-### 6.6 Structural-sharing-preserving serialisation
+### 6.6 Structural-sharing-preserving serialisation — RKYV PATH IDENTIFIED
 
 **What:** A serialisation format that preserves the internal tree
 topology, so that two collections sharing structure are serialised
 without duplicating the shared nodes.
 
-**Design:** Use a "pool" approach (inspired by immer's `persist` module):
-1. **Serialise:** walk the tree, assign each unique node an ID,
-   serialise each node once with references to child IDs. Shared nodes
-   (same `Arc` pointer) naturally get the same ID.
-2. **Deserialise:** reconstruct nodes from the pool, restoring `Arc`
-   sharing by reusing the same node for all references to the same ID.
-3. Custom serde layer or standalone serialisation module (the standard
-   serde `Serialize`/`Deserialize` model does not support shared
-   references).
+**Research outcome (DEC-014):** serde cannot preserve sharing natively
+(issues #194, #1073 closed). rkyv's `Sharing`/`Pooling` traits are the
+architecturally closest match — built-in `Arc`/`Rc` deduplication. Apache
+Fory also provides automatic reference identity preservation. Cap'n Proto
+and FlatBuffers do not support DAG serialisation.
 
-**Why:** Without this, serialising two `HashMap`s that share 99% of
-their structure writes the full data twice. With it, shared nodes are
-written once. Critical for:
-- Checkpointing application state (undo/redo, save/load)
-- Distributing persistent collections over the network
-- Persisting version history where successive versions share structure
-- Any application where serialised size matters and collections share
-  lineage
+Recommended approach: pool-based (inspired by immer's `persist.hpp`),
+with rkyv for binary format and custom serde wrapper for JSON. If Merkle
+hashes (4.4, done) are used for node IDs, deduplication works even across
+separate serialisation sessions.
 
-**Complexity:** High. Requires exposing internal node identity, building
-a deduplication table during serialisation, and reconstructing the
-sharing graph on deserialisation. The serde model (sequential
-serialize/deserialize) does not naturally support this — needs a custom
-serialisation layer or a wrapper that manages node pools.
+**Complexity:** High.
 
 **Affects:** All five collection types.
 
-**Prerequisites:** 0.5 (architecture docs for understanding node
-structure and pointer layout).
+**Prerequisites:** 0.5, 4.4 ✓ (Merkle hashing done).
 
-**References:** immer `extra/persist.hpp` (pool-based serialisation);
-Cap'n Proto (shared subobject references); FlatBuffers (DAG
-serialisation).
+**References:** rkyv `Sharing`/`Pooling` traits; immer `persist.hpp`;
+Apache Fory; IPLD/DAG-CBOR.
+
+---
+
+### 6.7 Hybrid SIMD-CHAMP prototype — KILLED (DEC-015)
+
+**Status:** PoC gate failed. Full prototype built and benchmarked; CHAMP v2
+with SIMD leaf probing is 2-79% slower for lookups and 5-64% slower for
+mutations compared to the existing HAMT. See DEC-015 for full analysis.
+
+**Root cause:** The HAMT stores SIMD nodes (SmallSimdNode, LargeSimdNode)
+inline within the Entry enum — zero pointer indirection. CHAMP stores Leaf
+nodes behind SharedPointer, adding an extra pointer chase and cache miss at
+every bottom-level access. Two-bitmap indexing is not cheaper than enum
+dispatch in Rust (branch prediction handles the 5-way match efficiently).
+
+**Key lesson:** The JVM-centric CHAMP design (Steindorfer/Vinju OOPSLA 2015)
+does not translate to a Rust performance advantage because: (1) JVM already
+pays pointer indirection for all objects, while Rust can store data inline
+in enums; (2) Rust's enum discriminant match compiles efficiently with
+branch prediction; (3) CHAMP's contiguous-array advantage (from the Java
+version) is lost when using SparseChunk with the same allocation pattern.
+
+**Prototype removed:** `src/nodes/champ_node.rs`, `src/champ_v2.rs`,
+`src/champ.rs`, and `benches/champ.rs` deleted. All benchmark data and
+analysis preserved in DEC-007, DEC-015, and DEC-020. See DEC-020 for
+removal rationale.
+
+---
+
+### 6.8 Arena-backed batch construction — KILLED (DEC-019)
+
+**Status:** PoC gate failed. Three approaches tried (Vec-of-Vecs
+partitioning, pre-allocated partitioning, in-place American Flag sort);
+all failed the ≥15% improvement gate. The from_iter gap vs std is
+inherent to HAMT structure (~0.3 node allocations per element via
+Arc::new). See DEC-019 for full analysis and profiling data.
+
+---
+
+### 6.9 Persistent trie — TO BE EXPLORED
+
+**What:** A purpose-built persistent trie (prefix tree) data structure
+with structural sharing at every prefix node. Keys are sequences of
+segments (`K: Clone + Eq + Hash`); values are stored at interior and/or
+leaf positions.
+
+**Motivation:** Hierarchical namespaces, path-based routing, locale
+resolution, and symbol tables are natural trie workloads. The derived
+approach — recursive `HashMap<K, TrieNode<K, V>>` — works but carries
+HAMT overhead per trie node (SIMD groups, SparseChunk, hash storage)
+that is disproportionate for nodes with 1–3 children, which are the
+common case in most trie workloads. A native trie can right-size each
+node to its actual fanout and support trie-specific operations
+(longest prefix match, prefix collection, path compression) without
+mapping them onto hash-map semantics.
+
+Azoth's Naming Subsystem (`SYS_NS_TRIE_INDEX`) is the primary
+motivating use case: Id-segment paths, shallow depth (2–5 levels),
+mixed fanout (some nodes wide, many narrow), heavy prefix queries.
+The derived `HashMap`-per-level approach is the recommended starting
+point for Azoth; this item explores whether a native trie justifies
+its implementation cost for the general case.
+
+**Open questions (research required before design):**
+
+1. **Node representation.** Flat sorted array for small fanout
+   (≤8 children), HAMT-like bitmap node for medium fanout (9–32),
+   full HashMap delegation for wide fanout (33+)? Or a single
+   adaptive node type that grows? The HAMT's 3-tier hierarchy
+   (SmallSimdNode → LargeSimdNode → HamtNode) is a reference
+   point for fanout-adaptive nodes.
+2. **Path compression.** Patricia/compressed trie merges chains of
+   single-child nodes into one node with a multi-segment key. Worth
+   the complexity? Depends on expected key distribution — high value
+   for file-path-like keys with long shared prefixes, low value for
+   short fixed-depth keys.
+3. **Structural sharing model.** Each trie node behind `SharedPointer`
+   (same as HashMap/OrdMap)? Or arena-backed with CoW at the subtree
+   level? The former integrates with imbl's existing infrastructure;
+   the latter may be more memory-efficient for large tries.
+4. **Trait bounds.** Segments need `Eq` for matching. `Hash` enables
+   HAMT-style child lookup for wide nodes. `Ord` enables sorted
+   iteration and range-prefix queries. Minimum bound: `Eq + Clone`.
+   Recommended: `Eq + Hash + Clone` for performance.
+5. **API surface.** What operations beyond insert/get/remove? Prefix
+   iteration (`iter_prefix`), longest prefix match
+   (`longest_prefix`), subtree extraction (`subtrie`), structural
+   merge. Which of these justify a native type vs being achievable
+   on the derived `HashMap` approach?
+6. **Benchmark target.** What workload demonstrates the native trie
+   outperforming the derived `HashMap<K, TrieNode>` approach by
+   enough to justify the implementation? Memory usage on narrow
+   tries (many 1–3 child nodes) is the likeliest win.
+
+**PoC gate:** Build a standalone prototype with the minimal API
+(insert, get, remove, iter_prefix, longest_prefix) and benchmark
+against the derived HashMap approach at representative workloads:
+narrow tries (file paths), wide tries (DNS labels), mixed tries
+(namespace hierarchies). Go/no-go on memory usage and prefix query
+performance.
+
+**Prior art:**
+- `patricia_tree` crate — persistent Patricia trie for bit-string keys
+- `sequence_trie` crate — generic sequence trie (not persistent)
+- Clojure's `PersistentHashMap` — HAMT, not a trie, but the structural
+  sharing model is the reference
+- Haskell `Data.Trie` — bytestring trie with Patricia compression
+- Scala `TrieMap` — concurrent trie map (different problem, but
+  adaptive node sizing is relevant)
+- Erlang/OTP `gb_trees` — general balanced trees used for prefix
+  matching in routing tables
+
+**Complexity:** High. New data structure module, new node types, full
+test/bench/fuzz/proptest coverage. Reuses SharedPointer infrastructure.
+
+**Affects:** New type. No changes to existing collections.
+
+**Prerequisites:** 0.1 ✓ (CI), 0.3 ✓ (benchmarks for comparison
+target).
 
 ---
 
@@ -1715,10 +2159,12 @@ Phase 3 (mutation + parallel perf)  │                                      │
                                    │                                      │
 Phase 4 (internals)                │                                      │
   4.1 prefix buffer ◄── 2.1                                               │
-  4.2 CHAMP prototype ◄── 0.3, 0.5  ✓ DONE (DEC-007: HAMT retained)                                        │
-  4.3 CHAMP integration ◄── 4.2, 0.1, 0.2 (only if benchmarks justify)   │
-  4.4 Merkle hash caching ◄── 0.3, 0.5  ✓ DONE                            │
-  4.5 SharedPointer hasher PoC ◄── 5.2  ✓ DONE                                    │
+  4.2 CHAMP prototype ◄── 0.3, 0.5  ✓ DONE (DEC-007: HAMT retained)      │
+  4.3 CHAMP integration ◄── 4.2  ✗ KILLED (DEC-007/015: HAMT retained)   │
+  4.4 Merkle hash caching ◄── 0.3, 0.5  ✓ DONE                           │
+  4.5 SharedPointer hasher PoC ◄── 5.2  ✓ DONE                            │
+  4.6 Vector Merkle hash ◄── 0.3 ✓, 0.5 ✓ (benefits from 4.4 ✓ pattern)  │
+  4.7 Pluggable hash width ◄── 0.3 ✓, 0.5 ✓ (stage 2 → v8.0.0)          │
                                    │                                      │
 Phase 5 (breaking — v8.0.0)        │                                      │
   5.1 triomphe default ◄── 0.3, 0.4  ✓ DONE (DEC-010)                     │
@@ -1727,12 +2173,15 @@ Phase 5 (breaking — v8.0.0)        │                                      �
   5.4 no_std ◄── 4.3 (if proceeding)  ✓ DONE (DEC-012)                    │
                                    │                                      │
 Phase 6 (research)                 │                                      │
-  6.1 ART for OrdMap ◄── 0.2, 0.3                                         │
-  6.2 HHAMT inline ◄── 4.3                                                │
-  6.3 ThinArc ◄── 5.1                                                     │
-  6.4 Dupe trait ◄── (none)                                                │
-  6.5 hash consing/interning ◄── 4.4                                      │
+  6.1 ART for OrdMap ◄── 0.2, 0.3  ✗ DEPRIORITISED (DEC-014)             │
+  6.2 HHAMT inline ◄── 4.3  ✗ KILLED (via 6.7 — DEC-015)                  │
+  6.3 ThinArc ◄── 5.1 ✓  ✗ KILLED (DEC-018: pointers already 8 bytes)      │
+  6.4 Dupe trait ◄── (none)  LOW PRIORITY                                  │
+  6.5 hash consing/interning ◄── 4.4 ✓                                    │
   6.6 sharing-preserving serialisation ◄── 0.5                             │
+  6.7 hybrid SIMD-CHAMP ◄── 0.3, 0.5  ✗ KILLED (DEC-015: PoC failed)     │
+  6.8 arena batch construction ◄── (none)  ✗ KILLED (DEC-019: PoC failed)  │
+  6.9 persistent trie ◄── 0.3 ✓ (TO BE EXPLORED)                          │
 ```
 
 ### Parallel tracks
@@ -1740,9 +2189,12 @@ Phase 6 (research)                 │                                      │
 Once Phase 0 is complete, eight independent tracks can proceed in
 parallel:
 
-1. **Vector track:** 2.1 → 4.1
-2. **Hash track:** 4.2 → (4.3 if justified) → 5.3, 5.4
-3. **Mutation track:** 3.1 ✓ → 3.2 ✓, 3.3 ✓ → 5.2 ✓ → 4.5 ✓
+1. **Vector track:** 2.1 → 4.1, 4.6 (Vector Merkle hash — independent
+   of 4.1, needs only Phase 0 ✓).
+2. **Hash track:** 4.2 ✓ → 4.3 ✗ → 6.7 ✗ → 6.8 ✗. HAMT retained.
+   Remaining: 4.7 (pluggable hash width — stage 1 non-breaking, stage
+   2 → v8.0.0).
+3. **Mutation track:** 3.1 ✓ → 3.2 ✓, 3.3 ✓ → 5.2 ✓ → 4.5 ✓ **COMPLETE**
 4. **Parallel track:** 3.4 (HashMap/HashSet par_iter first, then
    OrdMap/OrdSet, then bulk ops and parallel sort). Benefits from but
    does not block on 3.1/3.3.
@@ -1754,10 +2206,14 @@ parallel:
    infrastructure with 2.4 (HashMap diff) — co-development is efficient
    but not required.
 7. **Hash integrity track:** 4.4 ✓ (Merkle hash caching) → 6.5 (hash
-   consing/interning). 4.4 complete — 6.5 can now proceed.
+   consing/interning). 4.4 complete — 6.5 can now proceed. 4.6 (Vector
+   Merkle hash) extends the pattern to RRB trees.
 8. **Serialisation track:** 6.6 (sharing-preserving serialisation).
    Independent but benefits from 4.4 (Merkle hashes enable
    content-addressed node pools).
+
+9. **Trie track:** 6.9 (persistent trie — research and PoC). Independent
+   of all other tracks.
 
 Items 2.2, 2.3, 2.10, 2.11, 1.x, and 6.4 are independent and can be
 done at any time after their prerequisites.
