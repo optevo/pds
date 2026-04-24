@@ -371,16 +371,28 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
     /// [`ptr_eq`][GenericVector::ptr_eq] returns true), the iterator
     /// is empty without traversing any elements.
     ///
-    /// Time: O(n) where n = max(self.len(), other.len())
+    /// When the two vectors share structure (e.g. one was derived from
+    /// the other via [`set`][GenericVector::set]), shared leaf chunks
+    /// are detected by pointer comparison and skipped in O(1) per chunk.
+    /// This makes the effective complexity O(changes × tree_depth) for
+    /// structurally-shared vectors, falling back to O(n) for
+    /// independently-constructed vectors.
+    ///
+    /// Time: O(changes × tree_depth) for shared-structure vectors,
+    /// O(n) worst case where n = max(self.len(), other.len())
     #[must_use]
     pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, A, P>
     where
         A: PartialEq,
     {
         let done = self.ptr_eq(other);
+        let old_len = self.len();
+        let new_len = other.len();
         DiffIter {
-            old: self.iter(),
-            new: other.iter(),
+            old_focus: self.focus(),
+            new_focus: other.focus(),
+            old_len,
+            new_len,
             index: 0,
             done,
         }
@@ -2662,9 +2674,15 @@ pub enum DiffItem<'a, 'b, A> {
 /// An iterator over the positional differences between two vectors.
 ///
 /// Created by [`GenericVector::diff`].
+///
+/// Uses chunk-level pointer comparison to skip shared subtrees in O(1)
+/// per chunk when two vectors share structure (e.g. one was derived from
+/// the other via `set`).
 pub struct DiffIter<'a, 'b, A, P: SharedPointerKind> {
-    old: Iter<'a, A, P>,
-    new: Iter<'b, A, P>,
+    old_focus: Focus<'a, A, P>,
+    new_focus: Focus<'b, A, P>,
+    old_len: usize,
+    new_len: usize,
     index: usize,
     done: bool,
 }
@@ -2678,33 +2696,69 @@ impl<'a, 'b, A: PartialEq, P: SharedPointerKind + 'a + 'b> Iterator
         if self.done {
             return None;
         }
+        let min_len = self.old_len.min(self.new_len);
         loop {
-            match (self.old.next(), self.new.next()) {
-                (Some(old_val), Some(new_val)) => {
+            if self.index >= min_len {
+                // Handle tail: additions or removals from length difference.
+                if self.index < self.new_len {
+                    // SAFETY: Lifetime extension from &mut self to 'b. The Focus
+                    // holds a clone of the vector's tree (Arc-managed). get()
+                    // returns a reference into that tree data, which lives for 'b.
+                    // Each call accesses a distinct index so returned references
+                    // don't alias. Same pattern as Iter::next().
+                    let focus: &'b mut Focus<'b, A, P> =
+                        unsafe { &mut *(&mut self.new_focus as *mut _) };
+                    let val = focus.get(self.index)?;
                     let idx = self.index;
                     self.index += 1;
-                    if old_val != new_val {
-                        return Some(DiffItem::Update {
-                            index: idx,
-                            old: old_val,
-                            new: new_val,
-                        });
-                    }
+                    return Some(DiffItem::Add(idx, val));
                 }
-                (None, Some(new_val)) => {
+                if self.index < self.old_len {
+                    // SAFETY: Same as above but for lifetime 'a.
+                    let focus: &'a mut Focus<'a, A, P> =
+                        unsafe { &mut *(&mut self.old_focus as *mut _) };
+                    let val = focus.get(self.index)?;
                     let idx = self.index;
                     self.index += 1;
-                    return Some(DiffItem::Add(idx, new_val));
+                    return Some(DiffItem::Remove(idx, val));
                 }
-                (Some(old_val), None) => {
-                    let idx = self.index;
-                    self.index += 1;
-                    return Some(DiffItem::Remove(idx, old_val));
-                }
-                (None, None) => {
-                    self.done = true;
-                    return None;
-                }
+                self.done = true;
+                return None;
+            }
+
+            // Get chunks at the current index from both vectors.
+            // SAFETY: Lifetime extension — chunk_at returns slices into
+            // Arc-managed tree data that lives for 'a/'b. The &mut self
+            // borrow on Focus is needed only for internal cache updates,
+            // not because the returned data depends on the mutable borrow.
+            // Same pattern as Iter::next().
+            let old_focus: &'a mut Focus<'a, A, P> =
+                unsafe { &mut *(&mut self.old_focus as *mut _) };
+            let (old_range, old_chunk) = old_focus.chunk_at(self.index);
+
+            let new_focus: &'b mut Focus<'b, A, P> =
+                unsafe { &mut *(&mut self.new_focus as *mut _) };
+            let (new_range, new_chunk) = new_focus.chunk_at(self.index);
+
+            // Pointer-equal chunks share the same Arc-managed leaf data —
+            // the entire chunk is identical, so skip it.
+            if std::ptr::eq(old_chunk, new_chunk) {
+                self.index = old_range.end.min(new_range.end);
+                continue;
+            }
+
+            // Chunks differ — compare the element at the current index.
+            let old_val = &old_chunk[self.index - old_range.start];
+            let new_val = &new_chunk[self.index - new_range.start];
+            let idx = self.index;
+            self.index += 1;
+
+            if old_val != new_val {
+                return Some(DiffItem::Update {
+                    index: idx,
+                    old: old_val,
+                    new: new_val,
+                });
             }
         }
     }
@@ -3209,6 +3263,84 @@ mod test {
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
         assert!(iter.next().is_none());
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn diff_subtree_skipping() {
+        // A vector large enough to span multiple internal chunks.
+        // With branching factor 64, a 10000-element vector has ~157 leaf chunks.
+        // Modifying one element only affects the chunk containing that element;
+        // all other chunks remain pointer-equal and are skipped.
+        let v: Vector<i32> = (0..10_000).collect();
+        let mut v2 = v.clone();
+        v2.set(5000, -1);
+        let diffs: Vec<_> = v.diff(&v2).collect();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(
+            diffs[0],
+            DiffItem::Update {
+                index: 5000,
+                old: &5000,
+                new: &-1
+            }
+        );
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn diff_subtree_skipping_multiple_changes() {
+        // Multiple changes in different chunks — each changed chunk is
+        // detected, all unchanged chunks are skipped.
+        let v: Vector<i32> = (0..10_000).collect();
+        let mut v2 = v.clone();
+        v2.set(100, -1);
+        v2.set(5000, -2);
+        v2.set(9999, -3);
+        let diffs: Vec<_> = v.diff(&v2).collect();
+        assert_eq!(diffs.len(), 3);
+        assert_eq!(
+            diffs[0],
+            DiffItem::Update {
+                index: 100,
+                old: &100,
+                new: &-1
+            }
+        );
+        assert_eq!(
+            diffs[1],
+            DiffItem::Update {
+                index: 5000,
+                old: &5000,
+                new: &-2
+            }
+        );
+        assert_eq!(
+            diffs[2],
+            DiffItem::Update {
+                index: 9999,
+                old: &9999,
+                new: &-3
+            }
+        );
+    }
+
+    #[test]
+    fn diff_subtree_skipping_small_vector() {
+        // Small vectors (inline/single chunk) still work correctly.
+        let v: Vector<i32> = (0..10).collect();
+        let mut v2 = v.clone();
+        v2.set(3, 99);
+        let diffs: Vec<_> = v.diff(&v2).collect();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(
+            diffs[0],
+            DiffItem::Update {
+                index: 3,
+                old: &3,
+                new: &99
+            }
+        );
     }
 
     #[test]

@@ -87,7 +87,7 @@ single v8.0.0 release in Phase 5.
   methods. Added `concat_depth_bounded` and `concat_depth_equal_sized`
   regression tests verifying O(log n) height for repeated concatenation.
 
-- **[2026-04-24] 3.6 (partial): Pointer-aware subtree skipping in diff.**
+- **[2026-04-24] 3.6: Pointer-aware subtree skipping in diff.**
   Rewrote HashMap and HashSet `DiffIter` from iterate-and-lookup to
   simultaneous HAMT tree walk. At each node, `Entry::ptr_eq` checks
   `SharedPointer` identity — shared subtrees are skipped in O(1).
@@ -96,8 +96,13 @@ single v8.0.0 release in Phase 5.
   (detected via sentinel probe). Added `Entry::ptr_eq()` and
   `Entry::collect_values()` to hamt.rs, made `HASH_WIDTH` pub(crate).
   `DiffIter` now implements `ExactSizeIterator`. OrdMap already has
-  `advance_skipping_shared` upstream. Vector subtree skipping deferred
-  (requires RRB node pointer comparison).
+  `advance_skipping_shared` upstream. Vector `DiffIter` rewritten from
+  element-by-element `Iter` to chunk-level `Focus` comparison — at each
+  position, `chunk_at` retrieves the leaf chunk and `std::ptr::eq`
+  compares slice pointers to detect shared Arc-managed leaf data.
+  Pointer-equal chunks are skipped in O(1) per chunk, falling back to
+  element comparison within non-equal chunks. Complexity:
+  O(changes × tree_depth) for structurally-shared vectors, O(n) fallback.
 
 - **[2026-04-24] 3.2: Unsafe code audit.** Audited all unsafe sites across
   4 files. Removed 3 unsafe operations: 2 in hamt.rs (ptr::read/ptr::write →
@@ -276,12 +281,13 @@ Phase 2 — all items complete. Phase 3:
 3.2 complete (unsafe audit — 3 removals, 16 documented with SAFETY comments).
 3.4 partially complete (par_iter, FromParallelIterator, ParallelExtend
 done for all four hash/ord types; par_iter_mut done for HashMap;
-par_sort/par_sort_by done for Vector; parallel bulk ops remaining).
-3.5 complete. 3.6
-partially complete (HashMap and HashSet tree-walk diff done; OrdMap
-already has upstream `advance_skipping_shared`; Vector deferred — needs
-RRB node pointer comparison). Next: 3.4 remaining (parallel bulk ops,
-parallel sort).
+par_sort/par_sort_by done for Vector; parallel bulk ops remaining —
+deferred as it requires tree-level parallelism for meaningful speedup).
+3.5 complete. 3.6 complete (HashMap/HashSet simultaneous HAMT walk,
+OrdMap upstream `advance_skipping_shared`, Vector Focus-based chunk
+pointer comparison). Remaining Phase 3: 3.3 (transient/builder,
+deferred — thin wrapper provides no benefit without owned-node
+internals, depends on 3.1 which is resolved). Next: Phase 4.
 
 ---
 
