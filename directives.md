@@ -363,6 +363,36 @@ tracking. It serves as both a backlog and a sequencing guide. Items are numbered
 by phase (e.g. 0.1, 3.2, 5.4). Dependencies between items are documented in
 the dependency map at the end of the file.
 
+### Proof-of-concept gate
+
+Any speculative or uncertain plan item must pass a low-cost proof of concept
+before committing to full implementation. The PoC answers a specific go/no-go
+question — if the answer is "no", the item is killed or deprioritised without
+wasting effort on the full build.
+
+**When to require a PoC:**
+- The item's value depends on an unverified assumption (e.g. "data structure X
+  is faster than Y", "memory overhead is dominated by Z")
+- The complexity is moderate or higher
+- A failed implementation would produce throwaway code
+
+**PoC types (cheapest first):**
+1. **Measurement** — benchmark or profile the current system to validate the
+   premise. If the bottleneck isn't where you think it is, the optimisation
+   has no target.
+2. **Micro-benchmark** — build the smallest possible standalone version of
+   the proposed change and measure it in isolation.
+3. **Spike** — implement the change in a branch with minimal testing, measure
+   the impact, then decide whether to do it properly.
+
+**PoC rules:**
+- Define the go/no-go question before starting
+- Set a time box (typically 1-2 hours for measurement, half a day for a spike)
+- Record the result in `docs/decisions.md` regardless of outcome — negative
+  results prevent future rework
+- A PoC that passes is not the implementation — it validates the direction,
+  then the real implementation follows with proper tests and documentation
+
 ### Decision log (`docs/decisions.md`)
 
 Record every non-obvious architectural or design choice. The key field is
