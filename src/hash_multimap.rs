@@ -40,6 +40,12 @@ use crate::shared_ptr::DefaultSharedPtr;
 #[cfg(feature = "std")]
 pub type HashMultiMap<K, V> = GenericHashMultiMap<K, V, RandomState, DefaultSharedPtr>;
 
+/// Type alias for [`GenericHashMultiMap`] using [`foldhash::fast::RandomState`] — available
+/// in `no_std` environments when the `foldhash` feature is enabled.
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+pub type HashMultiMap<K, V> =
+    GenericHashMultiMap<K, V, foldhash::fast::RandomState, DefaultSharedPtr>;
+
 /// A persistent multimap backed by [`GenericHashMap`] and [`GenericHashSet`].
 ///
 /// Each key maps to a set of values. Clone is O(1) via structural sharing.
@@ -71,6 +77,21 @@ where
     P: SharedPointerKind,
 {
     /// Create an empty multimap.
+    #[must_use]
+    pub fn new() -> Self {
+        GenericHashMultiMap {
+            map: GenericHashMap::new(),
+            total: 0,
+        }
+    }
+}
+
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+impl<K, V, P> GenericHashMultiMap<K, V, foldhash::fast::RandomState, P>
+where
+    P: SharedPointerKind,
+{
+    /// Create an empty multimap (no_std + foldhash).
     #[must_use]
     pub fn new() -> Self {
         GenericHashMultiMap {
@@ -233,6 +254,16 @@ where
 
 #[cfg(feature = "std")]
 impl<K, V, P> Default for GenericHashMultiMap<K, V, RandomState, P>
+where
+    P: SharedPointerKind,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+impl<K, V, P> Default for GenericHashMultiMap<K, V, foldhash::fast::RandomState, P>
 where
     P: SharedPointerKind,
 {

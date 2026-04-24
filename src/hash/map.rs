@@ -41,7 +41,7 @@ use crate::nodes::hamt::{
     hash_key, Drain as NodeDrain, Entry as NodeEntry, HashBits, HashValue, Iter as NodeIter,
     IterMut as NodeIterMut, Node, HASH_WIDTH,
 };
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "foldhash"))]
 use crate::shared_ptr::DefaultSharedPtr;
 
 /// Construct a hash map from a sequence of key/value pairs.
@@ -90,6 +90,12 @@ macro_rules! hashmap {
 /// [DefaultSharedPtr]: ../shared_ptr/type.DefaultSharedPtr.html
 #[cfg(feature = "std")]
 pub type HashMap<K, V> = GenericHashMap<K, V, RandomState, DefaultSharedPtr>;
+
+/// Type alias for [`GenericHashMap`] using [`foldhash::fast::RandomState`] — available
+/// in `no_std` environments when the `foldhash` feature is enabled.
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+pub type HashMap<K, V> =
+    GenericHashMap<K, V, foldhash::fast::RandomState, DefaultSharedPtr>;
 
 /// An unordered map.
 ///
@@ -163,6 +169,21 @@ where
     #[inline]
     #[must_use]
     pub fn unit(k: K, v: V) -> GenericHashMap<K, V, RandomState, P> {
+        GenericHashMap::new().update(k, v)
+    }
+}
+
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+impl<K, V, P> GenericHashMap<K, V, foldhash::fast::RandomState, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    /// Construct a hash map with a single mapping (no_std + foldhash).
+    #[inline]
+    #[must_use]
+    pub fn unit(k: K, v: V) -> GenericHashMap<K, V, foldhash::fast::RandomState, P> {
         GenericHashMap::new().update(k, v)
     }
 }

@@ -40,7 +40,7 @@ use crate::nodes::hamt::{
     HASH_WIDTH,
 };
 use crate::ordset::GenericOrdSet;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "foldhash"))]
 use crate::shared_ptr::DefaultSharedPtr;
 use crate::GenericVector;
 
@@ -86,6 +86,11 @@ macro_rules! hashset {
 /// [DefaultSharedPtr]: ../shared_ptr/type.DefaultSharedPtr.html
 #[cfg(feature = "std")]
 pub type HashSet<A> = GenericHashSet<A, RandomState, DefaultSharedPtr>;
+
+/// Type alias for [`GenericHashSet`] using [`foldhash::fast::RandomState`] — available
+/// in `no_std` environments when the `foldhash` feature is enabled.
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+pub type HashSet<A> = GenericHashSet<A, foldhash::fast::RandomState, DefaultSharedPtr>;
 
 /// An unordered set.
 ///

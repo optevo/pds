@@ -42,6 +42,12 @@ use crate::shared_ptr::DefaultSharedPtr;
 pub type InsertionOrderMap<K, V> =
     GenericInsertionOrderMap<K, V, RandomState, DefaultSharedPtr>;
 
+/// Type alias for [`GenericInsertionOrderMap`] using [`foldhash::fast::RandomState`] —
+/// available in `no_std` environments when the `foldhash` feature is enabled.
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+pub type InsertionOrderMap<K, V> =
+    GenericInsertionOrderMap<K, V, foldhash::fast::RandomState, DefaultSharedPtr>;
+
 /// A persistent map that iterates in insertion order.
 ///
 /// Backed by a hash map for O(log n) key lookup and an ordered map
@@ -80,6 +86,22 @@ where
     P: SharedPointerKind,
 {
     /// Create an empty insertion-ordered map.
+    #[must_use]
+    pub fn new() -> Self {
+        GenericInsertionOrderMap {
+            index: GenericHashMap::new(),
+            entries: GenericOrdMap::new(),
+            next_idx: 0,
+        }
+    }
+}
+
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+impl<K, V, P> GenericInsertionOrderMap<K, V, foldhash::fast::RandomState, P>
+where
+    P: SharedPointerKind,
+{
+    /// Create an empty insertion-ordered map (no_std + foldhash).
     #[must_use]
     pub fn new() -> Self {
         GenericInsertionOrderMap {
@@ -182,6 +204,16 @@ where
 
 #[cfg(feature = "std")]
 impl<K, V, P> Default for GenericInsertionOrderMap<K, V, RandomState, P>
+where
+    P: SharedPointerKind,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+impl<K, V, P> Default for GenericInsertionOrderMap<K, V, foldhash::fast::RandomState, P>
 where
     P: SharedPointerKind,
 {

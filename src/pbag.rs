@@ -40,6 +40,11 @@ use crate::shared_ptr::DefaultSharedPtr;
 #[cfg(feature = "std")]
 pub type PBag<A> = GenericPBag<A, RandomState, DefaultSharedPtr>;
 
+/// Type alias for [`GenericPBag`] using [`foldhash::fast::RandomState`] — available
+/// in `no_std` environments when the `foldhash` feature is enabled.
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+pub type PBag<A> = GenericPBag<A, foldhash::fast::RandomState, DefaultSharedPtr>;
+
 /// A persistent multiset (bag) backed by [`GenericHashMap`].
 ///
 /// Tracks the count of each distinct element. Clone is O(1) via
@@ -65,6 +70,21 @@ where
     P: SharedPointerKind,
 {
     /// Create an empty bag.
+    #[must_use]
+    pub fn new() -> Self {
+        GenericPBag {
+            map: GenericHashMap::new(),
+            total: 0,
+        }
+    }
+}
+
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+impl<A, P> GenericPBag<A, foldhash::fast::RandomState, P>
+where
+    P: SharedPointerKind,
+{
+    /// Create an empty bag (no_std + foldhash).
     #[must_use]
     pub fn new() -> Self {
         GenericPBag {
@@ -270,6 +290,16 @@ where
 
 #[cfg(feature = "std")]
 impl<A, P> Default for GenericPBag<A, RandomState, P>
+where
+    P: SharedPointerKind,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(all(not(feature = "std"), feature = "foldhash"))]
+impl<A, P> Default for GenericPBag<A, foldhash::fast::RandomState, P>
 where
     P: SharedPointerKind,
 {

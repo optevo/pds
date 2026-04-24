@@ -586,3 +586,48 @@ Feature `std` is on by default.
 - The `champ` module is gated behind `std` (uses `RandomState` internally).
 - SpinMutex is only used by `FocusMut` which needs interior mutability for its
   tree reference; the lock is very short-held so spin is acceptable.
+
+## DEC-013: foldhash as optional no_std hasher — accepted
+
+**Date:** 2026-04-24
+
+**Context:** With no_std support (DEC-012), users must supply their own
+`BuildHasher` because `RandomState` requires `std`. Evaluated foldhash
+as an optional built-in default for no_std environments.
+
+**Decision:** Add foldhash as an optional dependency (`dep:foldhash`,
+default-features = false). When the `foldhash` feature is enabled without
+`std`, provide convenience type aliases (`HashMap`, `HashSet`, `PBag`,
+`HashMultiMap`, `InsertionOrderMap`) using `foldhash::fast::RandomState`.
+When `std` is enabled, `std::collections::hash_map::RandomState` remains
+the default regardless of the `foldhash` feature.
+
+**Evaluation summary:**
+- **Zero runtime dependencies** — critical for a library crate.
+- **no_std: core-only** — does not even require `alloc`. Uses ASLR-derived
+  entropy via atomic fallback, no `getrandom` needed.
+- **Performance:** Top-tier, ranks #1-2 across diverse workloads. 40-byte
+  HashMap overhead (vs ahash's 64).
+- **API:** `foldhash::fast::RandomState` implements `Default + Clone +
+  BuildHasher + Send + Sync` — exact match for imbl's bounds.
+- **MSRV:** 1.60 (imbl is 1.85).
+- **Adoption:** ~37M downloads/month, 179 direct dependents.
+- **Security:** Minimal DoS resistance (ASLR seeds). Acceptable for
+  persistent data structures; security-sensitive users supply their own hasher.
+- **Maintenance:** Single maintainer (Orson Peters), but algorithmically
+  stable and zero-dependency.
+
+**Alternatives considered:**
+- ahash — strong DoS resistance but 3-4 transitive dependencies (cfg-if,
+  zerocopy, once_cell, optionally getrandom). Too heavy for a library crate.
+- rustc-hash / fxhash — no random seeding by default, not DoS-resistant.
+- wyhash — requires manual seeding, no `BuildHasher` + `Default` impl.
+- No built-in hasher — forces all no_std users to bring their own. Workable
+  but poor DX. foldhash's zero-dep nature makes this unnecessary.
+
+**Consequences:**
+- New optional feature `foldhash` (not in `default`).
+- Three-tier type alias resolution: std → RandomState; !std + foldhash →
+  foldhash::fast::RandomState; !std + !foldhash → no alias (use Generic*).
+- The `champ` module could be unblocked for no_std by accepting generic
+  `BuildHasher` (future work).

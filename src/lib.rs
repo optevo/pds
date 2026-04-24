@@ -412,21 +412,21 @@ pub mod pbag;
 pub mod champ;
 
 pub use crate::hash_multimap::GenericHashMultiMap;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::hash_multimap::HashMultiMap;
 pub use crate::hashmap::GenericHashMap;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::hashmap::HashMap;
 pub use crate::insertion_order_map::GenericInsertionOrderMap;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::insertion_order_map::InsertionOrderMap;
 pub use crate::hashset::GenericHashSet;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::hashset::HashSet;
 pub use crate::ordmap::{GenericOrdMap, OrdMap};
 pub use crate::ordset::{GenericOrdSet, OrdSet};
 pub use crate::pbag::GenericPBag;
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::pbag::PBag;
 #[doc(inline)]
 pub use crate::vector::{GenericVector, Vector};
