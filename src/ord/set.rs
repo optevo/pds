@@ -425,6 +425,27 @@ where
         self.len() != other.borrow().len() && self.is_subset(other)
     }
 
+    /// Check whether two sets share no elements.
+    ///
+    /// Uses a simultaneous traversal of both sets in sorted order,
+    /// returning `false` at the first shared element. O(n + m) time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordset::OrdSet;
+    /// let a = ordset!{1, 2, 3};
+    /// let b = ordset!{4, 5, 6};
+    /// let c = ordset!{3, 4, 5};
+    /// assert!(a.disjoint(&b));
+    /// assert!(!a.disjoint(&c));
+    /// ```
+    #[must_use]
+    pub fn disjoint(&self, other: &Self) -> bool {
+        self.map.disjoint(&other.map)
+    }
+
     /// Check invariants
     #[cfg(any(test, fuzzing))]
     #[allow(unreachable_pub)]
@@ -535,6 +556,39 @@ where
         for a in &to_remove {
             self.remove(a);
         }
+    }
+
+    /// Split a set into two sets, where the first contains values
+    /// that satisfy the predicate and the second contains values
+    /// that do not.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordset::OrdSet;
+    /// let set = ordset!{1, 2, 3, 4, 5};
+    /// let (evens, odds) = set.partition(|v| v % 2 == 0);
+    /// assert_eq!(evens, ordset!{2, 4});
+    /// assert_eq!(odds, ordset!{1, 3, 5});
+    /// ```
+    #[must_use]
+    pub fn partition<F>(&self, mut f: F) -> (Self, Self)
+    where
+        F: FnMut(&A) -> bool,
+    {
+        let mut left = Self::new();
+        let mut right = Self::new();
+        for a in self.iter() {
+            if f(a) {
+                left.insert(a.clone());
+            } else {
+                right.insert(a.clone());
+            }
+        }
+        (left, right)
     }
 
     /// Remove the smallest value from a set.
@@ -1392,5 +1446,30 @@ mod test {
         let mut set = ordset![1, 2, 3];
         set.retain(|_| true);
         assert_eq!(set, ordset![1, 2, 3]);
+    }
+
+    #[test]
+    fn partition_basic() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let (evens, odds) = set.partition(|v| v % 2 == 0);
+        assert_eq!(evens, ordset![2, 4]);
+        assert_eq!(odds, ordset![1, 3, 5]);
+    }
+
+    #[test]
+    fn disjoint_basic() {
+        let a = ordset![1, 2, 3];
+        let b = ordset![4, 5, 6];
+        let c = ordset![3, 4, 5];
+        assert!(a.disjoint(&b));
+        assert!(!a.disjoint(&c));
+    }
+
+    #[test]
+    fn disjoint_empty() {
+        let a = ordset![1, 2];
+        let b: OrdSet<i32> = OrdSet::new();
+        assert!(a.disjoint(&b));
+        assert!(b.disjoint(&a));
     }
 }

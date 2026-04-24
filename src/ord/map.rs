@@ -589,6 +589,40 @@ where
             .unwrap_or(0);
         assert_eq!(size, self.size);
     }
+
+    /// Check whether two maps share no keys.
+    ///
+    /// Uses a simultaneous traversal of both maps in key order,
+    /// returning `false` at the first shared key. O(n + m) time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let a = ordmap!{1 => "a", 2 => "b"};
+    /// let b = ordmap!{3 => "c", 4 => "d"};
+    /// let c = ordmap!{2 => "x", 5 => "e"};
+    /// assert!(a.disjoint(&b));
+    /// assert!(!a.disjoint(&c));
+    /// ```
+    #[must_use]
+    pub fn disjoint(&self, other: &Self) -> bool {
+        let mut it1 = self.iter();
+        let mut it2 = other.iter();
+        let mut e1 = it1.next();
+        let mut e2 = it2.next();
+        loop {
+            match (e1, e2) {
+                (Some((k1, _)), Some((k2, _))) => match k1.cmp(k2) {
+                    Ordering::Less => e1 = it1.next(),
+                    Ordering::Greater => e2 = it2.next(),
+                    Ordering::Equal => return false,
+                },
+                _ => return true,
+            }
+        }
+    }
 }
 
 impl<K, V, P> GenericOrdMap<K, V, P>
@@ -967,6 +1001,66 @@ where
         F: FnMut(&K, &V) -> V2,
     {
         self.iter().map(|(k, v)| (k.clone(), f(k, v))).collect()
+    }
+
+    /// Construct a new map with the same keys but values transformed
+    /// by a fallible function. Returns the first error encountered.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => "10", 2 => "20", 3 => "30"};
+    /// let parsed: Result<OrdMap<i32, i32>, _> =
+    ///     map.try_map_values(|_, v| v.parse::<i32>());
+    /// assert_eq!(parsed, Ok(ordmap!{1 => 10, 2 => 20, 3 => 30}));
+    /// ```
+    pub fn try_map_values<V2, E, F>(&self, mut f: F) -> Result<GenericOrdMap<K, V2, P>, E>
+    where
+        V2: Clone,
+        F: FnMut(&K, &V) -> Result<V2, E>,
+    {
+        let mut out = GenericOrdMap::new();
+        for (k, v) in self.iter() {
+            out.insert(k.clone(), f(k, v)?);
+        }
+        Ok(out)
+    }
+
+    /// Split a map into two maps, where the first contains entries
+    /// that satisfy the predicate and the second contains entries
+    /// that do not.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => "one", 2 => "two", 3 => "three", 4 => "four"};
+    /// let (evens, odds) = map.partition(|k, _| k % 2 == 0);
+    /// assert_eq!(evens, ordmap!{2 => "two", 4 => "four"});
+    /// assert_eq!(odds, ordmap!{1 => "one", 3 => "three"});
+    /// ```
+    #[must_use]
+    pub fn partition<F>(&self, mut f: F) -> (Self, Self)
+    where
+        F: FnMut(&K, &V) -> bool,
+    {
+        let mut left = Self::new();
+        let mut right = Self::new();
+        for (k, v) in self.iter() {
+            if f(k, v) {
+                left.insert(k.clone(), v.clone());
+            } else {
+                right.insert(k.clone(), v.clone());
+            }
+        }
+        (left, right)
     }
 
     /// Remove all entries from a map that do not satisfy the given
@@ -3386,5 +3480,52 @@ mod test {
         let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
         let sums = map.map_values_with_key(|k, v| k + v);
         assert_eq!(sums, ordmap! {1 => 11, 2 => 22, 3 => 33});
+    }
+
+    #[test]
+    fn try_map_values_ok() {
+        let map = ordmap! {1 => "10", 2 => "20", 3 => "30"};
+        let parsed: Result<OrdMap<i32, i32>, _> = map.try_map_values(|_, v| v.parse::<i32>());
+        assert_eq!(parsed, Ok(ordmap! {1 => 10, 2 => 20, 3 => 30}));
+    }
+
+    #[test]
+    fn try_map_values_err() {
+        let map = ordmap! {1 => "10", 2 => "bad", 3 => "30"};
+        let result: Result<OrdMap<i32, i32>, _> = map.try_map_values(|_, v| v.parse::<i32>());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn partition_basic() {
+        let map = ordmap! {1 => "one", 2 => "two", 3 => "three", 4 => "four"};
+        let (evens, odds) = map.partition(|k, _| k % 2 == 0);
+        assert_eq!(evens, ordmap! {2 => "two", 4 => "four"});
+        assert_eq!(odds, ordmap! {1 => "one", 3 => "three"});
+    }
+
+    #[test]
+    fn partition_empty() {
+        let map: OrdMap<i32, &str> = OrdMap::new();
+        let (left, right) = map.partition(|_, _| true);
+        assert!(left.is_empty());
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn disjoint_basic() {
+        let a = ordmap! {1 => "a", 2 => "b"};
+        let b = ordmap! {3 => "c", 4 => "d"};
+        let c = ordmap! {2 => "x", 5 => "e"};
+        assert!(a.disjoint(&b));
+        assert!(!a.disjoint(&c));
+    }
+
+    #[test]
+    fn disjoint_empty() {
+        let a = ordmap! {1 => "a"};
+        let b: OrdMap<i32, &str> = OrdMap::new();
+        assert!(a.disjoint(&b));
+        assert!(b.disjoint(&a));
     }
 }

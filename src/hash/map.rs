@@ -816,6 +816,94 @@ where
         self.iter().map(|(k, v)| (k.clone(), f(k, v))).collect()
     }
 
+    /// Construct a new map with the same keys but values transformed
+    /// by a fallible function. Returns the first error encountered.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => "10", 2 => "20", 3 => "30"};
+    /// let parsed: Result<HashMap<i32, i32>, _> =
+    ///     map.try_map_values(|_, v| v.parse::<i32>());
+    /// assert_eq!(parsed, Ok(hashmap!{1 => 10, 2 => 20, 3 => 30}));
+    /// ```
+    pub fn try_map_values<V2, E, F>(&self, mut f: F) -> Result<GenericHashMap<K, V2, S, P>, E>
+    where
+        V2: Clone,
+        S: Default,
+        F: FnMut(&K, &V) -> Result<V2, E>,
+    {
+        let mut out = GenericHashMap::default();
+        for (k, v) in self.iter() {
+            out.insert(k.clone(), f(k, v)?);
+        }
+        Ok(out)
+    }
+
+    /// Split a map into two maps, where the first contains entries
+    /// that satisfy the predicate and the second contains entries
+    /// that do not.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => "one", 2 => "two", 3 => "three", 4 => "four"};
+    /// let (evens, odds) = map.partition(|k, _| k % 2 == 0);
+    /// assert_eq!(evens, hashmap!{2 => "two", 4 => "four"});
+    /// assert_eq!(odds, hashmap!{1 => "one", 3 => "three"});
+    /// ```
+    #[must_use]
+    pub fn partition<F>(&self, mut f: F) -> (Self, Self)
+    where
+        S: Default,
+        F: FnMut(&K, &V) -> bool,
+    {
+        let mut left = Self::new();
+        let mut right = Self::new();
+        for (k, v) in self.iter() {
+            if f(k, v) {
+                left.insert(k.clone(), v.clone());
+            } else {
+                right.insert(k.clone(), v.clone());
+            }
+        }
+        (left, right)
+    }
+
+    /// Check whether two maps share no keys.
+    ///
+    /// Time: O(n) — iterates the smaller map and checks each key
+    /// against the larger map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let a = hashmap!{1 => "a", 2 => "b"};
+    /// let b = hashmap!{3 => "c", 4 => "d"};
+    /// let c = hashmap!{2 => "x", 5 => "e"};
+    /// assert!(a.disjoint(&b));
+    /// assert!(!a.disjoint(&c));
+    /// ```
+    #[must_use]
+    pub fn disjoint(&self, other: &Self) -> bool {
+        let (smaller, larger) = if self.len() <= other.len() {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        smaller.keys().all(|k| !larger.contains_key(k))
+    }
+
     /// Get a mutable iterator over the values of a hash map.
     ///
     /// Please note that the order is consistent between maps using
@@ -3011,5 +3099,44 @@ mod test {
         let map = hashmap! {1 => 10, 2 => 20, 3 => 30};
         let sums = map.map_values_with_key(|k, v| k + v);
         assert_eq!(sums, hashmap! {1 => 11, 2 => 22, 3 => 33});
+    }
+
+    #[test]
+    fn try_map_values_ok() {
+        let map = hashmap! {1 => "10", 2 => "20", 3 => "30"};
+        let parsed: Result<HashMap<i32, i32>, _> = map.try_map_values(|_, v| v.parse::<i32>());
+        assert_eq!(parsed, Ok(hashmap! {1 => 10, 2 => 20, 3 => 30}));
+    }
+
+    #[test]
+    fn try_map_values_err() {
+        let map = hashmap! {1 => "10", 2 => "bad", 3 => "30"};
+        let result: Result<HashMap<i32, i32>, _> = map.try_map_values(|_, v| v.parse::<i32>());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn partition_basic() {
+        let map = hashmap! {1 => "one", 2 => "two", 3 => "three", 4 => "four"};
+        let (evens, odds) = map.partition(|k, _| k % 2 == 0);
+        assert_eq!(evens, hashmap! {2 => "two", 4 => "four"});
+        assert_eq!(odds, hashmap! {1 => "one", 3 => "three"});
+    }
+
+    #[test]
+    fn disjoint_basic() {
+        let a = hashmap! {1 => "a", 2 => "b"};
+        let b = hashmap! {3 => "c", 4 => "d"};
+        let c = hashmap! {2 => "x", 5 => "e"};
+        assert!(a.disjoint(&b));
+        assert!(!a.disjoint(&c));
+    }
+
+    #[test]
+    fn disjoint_empty() {
+        let a = hashmap! {1 => "a"};
+        let b: HashMap<i32, &str> = HashMap::new();
+        assert!(a.disjoint(&b));
+        assert!(b.disjoint(&a));
     }
 }

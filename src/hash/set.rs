@@ -473,6 +473,66 @@ where
         out
     }
 
+    /// Split a set into two sets, where the first contains values
+    /// that satisfy the predicate and the second contains values
+    /// that do not.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashset::HashSet;
+    /// let set = hashset!{1, 2, 3, 4, 5};
+    /// let (evens, odds) = set.partition(|v| v % 2 == 0);
+    /// assert_eq!(evens, hashset!{2, 4});
+    /// assert_eq!(odds, hashset!{1, 3, 5});
+    /// ```
+    #[must_use]
+    pub fn partition<F>(&self, mut f: F) -> (Self, Self)
+    where
+        S: Default,
+        F: FnMut(&A) -> bool,
+    {
+        let mut left = Self::new();
+        let mut right = Self::new();
+        for a in self.iter() {
+            if f(a) {
+                left.insert(a.clone());
+            } else {
+                right.insert(a.clone());
+            }
+        }
+        (left, right)
+    }
+
+    /// Check whether two sets share no elements.
+    ///
+    /// Time: O(n) — iterates the smaller set and checks each element
+    /// against the larger set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashset::HashSet;
+    /// let a = hashset!{1, 2, 3};
+    /// let b = hashset!{4, 5, 6};
+    /// let c = hashset!{3, 4, 5};
+    /// assert!(a.disjoint(&b));
+    /// assert!(!a.disjoint(&c));
+    /// ```
+    #[must_use]
+    pub fn disjoint(&self, other: &Self) -> bool {
+        let (smaller, larger) = if self.len() <= other.len() {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        smaller.iter().all(|a| !larger.contains(a))
+    }
+
     /// Construct a new set from the current set with the given value
     /// added.
     ///
@@ -1374,6 +1434,31 @@ mod test {
         let diff: Vec<_> = base.diff(&modified).collect();
         let patched = base.apply_diff(diff);
         assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn partition_basic() {
+        let set = hashset! {1, 2, 3, 4, 5};
+        let (evens, odds) = set.partition(|v| v % 2 == 0);
+        assert_eq!(evens, hashset! {2, 4});
+        assert_eq!(odds, hashset! {1, 3, 5});
+    }
+
+    #[test]
+    fn disjoint_basic() {
+        let a = hashset! {1, 2, 3};
+        let b = hashset! {4, 5, 6};
+        let c = hashset! {3, 4, 5};
+        assert!(a.disjoint(&b));
+        assert!(!a.disjoint(&c));
+    }
+
+    #[test]
+    fn disjoint_empty() {
+        let a = hashset! {1, 2};
+        let b: HashSet<i32> = HashSet::new();
+        assert!(a.disjoint(&b));
+        assert!(b.disjoint(&a));
     }
 
     proptest! {
