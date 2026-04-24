@@ -64,6 +64,14 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] Rename crate from imbl to pds.** Version reset to 1.0.0.
+  All internal references updated. imbl-sized-chunks dependency unchanged.
+
+- **[2026-04-25] IntoIterator for PBag, HashMultiMap, InsertionOrderMap.**
+  Added owned and borrowed IntoIterator with named ConsumingIter types.
+  PBag yields (element, count), HashMultiMap yields flattened (key, value),
+  InsertionOrderMap yields (key, value) in insertion order.
+
 - **[2026-04-25] Merkle negative check for HashSet PartialEq.** HashSet
   now short-circuits equality to false when root Merkle hashes differ
   (HashMap already had this). Test deduplication: removed 3 redundant
