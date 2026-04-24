@@ -1,8 +1,6 @@
 # imbl
 
-[![crates.io](https://img.shields.io/crates/v/imbl)](https://crates.io/crates/imbl)
 ![tests](https://github.com/optevo/imbl/actions/workflows/ci.yml/badge.svg)
-[![docs.rs](https://docs.rs/imbl/badge.svg)](https://docs.rs/imbl/)
 
 Blazing fast immutable collection datatypes for Rust.
 
@@ -29,7 +27,7 @@ original.
 
 ## Documentation
 
-- [API docs (docs.rs)](https://docs.rs/imbl/)
+- API docs — build locally with `cargo doc --open --all-features`
 - [Architecture](docs/architecture.md) — internal data structure design
 - [Decision log](docs/decisions.md) — architectural choices and rationale
 - [Glossary](docs/glossary.md) — project terminology
@@ -84,4 +82,4 @@ Please note that this project is released with a [Contributor Code of
 Conduct][coc]. By participating in this project you agree to abide by its
 terms.
 
-[coc]: https://github.com/jneem/imbl/blob/master/CODE_OF_CONDUCT.md
+[coc]: https://github.com/optevo/imbl/blob/main/CODE_OF_CONDUCT.md
