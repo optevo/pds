@@ -1243,3 +1243,24 @@ affect a broader surface than `V: Hash` does. However, all standard
 hashers implement `Clone`, so the practical burden is low.
 
 **Decision:** Deferred — awaiting user input.
+
+---
+
+## DEC-025: Remove deprecated bincode feature {#sec:dec-025}
+
+**Date:** 2026-04-25
+**Status:** Pending — needs user decision
+
+**Context:**
+The `bincode` feature was deprecated in imbl with a message "will be
+removed in v8.0.0". Now that the crate is renamed to pds v1.0.0,
+there are no downstream users. The `bincode` crate itself is unmaintained
+(RUSTSEC-2025-0141). Users should use serde for serialisation instead.
+
+**Options:**
+1. **Remove now** — clean break at v1.0.0, removes security advisory
+2. **Keep deprecated** — update the deprecation message to reference a
+   future pds version instead of imbl v8.0.0
+
+**Recommendation:** Remove. This is v1.0.0 of a new crate with zero
+downstream users. No migration burden.
