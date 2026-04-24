@@ -120,7 +120,7 @@ pub type Vector<A> = GenericVector<A, DefaultSharedPtr>;
 
 /// A persistent vector.
 ///
-/// This is a sequence of elements in insertion order - if you need a list of
+/// This is a sequence of elements in insertion order — if you need a list of
 /// things, any kind of list of things, this is what you're looking for.
 ///
 /// It's implemented as an [RRB vector][rrbpaper] with [smart head/tail
@@ -130,8 +130,48 @@ pub type Vector<A> = GenericVector<A, DefaultSharedPtr>;
 /// operations will be blindingly fast, nearly on par with the native
 /// [`VecDeque`][VecDeque], and other operations will have decent, if not high,
 /// performance, but they all have more or less the same O(log n) complexity, so
-/// you don't need to keep their performance characteristics in mind -
+/// you don't need to keep their performance characteristics in mind —
 /// everything, even splitting and merging, is safe to use and never too slow.
+///
+/// ## Complexity vs Standard Library
+///
+/// | Operation | `Vector` | `Vec` | `VecDeque` |
+/// |---|---|---|---|
+/// | `clone` | **O(1)** | O(n) | O(n) |
+/// | `eq` (Merkle, same lineage) | **O(1)**† | O(n) | O(n) |
+/// | `eq` (fallback) | O(n) | O(n) | O(n) |
+/// | `push_front` | **O(1)\*** | O(n) | O(1)\* |
+/// | `push_back` | O(1)\* | O(1)\* | O(1)\* |
+/// | `pop_front` | **O(1)\*** | O(n) | O(1)\* |
+/// | `pop_back` | O(1)\* | O(1)\* | O(1)\* |
+/// | `get` / `index` | O(log n) | **O(1)** | **O(1)** |
+/// | `set` / `index_mut` | O(log n) | **O(1)** | **O(1)** |
+/// | `insert` (middle) | **O(log n)** | O(n) | O(n) |
+/// | `remove` (middle) | **O(log n)** | O(n) | O(n) |
+/// | `split_at` / `split_off` | **O(log n)** | O(n) | O(n) |
+/// | `append` (concatenation) | **O(log n)** | O(n) | O(n) |
+/// | `sort` | O(n log n) | O(n log n) | O(n log n) |
+/// | `from_iter` | O(n) | O(n) | O(n) |
+///
+/// **Bold** = asymptotically better than the std alternative.
+/// \* = amortised. † = requires [`recompute_merkle`][Self::recompute_merkle]
+/// (costs O(k log n) where k = modified nodes since last computation).
+///
+/// The key advantage is that `clone`, `split`, and `append` are dramatically
+/// cheaper due to structural sharing. Two vectors that are clones of each
+/// other (or share a common ancestor) share their tree nodes in memory —
+/// only modified paths are copied.
+///
+/// ## Merkle Hashing
+///
+/// Each internal RRB node maintains a lazy Merkle hash. When you call
+/// [`recompute_merkle`][Self::recompute_merkle], only modified subtrees are
+/// re-hashed — cached subtrees return instantly. This gives O(k log n) cost
+/// where k is the number of nodes modified since the last computation.
+///
+/// Once both vectors have valid Merkle hashes, equality comparison is O(1):
+/// matching hash + matching length = equal. This is position-sensitive —
+/// `[a, b]` and `[b, a]` produce different hashes.
 ///
 /// ## Performance Notes
 ///
@@ -948,7 +988,10 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
 
     /// Push a value to the front of a vector.
     ///
-    /// Time: O(1)*
+    /// Time: O(1)* amortised
+    ///
+    /// Compare: [`Vec`] has no `push_front`; inserting at index 0 is O(n).
+    /// `VecDeque::push_front` is O(1)* amortised.
     ///
     /// # Examples
     ///
@@ -1273,6 +1316,9 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     ///
     /// Time: O(log n)
     ///
+    /// Compare: [`Vec::append`] is O(n). The RRB tree structure allows
+    /// concatenation by linking subtrees rather than copying elements.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1451,6 +1497,9 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// right hand side.
     ///
     /// Time: O(log n)
+    ///
+    /// Compare: [`Vec::split_off`] is O(n). The RRB tree structure
+    /// allows splitting by rearranging subtree pointers.
     ///
     /// # Examples
     ///
@@ -1661,6 +1710,9 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// the right hand in order.
     ///
     /// Time: O(log n)
+    ///
+    /// Compare: [`Vec::insert`] is O(n) because it must shift all
+    /// subsequent elements. Here, only O(log n) tree nodes are affected.
     pub fn insert(&mut self, index: usize, value: A) {
         self.merkle_valid = false;
         if index == 0 {
@@ -2115,6 +2167,10 @@ impl<A: Clone, P: SharedPointerKind> Clone for GenericVector<A, P> {
     /// Clone a vector.
     ///
     /// Time: O(1), or O(n) with a very small, bounded *n* for an inline vector.
+    ///
+    /// Compare: `Vec::clone` and `VecDeque::clone` are always O(n).
+    /// Structural sharing means both the original and the clone share
+    /// the same tree nodes in memory until one is modified.
     fn clone(&self) -> Self {
         Self {
             vector: match &self.vector {
@@ -2131,8 +2187,8 @@ impl<A: Clone, P: SharedPointerKind> Clone for GenericVector<A, P> {
 impl<A, P: SharedPointerKind> GenericVector<A, P> {
     /// Whether the cached Merkle hash is current.
     ///
-    /// Returns `false` after any mutation. Call [`recompute_merkle`] to
-    /// restore validity.
+    /// Returns `false` after any mutation. Call
+    /// [`recompute_merkle`][GenericVector::recompute_merkle] to restore validity.
     #[inline]
     #[must_use]
     pub fn merkle_valid(&self) -> bool {
@@ -2181,10 +2237,11 @@ impl<A: Clone + Hash, P: SharedPointerKind> GenericVector<A, P> {
 
     /// Get the Merkle hash, recomputing if necessary.
     ///
-    /// Equivalent to calling [`recompute_merkle`] then reading the
-    /// cached value, but expressed as a single call.
+    /// Equivalent to calling [`recompute_merkle`][Self::recompute_merkle]
+    /// then reading the cached value, but expressed as a single call.
     ///
-    /// Time: O(k log n) amortised — see [`recompute_merkle`].
+    /// Time: O(k log n) amortised — see
+    /// [`recompute_merkle`][Self::recompute_merkle].
     #[inline]
     pub fn merkle_hash(&mut self) -> u64 {
         self.recompute_merkle();
@@ -2207,6 +2264,14 @@ impl<A: Debug, P: SharedPointerKind> Debug for GenericVector<A, P> {
 }
 
 impl<A: PartialEq, P: SharedPointerKind> PartialEq for GenericVector<A, P> {
+    /// Compare two vectors for equality.
+    ///
+    /// Time: **O(1)** when both vectors have valid Merkle hashes and
+    /// they match (positive equality via [`recompute_merkle`][Self::recompute_merkle]).
+    /// O(1) when they are pointer-equal (clones that haven't diverged).
+    /// O(n) otherwise (element-by-element comparison).
+    ///
+    /// Compare: `Vec` and `VecDeque` equality is always O(n).
     fn eq(&self, other: &Self) -> bool {
         if self.ptr_eq(other) {
             return true;

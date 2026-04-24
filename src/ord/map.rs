@@ -78,15 +78,35 @@ pub type OrdMap<K, V> = GenericOrdMap<K, V, DefaultSharedPtr>;
 
 /// An ordered map.
 ///
-/// An immutable ordered map implemented as a B+tree [1].
+/// An immutable ordered map implemented as a [B+ tree][1].
 ///
-/// Most operations on this type of map are O(log n). A
-/// [`HashMap`][hashmap::HashMap] is usually a better choice for
-/// performance, but the `OrdMap` has the advantage of only requiring
-/// an [`Ord`][std::cmp::Ord] constraint on the key, and of being
-/// ordered, so that keys always come out from lowest to highest,
-/// where a [`HashMap`][hashmap::HashMap] has no guaranteed ordering.
+/// ## Complexity vs Standard Library
 ///
+/// | Operation | `OrdMap` | [`BTreeMap`] |
+/// |---|---|---|
+/// | `clone` | **O(1)** | O(n) |
+/// | `eq` | O(n) | O(n) |
+/// | `get` / `contains_key` | O(log n) | O(log n) |
+/// | `insert` | O(log n) | O(log n) |
+/// | `remove` | O(log n) | O(log n) |
+/// | `split_at` | **O(log n)** | O(n) |
+/// | `union` / `intersection` | O(n + m) | O(n + m) |
+/// | `range` | O(log n + k) | O(log n + k) |
+/// | `from_iter` | O(n log n) | O(n log n) |
+///
+/// **Bold** = asymptotically better than the std alternative.
+///
+/// Lookup and insert have the same O(log n) complexity as `BTreeMap`,
+/// but the key advantage is `clone` in O(1) via structural sharing.
+/// Two maps from a common ancestor share all unmodified nodes —
+/// only modified paths are copied on write. `split_at` is also
+/// dramatically cheaper (O(log n) vs O(n)).
+///
+/// [`HashMap`][hashmap::HashMap] is usually a better choice when
+/// ordering isn't required, but `OrdMap` only needs
+/// [`Ord`][std::cmp::Ord] (not `Hash + Eq`) and keeps keys sorted.
+///
+/// [`BTreeMap`]: https://doc.rust-lang.org/std/collections/struct.BTreeMap.html
 /// [1]: https://en.wikipedia.org/wiki/B%2B_tree
 /// [hashmap::HashMap]: ../hashmap/type.HashMap.html
 /// [std::cmp::Ord]: https://doc.rust-lang.org/std/cmp/trait.Ord.html

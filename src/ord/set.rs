@@ -68,15 +68,34 @@ pub type OrdSet<A> = GenericOrdSet<A, DefaultSharedPtr>;
 
 /// An ordered set.
 ///
-/// An immutable ordered set implemented as a B+tree [1].
+/// An immutable ordered set implemented as a [B+ tree][1].
 ///
-/// Most operations on this type of set are O(log n). A
-/// [`GenericHashSet`] is usually a better choice for
-/// performance, but the `OrdSet` has the advantage of only requiring
-/// an [`Ord`][std::cmp::Ord] constraint on its values, and of being
-/// ordered, so values always come out from lowest to highest, where a
-/// [`GenericHashSet`] has no guaranteed ordering.
+/// ## Complexity vs Standard Library
 ///
+/// | Operation | `OrdSet` | [`BTreeSet`] |
+/// |---|---|---|
+/// | `clone` | **O(1)** | O(n) |
+/// | `eq` | O(n) | O(n) |
+/// | `contains` | O(log n) | O(log n) |
+/// | `insert` | O(log n) | O(log n) |
+/// | `remove` | O(log n) | O(log n) |
+/// | `split_at` | **O(log n)** | O(n) |
+/// | `union` / `intersection` | O(n + m) | O(n + m) |
+/// | `range` | O(log n + k) | O(log n + k) |
+/// | `from_iter` | O(n log n) | O(n log n) |
+///
+/// **Bold** = asymptotically better than the std alternative.
+///
+/// The key advantage is `clone` in O(1) via structural sharing. Two
+/// sets from a common ancestor share all unmodified nodes in memory.
+/// `split_at` is also O(log n) vs O(n).
+///
+/// [`HashSet`][hashset::HashSet] is usually a better choice when
+/// ordering isn't required, but `OrdSet` only needs
+/// [`Ord`][std::cmp::Ord] (not `Hash + Eq`) and keeps values sorted.
+///
+/// [`BTreeSet`]: https://doc.rust-lang.org/std/collections/struct.BTreeSet.html
+/// [hashset::HashSet]: ../hashset/type.HashSet.html
 /// [1]: https://en.wikipedia.org/wiki/B%2B_tree
 pub struct GenericOrdSet<A, P: SharedPointerKind> {
     pub(crate) map: GenericOrdMap<A, (), P>,

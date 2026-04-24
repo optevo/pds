@@ -100,25 +100,56 @@ pub type HashMap<K, V> =
 
 /// An unordered map backed by a [hash array mapped trie][1].
 ///
-/// Most operations are O(log<sub>32</sub> n), which is effectively O(1)
-/// for practical collection sizes. Clone is O(1) via structural sharing.
+/// ## Complexity vs Standard Library
 ///
-/// **Equality is effectively O(1)** for maps that share a common ancestor
-/// (the common case with persistent data structures). Each node maintains
-/// a key-only Merkle hash for O(1) inequality detection, and the map
-/// maintains a key+value Merkle hash (`kv_merkle`) for O(1) positive
-/// equality. The combined false-positive rate is ~2⁻⁶⁴, below DRAM
-/// bit-flip rates.
+/// | Operation | `HashMap` | [`std::HashMap`] |
+/// |---|---|---|
+/// | `clone` | **O(1)** | O(n) |
+/// | `eq` (Merkle, same lineage) | **O(1)**† | O(n) |
+/// | `eq` (different lineage) | O(n) | O(n) |
+/// | `get` / `contains_key` | O(log₃₂ n) ≈ O(1) | O(1) |
+/// | `insert` | O(log₃₂ n) ≈ O(1) | O(1)\* |
+/// | `remove` | O(log₃₂ n) ≈ O(1) | O(1) |
+/// | `union` / `intersection` | O(n + m) | O(n + m) |
+/// | `from_iter` | O(n log₃₂ n) ≈ O(n) | O(n) |
 ///
-/// The kv_merkle is maintained by [`insert`][Self::insert] and
-/// [`remove`][Self::remove] (which require `V: Hash`). In-place
-/// mutations (`get_mut`, `index_mut`, entry API) invalidate it,
-/// falling back to O(n) comparison. Use [`recompute_kv_merkle`]
-/// [Self::recompute_kv_merkle] to re-seal after invalidation.
+/// **Bold** = asymptotically better than the std alternative.
+/// \* = amortised. † = requires both maps to share a hasher instance
+/// (common ancestor via `clone`, which is the normal persistent-data
+/// workflow). Invalidated by in-place mutations; call
+/// [`recompute_kv_merkle`][Self::recompute_kv_merkle] to restore.
+///
+/// The O(log₃₂ n) operations are *effectively* O(1) for practical sizes:
+/// log₃₂(1 billion) < 7, so the depth never exceeds single digits.
+///
+/// The key advantage over `std::HashMap` is `clone` in O(1) via
+/// structural sharing. Two maps that share a common ancestor share
+/// all unmodified subtries in memory — only the modified path is copied
+/// on write. This also makes `union` faster in practice when most
+/// entries are shared (Merkle hashes allow skipping identical subtries).
+///
+/// ## Merkle Hashing
+///
+/// Two levels of Merkle hash are maintained:
+///
+/// 1. **Key Merkle** (per HAMT node): commutative hash of all keys in
+///    the subtrie. Maintained automatically. Used for O(1) inequality
+///    detection — different key Merkle → maps are definitely not equal.
+///
+/// 2. **KV Merkle** (per map): commutative hash covering both keys and
+///    values. Maintained incrementally by [`insert`][Self::insert] and
+///    [`remove`][Self::remove] (requires `V: Hash`). In-place mutations
+///    (`get_mut`, `index_mut`, entry API) invalidate it — call
+///    [`recompute_kv_merkle`][Self::recompute_kv_merkle] to re-seal.
+///
+/// When both maps have valid KV Merkle and the same hasher instance:
+/// matching hash + matching size = equal (O(1)). The false-positive
+/// rate is ~2⁻⁶⁴, below DRAM bit-flip rates.
 ///
 /// Keys must implement [`Hash`][std::hash::Hash] and [`Eq`][std::cmp::Eq].
 /// Values must implement [`Hash`][std::hash::Hash] for mutation methods.
 ///
+/// [`std::HashMap`]: https://doc.rust-lang.org/std/collections/struct.HashMap.html
 /// [1]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
 /// [std::cmp::Eq]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
 /// [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html

@@ -220,9 +220,9 @@
 //! performance characteristics: it's pretty good at everything, even
 //! if there's always another kind of list that's better at something.
 //!
-//! | Type | Algorithm | Constraints | Order | Push | Pop | Split | Append | Lookup |
-//! | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-//! | [`Vector<A>`] | [RRB tree][rrb-tree] | [`Clone`] | insertion | O(1)\* | O(1)\* | O(log n) | O(log n) | O(log n) |
+//! | Type | Algorithm | Constraints | Order | Clone | Eq | Push | Pop | Split | Append | Lookup |
+//! | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+//! | [`Vector<A>`] | [RRB tree][rrb-tree] | [`Clone`] | insertion | O(1) | O(1)† | O(1)\* | O(1)\* | O(log n) | O(log n) | O(log n) |
 //!
 //! ### Maps
 //!
@@ -232,10 +232,10 @@
 //! once inside a map, and setting a key to a different value will
 //! overwrite the previous value.
 //!
-//! | Type | Algorithm | Key Constraints | Order | Insert | Remove | Lookup |
-//! | --- | --- | --- | --- | --- | --- | --- |
-//! | [`HashMap<K, V>`] | [HAMT][hamt] | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] | undefined | O(log n) | O(log n) | O(log n) |
-//! | [`OrdMap<K, V>`] | [B+tree][b+tree] | [`Clone`] + [`Ord`] | sorted | O(log n) | O(log n) | O(log n) |
+//! | Type | Algorithm | Key Constraints | Order | Clone | Eq | Insert | Remove | Lookup |
+//! | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+//! | [`HashMap<K, V>`] | [HAMT][hamt] | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] | undefined | O(1) | O(1)† | O(log n) | O(log n) | O(log n) |
+//! | [`OrdMap<K, V>`] | [B+tree][b+tree] | [`Clone`] + [`Ord`] | sorted | O(1) | O(n) | O(log n) | O(log n) | O(log n) |
 //!
 //! ### Sets
 //!
@@ -243,10 +243,15 @@
 //! defined order. Their crucial property is that any given value can
 //! only exist once in a given set.
 //!
-//! | Type | Algorithm | Constraints | Order | Insert | Remove | Lookup |
-//! | --- | --- | --- | --- | --- | --- | --- |
-//! | [`HashSet<A>`] | [HAMT][hamt] | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] | undefined | O(log n) | O(log n) | O(log n) |
-//! | [`OrdSet<A>`] | [B+tree][b+tree] | [`Clone`] + [`Ord`] | sorted | O(log n) | O(log n) | O(log n) |
+//! | Type | Algorithm | Constraints | Order | Clone | Eq | Insert | Remove | Lookup |
+//! | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+//! | [`HashSet<A>`] | [HAMT][hamt] | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] | undefined | O(1) | O(1)† | O(log n) | O(log n) | O(log n) |
+//! | [`OrdSet<A>`] | [B+tree][b+tree] | [`Clone`] + [`Ord`] | sorted | O(1) | O(n) | O(log n) | O(log n) | O(log n) |
+//!
+//! † Merkle-accelerated equality: O(1) when both collections have valid
+//! Merkle hashes (common after clone-and-modify workflows). Falls back
+//! to O(n) element-by-element comparison otherwise. For `HashMap`, requires
+//! both maps to share a hasher instance (common ancestor via `clone`).
 //!
 //! ### Other Collections
 //!

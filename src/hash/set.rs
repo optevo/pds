@@ -95,21 +95,44 @@ pub type HashSet<A> = GenericHashSet<A, foldhash::fast::RandomState, DefaultShar
 
 /// An unordered set backed by a [hash array mapped trie][1].
 ///
-/// Most operations are O(log<sub>32</sub> n), which is effectively O(1)
-/// for practical collection sizes. Clone is O(1) via structural sharing.
+/// ## Complexity vs Standard Library
 ///
-/// **Equality is O(1)** for sets that share a common ancestor (the common
-/// case with persistent data structures). Internally, each node maintains
-/// a Merkle hash — a commutative fingerprint of all elements. Sets with
-/// the same hasher, same size, and matching Merkle hash are treated as
-/// equal without element-by-element comparison. The false positive rate
-/// (~2<sup>−64</sup>) is below hardware error rates.
+/// | Operation | `HashSet` | [`std::HashSet`] |
+/// |---|---|---|
+/// | `clone` | **O(1)** | O(n) |
+/// | `eq` (Merkle, same lineage) | **O(1)**† | O(n) |
+/// | `eq` (different lineage) | O(n) | O(n) |
+/// | `contains` / `get` | O(log₃₂ n) ≈ O(1) | O(1) |
+/// | `insert` | O(log₃₂ n) ≈ O(1) | O(1)\* |
+/// | `remove` | O(log₃₂ n) ≈ O(1) | O(1) |
+/// | `union` / `intersection` | O(n + m) | O(n + m) |
+/// | `is_subset` | O(n log₃₂ m) | O(n) |
+/// | `from_iter` | O(n log₃₂ n) ≈ O(n) | O(n) |
+///
+/// **Bold** = asymptotically better than the std alternative.
+/// \* = amortised. † = requires both sets to share a hasher instance
+/// (common ancestor via `clone`).
+///
+/// The O(log₃₂ n) operations are *effectively* O(1) for practical sizes:
+/// log₃₂(1 billion) < 7.
+///
+/// The key advantage is `clone` in O(1) via structural sharing. Two sets
+/// from a common ancestor share all unmodified subtries in memory.
+///
+/// ## Merkle Hashing
+///
+/// Each HAMT node maintains a commutative Merkle hash — a fingerprint of
+/// all elements in the subtrie. Sets with the same hasher, same size, and
+/// matching Merkle hash are treated as equal without element-by-element
+/// comparison (O(1)). The false-positive rate (~2⁻⁶⁴) is below DRAM
+/// bit-flip rates.
 ///
 /// For sets with independent hashers (no shared ancestor), equality falls
 /// back to O(n) element-by-element comparison.
 ///
 /// Values must implement [`Hash`][std::hash::Hash] and [`Eq`][std::cmp::Eq].
 ///
+/// [`std::HashSet`]: https://doc.rust-lang.org/std/collections/struct.HashSet.html
 /// [1]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
 /// [std::cmp::Eq]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
 /// [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html
