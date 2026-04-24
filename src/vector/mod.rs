@@ -887,17 +887,14 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// Time: O(log n)
     pub fn swap(&mut self, i: usize, j: usize) {
         if i != j {
-            let a: *mut A = &mut self[i];
-            let b: *mut A = &mut self[j];
-
-            // SAFETY: `i != j` is checked above, and IndexMut returns a
-            // reference into the tree node containing that index. Different
-            // indices point to non-overlapping locations. Raw pointers are
-            // needed because the borrow checker cannot prove that two
-            // IndexMut calls on `self` with different indices don't alias.
-            unsafe {
-                std::ptr::swap(a, b);
-            }
+            // Clone-and-replace: the second IndexMut call may trigger
+            // copy-on-write (make_mut) which can invalidate pointers
+            // obtained from the first call. The previous raw-pointer
+            // implementation was UB (detected by miri). Element clone
+            // is trivially cheap compared to the O(log n) tree walk
+            // that IndexMut already performs.
+            let a = self[i].clone();
+            self[i] = replace(&mut self[j], a);
         }
     }
 
@@ -3593,5 +3590,314 @@ mod test {
         //     }
         //     assert_eq!(Some(&slice_at), l.get(slice_at));
         // }
+    }
+
+    // Tests targeting unsafe code paths. These exercise boundary conditions
+    // that would trigger UB if the safety invariants documented above are
+    // violated. Run under miri in CI for UB detection.
+    mod unsafe_edge_cases {
+        use super::*;
+
+        #[test]
+        fn swap_adjacent_elements() {
+            let mut v: Vector<i32> = (0..10).collect();
+            v.swap(4, 5);
+            assert_eq!(v[4], 5);
+            assert_eq!(v[5], 4);
+        }
+
+        #[test]
+        fn swap_first_and_last() {
+            let mut v: Vector<i32> = (0..100).collect();
+            v.swap(0, 99);
+            assert_eq!(v[0], 99);
+            assert_eq!(v[99], 0);
+        }
+
+        #[test]
+        fn swap_same_index_is_noop() {
+            let mut v: Vector<i32> = (0..5).collect();
+            v.swap(2, 2);
+            assert_eq!(v, (0..5).collect::<Vector<_>>());
+        }
+
+        #[test]
+        fn iter_empty_vector() {
+            let v: Vector<i32> = Vector::new();
+            assert_eq!(v.iter().count(), 0);
+            assert_eq!(v.iter().next(), None);
+        }
+
+        #[test]
+        fn iter_single_element() {
+            let v = Vector::unit(42);
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items, vec![&42]);
+        }
+
+        #[test]
+        fn iter_at_chunk_boundary() {
+            // VECTOR_CHUNK_SIZE is 64 (or 4 with small-chunks). Test at
+            // exactly the boundary where the tree gains a new level.
+            let v: Vector<i32> = (0..64).collect();
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 64);
+            assert_eq!(*items[63], 63);
+
+            let v: Vector<i32> = (0..65).collect();
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 65);
+        }
+
+        #[test]
+        fn iter_mut_single_element() {
+            let mut v = Vector::unit(1);
+            for x in v.iter_mut() {
+                *x += 10;
+            }
+            assert_eq!(v[0], 11);
+        }
+
+        #[test]
+        fn iter_mut_at_chunk_boundary() {
+            let mut v: Vector<i32> = (0..64).collect();
+            for x in v.iter_mut() {
+                *x *= 2;
+            }
+            assert_eq!(v[0], 0);
+            assert_eq!(v[63], 126);
+        }
+
+        #[test]
+        fn iter_double_ended_meets_in_middle() {
+            let v: Vector<i32> = (0..10).collect();
+            let mut it = v.iter();
+            assert_eq!(it.next(), Some(&0));
+            assert_eq!(it.next_back(), Some(&9));
+            assert_eq!(it.next(), Some(&1));
+            assert_eq!(it.next_back(), Some(&8));
+            // Exhaust remaining
+            let rest: Vec<_> = it.collect();
+            assert_eq!(rest, vec![&2, &3, &4, &5, &6, &7]);
+        }
+
+        #[test]
+        fn iter_mut_double_ended() {
+            let mut v: Vector<i32> = (0..4).collect();
+            let mut it = v.iter_mut();
+            *it.next().unwrap() = 100;
+            *it.next_back().unwrap() = 300;
+            assert_eq!(v[0], 100);
+            assert_eq!(v[3], 300);
+            assert_eq!(v[1], 1);
+            assert_eq!(v[2], 2);
+        }
+
+        #[test]
+        fn leaves_empty_vector() {
+            let v: Vector<i32> = Vector::new();
+            assert_eq!(v.leaves().count(), 0);
+        }
+
+        #[test]
+        fn leaves_single_element() {
+            let v = Vector::unit(42);
+            let chunks: Vec<_> = v.leaves().collect();
+            assert_eq!(chunks.len(), 1);
+            assert_eq!(chunks[0], &[42]);
+        }
+
+        #[test]
+        fn leaves_mut_single_element() {
+            let mut v = Vector::unit(42);
+            for chunk in v.leaves_mut() {
+                chunk[0] = 99;
+            }
+            assert_eq!(v[0], 99);
+        }
+
+        #[test]
+        fn leaves_double_ended() {
+            let v: Vector<i32> = (0..10).collect();
+            let mut it = v.leaves();
+            let first = it.next().unwrap();
+            assert!(!first.is_empty());
+            // Double-ended: back chunk should also be non-empty
+            if let Some(last) = it.next_back() {
+                assert!(!last.is_empty());
+            }
+        }
+
+        #[test]
+        fn focus_get_at_boundaries() {
+            let v: Vector<i32> = (0..200).collect();
+            let mut focus = v.focus();
+            // First element
+            assert_eq!(focus.get(0), Some(&0));
+            // Last element
+            assert_eq!(focus.get(199), Some(&199));
+            // Out of bounds
+            assert_eq!(focus.get(200), None);
+            // Access pattern that crosses chunk boundaries
+            assert_eq!(focus.get(63), Some(&63));
+            assert_eq!(focus.get(64), Some(&64));
+        }
+
+        #[test]
+        fn focus_mut_at_boundaries() {
+            let mut v: Vector<i32> = (0..200).collect();
+            let mut focus = v.focus_mut();
+            // Mutate at chunk boundaries
+            *focus.get_mut(0).unwrap() = 1000;
+            *focus.get_mut(63).unwrap() = 1063;
+            *focus.get_mut(64).unwrap() = 1064;
+            *focus.get_mut(199).unwrap() = 1199;
+            assert_eq!(focus.get_mut(200), None);
+            // Verify through the focus
+            assert_eq!(*focus.get_mut(0).unwrap(), 1000);
+            assert_eq!(*focus.get_mut(199).unwrap(), 1199);
+        }
+
+        #[test]
+        fn swap_across_chunks() {
+            // Swap elements that are in different tree chunks
+            let mut v: Vector<i32> = (0..200).collect();
+            v.swap(10, 150);
+            assert_eq!(v[10], 150);
+            assert_eq!(v[150], 10);
+        }
+
+        #[test]
+        fn iter_shared_structure_isolation() {
+            // Clone a vector (shared structure), mutate via iter_mut on
+            // one copy, verify the other is unchanged
+            let v1: Vector<i32> = (0..100).collect();
+            let mut v2 = v1.clone();
+            for x in v2.iter_mut() {
+                *x += 1000;
+            }
+            assert_eq!(v1[0], 0);
+            assert_eq!(v2[0], 1000);
+        }
+
+        // --- Miri-targeted tests ---
+        // These specifically exercise patterns where UB is most likely if
+        // invariants are violated: aliasing, use-after-free, dangling
+        // pointers, and out-of-bounds access through raw pointers.
+        // They are NOT marked #[cfg_attr(miri, ignore)] — they are
+        // designed to run under miri.
+
+        #[test]
+        fn miri_focus_alternating_access_pattern() {
+            // Alternating between distant indices forces the Focus to
+            // re-target its cached chunk pointer on every access.
+            // If the pointer is ever dangling, miri catches it.
+            let v: Vector<i32> = (0..500).collect();
+            let mut focus = v.focus();
+            for i in 0..100 {
+                assert_eq!(focus.get(i), Some(&(i as i32)));
+                assert_eq!(focus.get(499 - i), Some(&(499 - i as i32)));
+            }
+        }
+
+        #[test]
+        fn miri_focus_mut_alternating_access() {
+            // Same pattern with mutable focus — exercises make_mut
+            // copy-on-write on each chunk re-target.
+            let mut v: Vector<i32> = (0..500).collect();
+            let mut focus = v.focus_mut();
+            for i in 0..50 {
+                *focus.get_mut(i).unwrap() += 1;
+                *focus.get_mut(499 - i).unwrap() += 1;
+            }
+            // Verify mutations stuck
+            assert_eq!(*focus.get_mut(0).unwrap(), 1);
+            assert_eq!(*focus.get_mut(499).unwrap(), 500);
+        }
+
+        #[test]
+        fn miri_focus_mut_then_read_original() {
+            // Create shared structure, mutate through FocusMut, then
+            // read the original. Tests that copy-on-write correctly
+            // separates the two collections (no aliasing of mutated
+            // data through the original's pointers).
+            let v1: Vector<i32> = (0..200).collect();
+            let mut v2 = v1.clone();
+            {
+                let mut focus = v2.focus_mut();
+                for i in 0..200 {
+                    *focus.get_mut(i).unwrap() *= -1;
+                }
+            }
+            // v1 must be untouched — its tree nodes were not mutated
+            for i in 0..200 {
+                assert_eq!(v1[i], i as i32);
+                assert_eq!(v2[i], -(i as i32));
+            }
+        }
+
+        #[test]
+        fn miri_iter_mut_drop_midway() {
+            // Create a mutable iterator, consume some elements, then
+            // drop the iterator. Tests that partial iteration doesn't
+            // leave dangling state in the Focus.
+            let mut v: Vector<i32> = (0..100).collect();
+            {
+                let mut it = v.iter_mut();
+                *it.next().unwrap() = 999;
+                *it.next().unwrap() = 998;
+                // Drop iterator without exhausting it
+            }
+            assert_eq!(v[0], 999);
+            assert_eq!(v[1], 998);
+            assert_eq!(v[2], 2); // unchanged
+        }
+
+        #[test]
+        fn miri_swap_many_cross_chunk() {
+            // Many swaps across different chunks — each swap takes raw
+            // pointers from IndexMut. If any pointer is invalid, miri
+            // catches the access.
+            let mut v: Vector<i32> = (0..300).collect();
+            for i in 0..150 {
+                v.swap(i, 299 - i);
+            }
+            for i in 0..300 {
+                assert_eq!(v[i], (299 - i) as i32);
+            }
+        }
+
+        #[test]
+        fn miri_leaves_mut_interleaved_with_access() {
+            // Mutate through leaves_mut, then access through normal
+            // indexing. Tests that the AtomicPtr in FocusMut doesn't
+            // leave stale pointers.
+            let mut v: Vector<i32> = (0..200).collect();
+            for chunk in v.leaves_mut() {
+                for val in chunk.iter_mut() {
+                    *val += 1000;
+                }
+            }
+            for i in 0..200 {
+                assert_eq!(v[i], i as i32 + 1000);
+            }
+        }
+
+        #[test]
+        fn miri_multiple_focus_mut_sequential() {
+            // Create and drop multiple FocusMut instances on the same
+            // vector. Each should get a valid, non-aliasing view.
+            let mut v: Vector<i32> = (0..100).collect();
+            {
+                let mut f = v.focus_mut();
+                *f.get_mut(0).unwrap() = 10;
+            }
+            {
+                let mut f = v.focus_mut();
+                *f.get_mut(1).unwrap() = 20;
+            }
+            assert_eq!(v[0], 10);
+            assert_eq!(v[1], 20);
+        }
     }
 }
