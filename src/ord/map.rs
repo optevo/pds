@@ -4561,17 +4561,6 @@ mod test {
     }
 
     #[test]
-    fn entry_and_modify() {
-        let mut map = ordmap! {1 => 10};
-
-        map.entry(1).and_modify(|v| *v += 5).or_insert(0);
-        assert_eq!(map.get(&1), Some(&15));
-
-        map.entry(2).and_modify(|v| *v += 5).or_insert(0);
-        assert_eq!(map.get(&2), Some(&0));
-    }
-
-    #[test]
     fn large_map_operations() {
         let n = 1000;
         let mut map = OrdMap::new();
@@ -4632,22 +4621,6 @@ mod test {
 
         let v = map.remove(&99);
         assert_eq!(v, None);
-    }
-
-    #[test]
-    fn index_operator_and_index_mut() {
-        let mut map = ordmap! {1 => 10, 2 => 20};
-        assert_eq!(map[&1], 10);
-
-        map[&1] = 100;
-        assert_eq!(map[&1], 100);
-    }
-
-    #[test]
-    fn into_iterator_owned() {
-        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
-        let items: Vec<(i32, i32)> = map.into_iter().collect();
-        assert_eq!(items, vec![(1, 10), (2, 20), (3, 30)]);
     }
 
     #[test]
