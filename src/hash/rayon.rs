@@ -6,10 +6,13 @@
 //!
 //! These are only available when using the `rayon` feature flag.
 
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 
 use ::rayon::iter::plumbing::{bridge_unindexed, Folder, UnindexedConsumer, UnindexedProducer};
-use ::rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use ::rayon::iter::{
+    FromParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelExtend,
+    ParallelIterator,
+};
 
 use archery::SharedPointerKind;
 
@@ -199,6 +202,43 @@ impl<'a, K, V, P: SharedPointerKind> Iterator for MapEntryIter<'a, K, V, P> {
     }
 }
 
+impl<K, V, S, P> FromParallelIterator<(K, V)> for GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone + Send + Sync,
+    V: Clone + Send + Sync,
+    S: BuildHasher + Clone + Default + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+{
+    fn from_par_iter<I>(par_iter: I) -> Self
+    where
+        I: IntoParallelIterator<Item = (K, V)>,
+    {
+        par_iter
+            .into_par_iter()
+            .fold(Self::default, |mut map, (k, v)| {
+                map.insert(k, v);
+                map
+            })
+            .reduce(Self::default, |a, b| a.union(b))
+    }
+}
+
+impl<K, V, S, P> ParallelExtend<(K, V)> for GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone + Send + Sync,
+    V: Clone + Send + Sync,
+    S: BuildHasher + Clone + Default + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+{
+    fn par_extend<I>(&mut self, par_iter: I)
+    where
+        I: IntoParallelIterator<Item = (K, V)>,
+    {
+        let collected: Self = par_iter.into_par_iter().collect();
+        *self = std::mem::take(self).union(collected);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // HashSet
 // ---------------------------------------------------------------------------
@@ -371,14 +411,49 @@ impl<'a, A, P: SharedPointerKind> Iterator for SetEntryIter<'a, A, P> {
     }
 }
 
+impl<A, S, P> FromParallelIterator<A> for GenericHashSet<A, S, P>
+where
+    A: Hash + Eq + Clone + Send + Sync,
+    S: BuildHasher + Clone + Default + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+{
+    fn from_par_iter<I>(par_iter: I) -> Self
+    where
+        I: IntoParallelIterator<Item = A>,
+    {
+        par_iter
+            .into_par_iter()
+            .fold(Self::default, |mut set, a| {
+                set.insert(a);
+                set
+            })
+            .reduce(Self::default, |a, b| a.union(b))
+    }
+}
+
+impl<A, S, P> ParallelExtend<A> for GenericHashSet<A, S, P>
+where
+    A: Hash + Eq + Clone + Send + Sync,
+    S: BuildHasher + Clone + Default + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+{
+    fn par_extend<I>(&mut self, par_iter: I)
+    where
+        I: IntoParallelIterator<Item = A>,
+    {
+        let collected: Self = par_iter.into_par_iter().collect();
+        *self = std::mem::take(self).union(collected);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
 /// Extract the top-level entry references from a HAMT root node.
-fn root_entries<'a, A, P: SharedPointerKind>(
-    root: Option<&'a Node<A, P>>,
-) -> Vec<&'a Entry<A, P>> {
+fn root_entries<A, P: SharedPointerKind>(
+    root: Option<&Node<A, P>>,
+) -> Vec<&Entry<A, P>> {
     match root {
         Some(node) => node.data.iter().collect(),
         None => Vec::new(),
@@ -388,9 +463,9 @@ fn root_entries<'a, A, P: SharedPointerKind>(
 /// Split a vec of entry references for rayon work distribution.
 /// If there are multiple entries, splits in half.
 /// If there's a single HamtNode entry, expands it and splits its children.
-fn split_entries<'a, A, P: SharedPointerKind>(
-    mut entries: Vec<&'a Entry<A, P>>,
-) -> (Vec<&'a Entry<A, P>>, Option<Vec<&'a Entry<A, P>>>) {
+fn split_entries<A, P: SharedPointerKind>(
+    mut entries: Vec<&Entry<A, P>>,
+) -> (Vec<&Entry<A, P>>, Option<Vec<&Entry<A, P>>>) {
     if entries.len() >= 2 {
         let mid = entries.len() / 2;
         let right = entries.split_off(mid);
@@ -414,7 +489,7 @@ fn split_entries<'a, A, P: SharedPointerKind>(
 mod test {
     use super::super::map::HashMap;
     use super::super::set::HashSet;
-    use ::rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+    use ::rayon::iter::{IntoParallelRefIterator, ParallelExtend, ParallelIterator};
 
     #[cfg_attr(miri, ignore)]
     #[test]
@@ -499,5 +574,53 @@ mod test {
         let mut vals: Vec<_> = set.par_iter().copied().collect();
         vals.sort();
         assert_eq!(vals, (0..1_000).collect::<Vec<_>>());
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_from_par_iter() {
+        let pairs: Vec<(i32, i32)> = (0..10_000).map(|i| (i, i * 3)).collect();
+        let map: HashMap<i32, i32> = pairs.par_iter().copied().collect();
+        assert_eq!(map.len(), 10_000);
+        for i in 0..10_000 {
+            assert_eq!(map.get(&i), Some(&(i * 3)));
+        }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_extend() {
+        let mut map = HashMap::new();
+        map.insert(0, 0);
+        map.insert(1, 1);
+        let extras: Vec<(i32, i32)> = (2..1_000).map(|i| (i, i * 2)).collect();
+        map.par_extend(extras.par_iter().copied());
+        assert_eq!(map.len(), 1_000);
+        assert_eq!(map.get(&0), Some(&0));
+        assert_eq!(map.get(&999), Some(&1998));
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashset_from_par_iter() {
+        let vals: Vec<i32> = (0..10_000).collect();
+        let set: HashSet<i32> = vals.par_iter().copied().collect();
+        assert_eq!(set.len(), 10_000);
+        for i in 0..10_000 {
+            assert!(set.contains(&i));
+        }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashset_par_extend() {
+        let mut set = HashSet::new();
+        set.insert(0);
+        set.insert(1);
+        let extras: Vec<i32> = (2..1_000).collect();
+        set.par_extend(extras.par_iter().copied());
+        assert_eq!(set.len(), 1_000);
+        assert!(set.contains(&0));
+        assert!(set.contains(&999));
     }
 }
