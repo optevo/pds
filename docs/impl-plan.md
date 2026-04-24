@@ -91,9 +91,10 @@ single v8.0.0 release in Phase 5.
   preservation), `retain` (OrdMap/OrdSet — closes parity gap with HashMap),
   `partition`, `disjoint` (O(n+m) sorted traversal for Ord types, O(n)
   iterate-smaller-probe-larger for Hash types), `restrict_keys`/`without_keys`
-  (maps), `restrict` (sets, complement to existing `difference`). Remaining
-  lower-priority items deferred: `partition_map`, `map_accum`,
-  `relative_complement_with`.
+  (maps), `restrict` (sets, complement to existing `difference`),
+  `partition_map` (partition + transform into two differently-typed maps),
+  `relative_complement_with` (asymmetric diff with per-entry resolver),
+  `map_accum` (threaded accumulator through traversal with value transform).
 
 - **[2026-04-24] 2.6: Patch/apply from diff.** Added `apply_diff()` to all
   five collection types: OrdMap, OrdSet, HashMap, HashSet, Vector. Each
@@ -208,10 +209,8 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — items 2.2–2.7, 2.10, 2.11 complete, 2.8/2.9 substantially
-complete (core methods done, lower-priority items deferred). Remaining:
-2.1 (RRB concat fix). Phase 3 item 3.5 complete. Items 3.1–3.4 and 3.6
-unblocked.
+Phase 2 — all items complete except 2.1 (RRB concat fix). Phase 3
+item 3.5 complete. Items 3.1–3.4 and 3.6 unblocked.
 
 ---
 
