@@ -64,6 +64,14 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 3.2: Unsafe code audit.** Audited all unsafe sites across
+  4 files. Removed 2 unsafe operations in hamt.rs (ptr::read/ptr::write →
+  safe SparseChunk::remove/insert). Documented 17 remaining unsafe sites
+  with `// SAFETY:` comments — all retained for borrow checker limitations
+  (lending iterators, swap, get_many_mut, loop reborrow) or performance
+  (branchless binary search, zero-copy node construction). Added
+  debug_assert! precondition checks to Focus/FocusMut pointer dereferences.
+
 - **[2026-04-24] 3.1: Arc::get_mut — already handled.** Investigation
   found that `Arc::make_mut` already checks refcount == 1 internally and
   skips cloning when sole owner. Adding `get_mut` pre-checks to 110 call
@@ -227,9 +235,10 @@ single v8.0.0 release in Phase 5.
 
 Phase 2 — all items complete except 2.1 (RRB concat fix). Phase 3:
 3.1 resolved (already handled by Arc::make_mut — see DEC-004).
+3.2 complete (unsafe audit — 2 removals, 17 documented with SAFETY comments).
 3.4 partially complete (par_iter, FromParallelIterator, ParallelExtend
 done for all four hash/ord types; par_iter_mut, parallel bulk ops,
-parallel sort remaining). 3.5 complete. Items 3.2, 3.6 unblocked.
+parallel sort remaining). 3.5 complete. Item 3.6 unblocked.
 
 ---
 
