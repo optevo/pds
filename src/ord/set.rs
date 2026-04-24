@@ -513,6 +513,30 @@ where
         out
     }
 
+    /// Remove all values from a set that do not satisfy the given
+    /// predicate.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordset::OrdSet;
+    /// let mut set = ordset!{1, 2, 3, 4, 5};
+    /// set.retain(|v| v % 2 != 0);
+    /// assert_eq!(set, ordset!{1, 3, 5});
+    /// ```
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&A) -> bool,
+    {
+        let to_remove: Vec<A> = self.iter().filter(|a| !f(a)).cloned().collect();
+        for a in &to_remove {
+            self.remove(a);
+        }
+    }
+
     /// Remove the smallest value from a set.
     ///
     /// Time: O(log n)
@@ -1340,5 +1364,33 @@ mod test {
         let diff: Vec<_> = base.diff(&modified).collect();
         let patched = base.apply_diff(diff);
         assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn retain_keeps_matching() {
+        let mut set = ordset![1, 2, 3, 4, 5];
+        set.retain(|v| v % 2 != 0);
+        assert_eq!(set, ordset![1, 3, 5]);
+    }
+
+    #[test]
+    fn retain_empty_set() {
+        let mut set: OrdSet<i32> = OrdSet::new();
+        set.retain(|_| false);
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn retain_remove_all() {
+        let mut set = ordset![1, 2, 3];
+        set.retain(|_| false);
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn retain_keep_all() {
+        let mut set = ordset![1, 2, 3];
+        set.retain(|_| true);
+        assert_eq!(set, ordset![1, 2, 3]);
     }
 }

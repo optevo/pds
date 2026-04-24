@@ -768,6 +768,54 @@ where
         out
     }
 
+    /// Construct a new map with the same keys but values transformed
+    /// by the given function.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let doubled = map.map_values(|v| v * 2);
+    /// assert_eq!(doubled, hashmap!{1 => 20, 2 => 40, 3 => 60});
+    /// ```
+    #[must_use]
+    pub fn map_values<V2, F>(&self, mut f: F) -> GenericHashMap<K, V2, S, P>
+    where
+        V2: Clone,
+        S: Default,
+        F: FnMut(&V) -> V2,
+    {
+        self.iter().map(|(k, v)| (k.clone(), f(v))).collect()
+    }
+
+    /// Construct a new map with the same keys but values transformed
+    /// by the given function, which also receives the key.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let sums = map.map_values_with_key(|k, v| k + v);
+    /// assert_eq!(sums, hashmap!{1 => 11, 2 => 22, 3 => 33});
+    /// ```
+    #[must_use]
+    pub fn map_values_with_key<V2, F>(&self, mut f: F) -> GenericHashMap<K, V2, S, P>
+    where
+        V2: Clone,
+        S: Default,
+        F: FnMut(&K, &V) -> V2,
+    {
+        self.iter().map(|(k, v)| (k.clone(), f(k, v))).collect()
+    }
+
     /// Get a mutable iterator over the values of a hash map.
     ///
     /// Please note that the order is consistent between maps using
@@ -2934,5 +2982,34 @@ mod test {
         let diff: Vec<_> = base.diff(&modified).collect();
         let _patched = base.apply_diff(diff);
         assert_eq!(base, hashmap! {1 => "a", 2 => "b"});
+    }
+
+    #[test]
+    fn map_values_basic() {
+        let map = hashmap! {1 => 10, 2 => 20, 3 => 30};
+        let doubled = map.map_values(|v| v * 2);
+        assert_eq!(doubled, hashmap! {1 => 20, 2 => 40, 3 => 60});
+    }
+
+    #[test]
+    fn map_values_type_change() {
+        let map = hashmap! {1 => 10, 2 => 20};
+        let strings: HashMap<i32, String> = map.map_values(|v| format!("{v}"));
+        assert_eq!(strings.get(&1), Some(&"10".to_string()));
+        assert_eq!(strings.get(&2), Some(&"20".to_string()));
+    }
+
+    #[test]
+    fn map_values_empty() {
+        let map: HashMap<i32, i32> = HashMap::new();
+        let result = map.map_values(|v| v * 2);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn map_values_with_key_basic() {
+        let map = hashmap! {1 => 10, 2 => 20, 3 => 30};
+        let sums = map.map_values_with_key(|k, v| k + v);
+        assert_eq!(sums, hashmap! {1 => 11, 2 => 22, 3 => 33});
     }
 }

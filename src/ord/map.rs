@@ -923,6 +923,80 @@ where
         out
     }
 
+    /// Construct a new map with the same keys but values transformed
+    /// by the given function.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let doubled = map.map_values(|v| v * 2);
+    /// assert_eq!(doubled, ordmap!{1 => 20, 2 => 40, 3 => 60});
+    /// ```
+    #[must_use]
+    pub fn map_values<V2, F>(&self, mut f: F) -> GenericOrdMap<K, V2, P>
+    where
+        V2: Clone,
+        F: FnMut(&V) -> V2,
+    {
+        self.iter().map(|(k, v)| (k.clone(), f(v))).collect()
+    }
+
+    /// Construct a new map with the same keys but values transformed
+    /// by the given function, which also receives the key.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let sums = map.map_values_with_key(|k, v| k + v);
+    /// assert_eq!(sums, ordmap!{1 => 11, 2 => 22, 3 => 33});
+    /// ```
+    #[must_use]
+    pub fn map_values_with_key<V2, F>(&self, mut f: F) -> GenericOrdMap<K, V2, P>
+    where
+        V2: Clone,
+        F: FnMut(&K, &V) -> V2,
+    {
+        self.iter().map(|(k, v)| (k.clone(), f(k, v))).collect()
+    }
+
+    /// Remove all entries from a map that do not satisfy the given
+    /// predicate.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let mut map = ordmap!{1 => "one", 2 => "two", 3 => "three"};
+    /// map.retain(|k, _| k % 2 != 0);
+    /// assert_eq!(map, ordmap!{1 => "one", 3 => "three"});
+    /// ```
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&K, &V) -> bool,
+    {
+        let keys_to_remove: Vec<K> = self
+            .iter()
+            .filter(|(k, v)| !f(k, v))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in &keys_to_remove {
+            self.remove(key);
+        }
+    }
+
     /// Construct a new map by inserting a key/value mapping into a
     /// map.
     ///
@@ -3255,5 +3329,62 @@ mod test {
         let _patched = base.apply_diff(diff);
         // Original unchanged due to structural sharing
         assert_eq!(base, ordmap! {1 => "a", 2 => "b"});
+    }
+
+    #[test]
+    fn retain_keeps_matching() {
+        let mut map = ordmap! {1 => "one", 2 => "two", 3 => "three", 4 => "four"};
+        map.retain(|k, _| k % 2 != 0);
+        assert_eq!(map, ordmap! {1 => "one", 3 => "three"});
+    }
+
+    #[test]
+    fn retain_empty_map() {
+        let mut map: OrdMap<i32, &str> = OrdMap::new();
+        map.retain(|_, _| false);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn retain_keep_all() {
+        let mut map = ordmap! {1 => "a", 2 => "b"};
+        map.retain(|_, _| true);
+        assert_eq!(map, ordmap! {1 => "a", 2 => "b"});
+    }
+
+    #[test]
+    fn retain_remove_all() {
+        let mut map = ordmap! {1 => "a", 2 => "b", 3 => "c"};
+        map.retain(|_, _| false);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn map_values_basic() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let doubled = map.map_values(|v| v * 2);
+        assert_eq!(doubled, ordmap! {1 => 20, 2 => 40, 3 => 60});
+    }
+
+    #[test]
+    fn map_values_type_change() {
+        let map = ordmap! {1 => 10, 2 => 20};
+        let strings: OrdMap<i32, String> = map.map_values(|v| format!("{v}"));
+        assert_eq!(strings.get(&1), Some(&"10".to_string()));
+        assert_eq!(strings.get(&2), Some(&"20".to_string()));
+    }
+
+    #[test]
+    fn map_values_empty() {
+        let map: OrdMap<i32, i32> = OrdMap::new();
+        let result = map.map_values(|v| v * 2);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn map_values_with_key_basic() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let sums = map.map_values_with_key(|k, v| k + v);
+        assert_eq!(sums, ordmap! {1 => 11, 2 => 22, 3 => 33});
     }
 }
