@@ -359,6 +359,33 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
+    /// Compute the positional diff between two vectors.
+    ///
+    /// Returns an iterator of [`DiffItem`] values describing the
+    /// element-by-element differences between `self` (old) and `other`
+    /// (new). Elements at the same index are compared with
+    /// [`PartialEq`]; indices beyond the shorter vector produce
+    /// [`DiffItem::Add`] or [`DiffItem::Remove`] items.
+    ///
+    /// If the two vectors share the same structure (i.e.
+    /// [`ptr_eq`][GenericVector::ptr_eq] returns true), the iterator
+    /// is empty without traversing any elements.
+    ///
+    /// Time: O(n) where n = max(self.len(), other.len())
+    #[must_use]
+    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, A, P>
+    where
+        A: PartialEq,
+    {
+        let done = self.ptr_eq(other);
+        DiffIter {
+            old: self.iter(),
+            new: other.iter(),
+            index: 0,
+            done,
+        }
+    }
+
     /// Get an iterator over a vector.
     ///
     /// Time: O(1)
@@ -2295,6 +2322,84 @@ impl<'a, A: Clone, P: SharedPointerKind> DoubleEndedIterator for ChunksMut<'a, A
 
 impl<'a, A: Clone, P: SharedPointerKind> FusedIterator for ChunksMut<'a, A, P> {}
 
+// Diff
+
+/// An item in a positional diff between two vectors.
+///
+/// Produced by [`GenericVector::diff`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum DiffItem<'a, 'b, A> {
+    /// An element was added at this index (present in the new vector only).
+    Add(usize, &'b A),
+    /// An element at this index changed between the two vectors.
+    Update {
+        /// The index of the changed element.
+        index: usize,
+        /// The old value.
+        old: &'a A,
+        /// The new value.
+        new: &'b A,
+    },
+    /// An element was removed from this index (present in the old vector only).
+    Remove(usize, &'a A),
+}
+
+/// An iterator over the positional differences between two vectors.
+///
+/// Created by [`GenericVector::diff`].
+pub struct DiffIter<'a, 'b, A, P: SharedPointerKind> {
+    old: Iter<'a, A, P>,
+    new: Iter<'b, A, P>,
+    index: usize,
+    done: bool,
+}
+
+impl<'a, 'b, A: PartialEq, P: SharedPointerKind + 'a + 'b> Iterator
+    for DiffIter<'a, 'b, A, P>
+{
+    type Item = DiffItem<'a, 'b, A>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        loop {
+            match (self.old.next(), self.new.next()) {
+                (Some(old_val), Some(new_val)) => {
+                    let idx = self.index;
+                    self.index += 1;
+                    if old_val != new_val {
+                        return Some(DiffItem::Update {
+                            index: idx,
+                            old: old_val,
+                            new: new_val,
+                        });
+                    }
+                }
+                (None, Some(new_val)) => {
+                    let idx = self.index;
+                    self.index += 1;
+                    return Some(DiffItem::Add(idx, new_val));
+                }
+                (Some(old_val), None) => {
+                    let idx = self.index;
+                    self.index += 1;
+                    return Some(DiffItem::Remove(idx, old_val));
+                }
+                (None, None) => {
+                    self.done = true;
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+impl<'a, 'b, A: PartialEq, P: SharedPointerKind + 'a + 'b> FusedIterator
+    for DiffIter<'a, 'b, A, P>
+{
+}
+
 // Proptest
 #[cfg(any(test, feature = "proptest"))]
 #[doc(hidden)]
@@ -2678,6 +2783,117 @@ mod test {
 
         // Self-comparison.
         assert_eq!(v, v);
+    }
+
+    #[test]
+    fn diff_identical_vectors() {
+        let v: Vector<i32> = (0..100).collect();
+        let v2 = v.clone();
+        assert_eq!(v.diff(&v2).count(), 0);
+    }
+
+    #[test]
+    fn diff_ptr_eq_fast_path() {
+        // Cloned vectors with shared structure produce no diffs.
+        let v: Vector<i32> = (0..100).collect();
+        let v2 = v.clone();
+        assert!(v.ptr_eq(&v2));
+        assert_eq!(v.diff(&v2).count(), 0);
+    }
+
+    #[test]
+    fn diff_single_update() {
+        let v: Vector<i32> = (0..10).collect();
+        let mut v2 = v.clone();
+        v2.set(5, 99);
+        let diffs: Vec<_> = v.diff(&v2).collect();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(
+            diffs[0],
+            DiffItem::Update {
+                index: 5,
+                old: &5,
+                new: &99
+            }
+        );
+    }
+
+    #[test]
+    fn diff_additions() {
+        let v: Vector<i32> = (0..5).collect();
+        let v2: Vector<i32> = (0..8).collect();
+        let diffs: Vec<_> = v.diff(&v2).collect();
+        assert_eq!(diffs.len(), 3);
+        assert_eq!(diffs[0], DiffItem::Add(5, &5));
+        assert_eq!(diffs[1], DiffItem::Add(6, &6));
+        assert_eq!(diffs[2], DiffItem::Add(7, &7));
+    }
+
+    #[test]
+    fn diff_removals() {
+        let v: Vector<i32> = (0..8).collect();
+        let v2: Vector<i32> = (0..5).collect();
+        let diffs: Vec<_> = v.diff(&v2).collect();
+        assert_eq!(diffs.len(), 3);
+        assert_eq!(diffs[0], DiffItem::Remove(5, &5));
+        assert_eq!(diffs[1], DiffItem::Remove(6, &6));
+        assert_eq!(diffs[2], DiffItem::Remove(7, &7));
+    }
+
+    #[test]
+    fn diff_mixed_changes() {
+        let v: Vector<i32> = vector![1, 2, 3, 4, 5];
+        let v2: Vector<i32> = vector![1, 99, 3, 4, 5, 6];
+        let diffs: Vec<_> = v.diff(&v2).collect();
+        assert_eq!(diffs.len(), 2);
+        assert_eq!(
+            diffs[0],
+            DiffItem::Update {
+                index: 1,
+                old: &2,
+                new: &99
+            }
+        );
+        assert_eq!(diffs[1], DiffItem::Add(5, &6));
+    }
+
+    #[test]
+    fn diff_empty_vectors() {
+        let v: Vector<i32> = Vector::new();
+        let v2: Vector<i32> = Vector::new();
+        assert_eq!(v.diff(&v2).count(), 0);
+    }
+
+    #[test]
+    fn diff_from_empty() {
+        let v: Vector<i32> = Vector::new();
+        let v2: Vector<i32> = (0..3).collect();
+        let diffs: Vec<_> = v.diff(&v2).collect();
+        assert_eq!(diffs.len(), 3);
+        assert_eq!(diffs[0], DiffItem::Add(0, &0));
+        assert_eq!(diffs[1], DiffItem::Add(1, &1));
+        assert_eq!(diffs[2], DiffItem::Add(2, &2));
+    }
+
+    #[test]
+    fn diff_to_empty() {
+        let v: Vector<i32> = (0..3).collect();
+        let v2: Vector<i32> = Vector::new();
+        let diffs: Vec<_> = v.diff(&v2).collect();
+        assert_eq!(diffs.len(), 3);
+        assert_eq!(diffs[0], DiffItem::Remove(0, &0));
+        assert_eq!(diffs[1], DiffItem::Remove(1, &1));
+        assert_eq!(diffs[2], DiffItem::Remove(2, &2));
+    }
+
+    #[test]
+    fn diff_is_fused() {
+        let v: Vector<i32> = vector![1, 2, 3];
+        let v2: Vector<i32> = vector![1, 2, 4];
+        let mut iter = v.diff(&v2);
+        assert!(iter.next().is_some());
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
     }
 
     #[test]

@@ -64,6 +64,14 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 2.5: Vector diff.** Added `diff()` to Vector, producing a
+  `DiffIter` that yields positional `DiffItem::{Add, Update, Remove}` items.
+  Compares elements at each index; excess elements in the longer vector are
+  Add or Remove. Includes `ptr_eq` fast path (shared-structure vectors
+  produce empty diff in O(1)). Implements FusedIterator. Tests cover
+  identical, single update, additions, removals, mixed changes, empty
+  vectors, from/to empty, and fused behaviour.
+
 - **[2026-04-24] 3.5: PartialEq ptr_eq fast paths.** Added O(1) early-exit
   to `PartialEq` for HashMap, HashSet, and Vector when two collections share
   the same root pointer. Vector uses its existing `ptr_eq()`. HashMap and
@@ -148,9 +156,9 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — items 2.2 and 2.3 complete. Remaining Phase 2 items: 2.1 (RRB
-concat fix), 2.4 (HashMap/HashSet diff), 2.5 (Vector diff), 2.6
-(patch/apply). Phase 3 item 3.5 complete. Items 3.1–3.4 and 3.6 unblocked.
+Phase 2 — items 2.2, 2.3, 2.5 complete. Remaining Phase 2 items: 2.1 (RRB
+concat fix), 2.4 (HashMap/HashSet diff), 2.6 (patch/apply — blocked on
+2.4). Phase 3 item 3.5 complete. Items 3.1–3.4 and 3.6 unblocked.
 
 ---
 
