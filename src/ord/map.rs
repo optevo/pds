@@ -1050,147 +1050,6 @@ where
         out
     }
 
-    /// Construct a new map with the same keys but values transformed
-    /// by the given function.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
-    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
-    /// let doubled = map.map_values(|v| v * 2);
-    /// assert_eq!(doubled, ordmap!{1 => 20, 2 => 40, 3 => 60});
-    /// ```
-    #[must_use]
-    pub fn map_values<V2, F>(&self, mut f: F) -> GenericOrdMap<K, V2, P>
-    where
-        V2: Clone,
-        F: FnMut(&V) -> V2,
-    {
-        self.iter().map(|(k, v)| (k.clone(), f(v))).collect()
-    }
-
-    /// Construct a new map with the same keys but values transformed
-    /// by the given function, which also receives the key.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
-    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
-    /// let sums = map.map_values_with_key(|k, v| k + v);
-    /// assert_eq!(sums, ordmap!{1 => 11, 2 => 22, 3 => 33});
-    /// ```
-    #[must_use]
-    pub fn map_values_with_key<V2, F>(&self, mut f: F) -> GenericOrdMap<K, V2, P>
-    where
-        V2: Clone,
-        F: FnMut(&K, &V) -> V2,
-    {
-        self.iter().map(|(k, v)| (k.clone(), f(k, v))).collect()
-    }
-
-    /// Construct a new map with the same keys but values transformed
-    /// by a fallible function. Returns the first error encountered.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
-    /// let map = ordmap!{1 => "10", 2 => "20", 3 => "30"};
-    /// let parsed: Result<OrdMap<i32, i32>, _> =
-    ///     map.try_map_values(|_, v| v.parse::<i32>());
-    /// assert_eq!(parsed, Ok(ordmap!{1 => 10, 2 => 20, 3 => 30}));
-    /// ```
-    pub fn try_map_values<V2, E, F>(&self, mut f: F) -> Result<GenericOrdMap<K, V2, P>, E>
-    where
-        V2: Clone,
-        F: FnMut(&K, &V) -> Result<V2, E>,
-    {
-        let mut out = GenericOrdMap::new();
-        for (k, v) in self.iter() {
-            out.insert(k.clone(), f(k, v)?);
-        }
-        Ok(out)
-    }
-
-    /// Construct a new map with keys transformed by the given
-    /// function, keeping the values. If the function maps two
-    /// different keys to the same new key, later entries (in key
-    /// order) overwrite earlier ones.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
-    /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c"};
-    /// let negated = map.map_keys(|k| -k);
-    /// assert_eq!(negated, ordmap!{-3 => "c", -2 => "b", -1 => "a"});
-    /// ```
-    #[must_use]
-    pub fn map_keys<K2, F>(&self, mut f: F) -> GenericOrdMap<K2, V, P>
-    where
-        K2: Ord + Clone,
-        F: FnMut(&K) -> K2,
-    {
-        self.iter().map(|(k, v)| (f(k), v.clone())).collect()
-    }
-
-    /// Construct a new map with keys transformed by a monotonically
-    /// increasing function, keeping the values. The function must
-    /// preserve key ordering: if `a < b`, then `f(a) < f(b)`.
-    ///
-    /// This is semantically equivalent to [`map_keys`][GenericOrdMap::map_keys]
-    /// but asserts the monotonicity invariant (in debug builds).
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
-    /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c"};
-    /// let doubled = map.map_keys_monotonic(|k| k * 2);
-    /// assert_eq!(doubled, ordmap!{2 => "a", 4 => "b", 6 => "c"});
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// In debug builds, panics if the function does not preserve
-    /// key ordering.
-    #[must_use]
-    pub fn map_keys_monotonic<K2, F>(&self, mut f: F) -> GenericOrdMap<K2, V, P>
-    where
-        K2: Ord + Clone,
-        F: FnMut(&K) -> K2,
-    {
-        let mut out = GenericOrdMap::new();
-        let mut prev: Option<K2> = None;
-        for (k, v) in self.iter() {
-            let new_key = f(k);
-            debug_assert!(
-                prev.as_ref().is_none_or(|p| *p < new_key),
-                "map_keys_monotonic: function must preserve key ordering"
-            );
-            prev = Some(new_key.clone());
-            out.insert(new_key, v.clone());
-        }
-        out
-    }
-
     /// Split a map into two maps, where the first contains entries
     /// that satisfy the predicate and the second contains entries
     /// that do not.
@@ -1219,51 +1078,6 @@ where
                 left.insert(k.clone(), v.clone());
             } else {
                 right.insert(k.clone(), v.clone());
-            }
-        }
-        (left, right)
-    }
-
-    /// Partition and transform a map into two maps with potentially
-    /// different value types. The closure returns `Ok(v1)` to place
-    /// the entry in the left map, or `Err(v2)` for the right map.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
-    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
-    /// let (small, big): (OrdMap<i32, String>, OrdMap<i32, String>) =
-    ///     map.partition_map(|_k, v| {
-    ///         if *v <= 15 { Ok(format!("small:{v}")) }
-    ///         else { Err(format!("big:{v}")) }
-    ///     });
-    /// assert_eq!(small, ordmap!{1 => "small:10".to_string()});
-    /// assert_eq!(big, ordmap!{2 => "big:20".to_string(), 3 => "big:30".to_string()});
-    /// ```
-    #[must_use]
-    pub fn partition_map<V1, V2, F>(
-        &self,
-        mut f: F,
-    ) -> (GenericOrdMap<K, V1, P>, GenericOrdMap<K, V2, P>)
-    where
-        V1: Clone,
-        V2: Clone,
-        F: FnMut(&K, &V) -> Result<V1, V2>,
-    {
-        let mut left = GenericOrdMap::new();
-        let mut right = GenericOrdMap::new();
-        for (k, v) in self.iter() {
-            match f(k, v) {
-                Ok(v1) => {
-                    left.insert(k.clone(), v1);
-                }
-                Err(v2) => {
-                    right.insert(k.clone(), v2);
-                }
             }
         }
         (left, right)
@@ -1317,39 +1131,7 @@ where
         result
     }
 
-    /// Thread an accumulator through a key-order traversal, producing
-    /// a new map with transformed values.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
-    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
-    /// let (total, cumulative) = map.map_accum(0, |acc, _k, v| {
-    ///     let new_acc = acc + v;
-    ///     (new_acc, new_acc)
-    /// });
-    /// assert_eq!(total, 60);
-    /// assert_eq!(cumulative, ordmap!{1 => 10, 2 => 30, 3 => 60});
-    /// ```
-    #[must_use]
-    pub fn map_accum<S, V2, F>(&self, init: S, mut f: F) -> (S, GenericOrdMap<K, V2, P>)
-    where
-        V2: Clone,
-        F: FnMut(S, &K, &V) -> (S, V2),
-    {
-        let mut acc = init;
-        let mut result = GenericOrdMap::new();
-        for (k, v) in self.iter() {
-            let (new_acc, v2) = f(acc, k, v);
-            acc = new_acc;
-            result.insert(k.clone(), v2);
-        }
-        (acc, result)
-    }
+
 
     /// Remove all entries from a map that do not satisfy the given
     /// predicate.
@@ -2131,6 +1913,241 @@ where
         } else {
             Entry::Vacant(VacantEntry { map: self, key })
         }
+    }
+}
+
+// Methods that need K: Clone but not V: Clone
+impl<K, V, P> GenericOrdMap<K, V, P>
+where
+    K: Ord + Clone,
+    P: SharedPointerKind,
+{
+    /// Construct a new map with the same keys but values transformed
+    /// by the given function.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let doubled = map.map_values(|v| v * 2);
+    /// assert_eq!(doubled, ordmap!{1 => 20, 2 => 40, 3 => 60});
+    /// ```
+    #[must_use]
+    pub fn map_values<V2, F>(&self, mut f: F) -> GenericOrdMap<K, V2, P>
+    where
+        V2: Clone,
+        F: FnMut(&V) -> V2,
+    {
+        self.iter().map(|(k, v)| (k.clone(), f(v))).collect()
+    }
+
+    /// Construct a new map with the same keys but values transformed
+    /// by the given function, which also receives the key.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let sums = map.map_values_with_key(|k, v| k + v);
+    /// assert_eq!(sums, ordmap!{1 => 11, 2 => 22, 3 => 33});
+    /// ```
+    #[must_use]
+    pub fn map_values_with_key<V2, F>(&self, mut f: F) -> GenericOrdMap<K, V2, P>
+    where
+        V2: Clone,
+        F: FnMut(&K, &V) -> V2,
+    {
+        self.iter().map(|(k, v)| (k.clone(), f(k, v))).collect()
+    }
+
+    /// Construct a new map with the same keys but values transformed
+    /// by a fallible function. Returns the first error encountered.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => "10", 2 => "20", 3 => "30"};
+    /// let parsed: Result<OrdMap<i32, i32>, _> =
+    ///     map.try_map_values(|_, v| v.parse::<i32>());
+    /// assert_eq!(parsed, Ok(ordmap!{1 => 10, 2 => 20, 3 => 30}));
+    /// ```
+    pub fn try_map_values<V2, E, F>(&self, mut f: F) -> Result<GenericOrdMap<K, V2, P>, E>
+    where
+        V2: Clone,
+        F: FnMut(&K, &V) -> Result<V2, E>,
+    {
+        let mut out = GenericOrdMap::new();
+        for (k, v) in self.iter() {
+            out.insert(k.clone(), f(k, v)?);
+        }
+        Ok(out)
+    }
+
+    /// Thread an accumulator through a key-order traversal, producing
+    /// a new map with transformed values.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let (total, cumulative) = map.map_accum(0, |acc, _k, v| {
+    ///     let new_acc = acc + v;
+    ///     (new_acc, new_acc)
+    /// });
+    /// assert_eq!(total, 60);
+    /// assert_eq!(cumulative, ordmap!{1 => 10, 2 => 30, 3 => 60});
+    /// ```
+    #[must_use]
+    pub fn map_accum<S, V2, F>(&self, init: S, mut f: F) -> (S, GenericOrdMap<K, V2, P>)
+    where
+        V2: Clone,
+        F: FnMut(S, &K, &V) -> (S, V2),
+    {
+        let mut acc = init;
+        let mut result = GenericOrdMap::new();
+        for (k, v) in self.iter() {
+            let (new_acc, v2) = f(acc, k, v);
+            acc = new_acc;
+            result.insert(k.clone(), v2);
+        }
+        (acc, result)
+    }
+
+    /// Partition and transform a map into two maps with potentially
+    /// different value types. The closure returns `Ok(v1)` to place
+    /// the entry in the left map, or `Err(v2)` for the right map.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let (small, big): (OrdMap<i32, String>, OrdMap<i32, String>) =
+    ///     map.partition_map(|_k, v| {
+    ///         if *v <= 15 { Ok(format!("small:{v}")) }
+    ///         else { Err(format!("big:{v}")) }
+    ///     });
+    /// assert_eq!(small, ordmap!{1 => "small:10".to_string()});
+    /// assert_eq!(big, ordmap!{2 => "big:20".to_string(), 3 => "big:30".to_string()});
+    /// ```
+    #[must_use]
+    pub fn partition_map<V1, V2, F>(
+        &self,
+        mut f: F,
+    ) -> (GenericOrdMap<K, V1, P>, GenericOrdMap<K, V2, P>)
+    where
+        V1: Clone,
+        V2: Clone,
+        F: FnMut(&K, &V) -> Result<V1, V2>,
+    {
+        let mut left = GenericOrdMap::new();
+        let mut right = GenericOrdMap::new();
+        for (k, v) in self.iter() {
+            match f(k, v) {
+                Ok(v1) => {
+                    left.insert(k.clone(), v1);
+                }
+                Err(v2) => {
+                    right.insert(k.clone(), v2);
+                }
+            }
+        }
+        (left, right)
+    }
+}
+
+// Methods that need V: Clone but not K: Clone
+impl<K, V, P> GenericOrdMap<K, V, P>
+where
+    K: Ord,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    /// Construct a new map with keys transformed by the given
+    /// function, keeping the values. If the function maps two
+    /// different keys to the same new key, later entries (in key
+    /// order) overwrite earlier ones.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c"};
+    /// let negated = map.map_keys(|k| -k);
+    /// assert_eq!(negated, ordmap!{-3 => "c", -2 => "b", -1 => "a"});
+    /// ```
+    #[must_use]
+    pub fn map_keys<K2, F>(&self, mut f: F) -> GenericOrdMap<K2, V, P>
+    where
+        K2: Ord + Clone,
+        F: FnMut(&K) -> K2,
+    {
+        self.iter().map(|(k, v)| (f(k), v.clone())).collect()
+    }
+
+    /// Construct a new map with keys transformed by a monotonically
+    /// increasing function, keeping the values. The function must
+    /// preserve key ordering: if `a < b`, then `f(a) < f(b)`.
+    ///
+    /// This is semantically equivalent to [`map_keys`][GenericOrdMap::map_keys]
+    /// but asserts the monotonicity invariant (in debug builds).
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c"};
+    /// let doubled = map.map_keys_monotonic(|k| k * 2);
+    /// assert_eq!(doubled, ordmap!{2 => "a", 4 => "b", 6 => "c"});
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if the function does not preserve
+    /// key ordering.
+    #[must_use]
+    pub fn map_keys_monotonic<K2, F>(&self, mut f: F) -> GenericOrdMap<K2, V, P>
+    where
+        K2: Ord + Clone,
+        F: FnMut(&K) -> K2,
+    {
+        let mut out = GenericOrdMap::new();
+        let mut prev: Option<K2> = None;
+        for (k, v) in self.iter() {
+            let new_key = f(k);
+            debug_assert!(
+                prev.as_ref().is_none_or(|p| *p < new_key),
+                "map_keys_monotonic: function must preserve key ordering"
+            );
+            prev = Some(new_key.clone());
+            out.insert(new_key, v.clone());
+        }
+        out
     }
 }
 

@@ -478,10 +478,10 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
 impl<K, V, S, P> GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq,
-    S: BuildHasher + Clone,
+    S: BuildHasher,
     P: SharedPointerKind,
 {
-    fn test_eq<S2: BuildHasher + Clone, P2: SharedPointerKind>(
+    fn test_eq<S2: BuildHasher, P2: SharedPointerKind>(
         &self,
         other: &GenericHashMap<K, V, S2, P2>,
     ) -> bool
@@ -799,109 +799,6 @@ where
         out
     }
 
-    /// Construct a new map with the same keys but values transformed
-    /// by the given function.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
-    /// let map = hashmap!{1 => 10, 2 => 20, 3 => 30};
-    /// let doubled = map.map_values(|v| v * 2);
-    /// assert_eq!(doubled, hashmap!{1 => 20, 2 => 40, 3 => 60});
-    /// ```
-    #[must_use]
-    pub fn map_values<V2, F>(&self, mut f: F) -> GenericHashMap<K, V2, S, P>
-    where
-        V2: Clone,
-        S: Default,
-        F: FnMut(&V) -> V2,
-    {
-        self.iter().map(|(k, v)| (k.clone(), f(v))).collect()
-    }
-
-    /// Construct a new map with the same keys but values transformed
-    /// by the given function, which also receives the key.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
-    /// let map = hashmap!{1 => 10, 2 => 20, 3 => 30};
-    /// let sums = map.map_values_with_key(|k, v| k + v);
-    /// assert_eq!(sums, hashmap!{1 => 11, 2 => 22, 3 => 33});
-    /// ```
-    #[must_use]
-    pub fn map_values_with_key<V2, F>(&self, mut f: F) -> GenericHashMap<K, V2, S, P>
-    where
-        V2: Clone,
-        S: Default,
-        F: FnMut(&K, &V) -> V2,
-    {
-        self.iter().map(|(k, v)| (k.clone(), f(k, v))).collect()
-    }
-
-    /// Construct a new map with the same keys but values transformed
-    /// by a fallible function. Returns the first error encountered.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
-    /// let map = hashmap!{1 => "10", 2 => "20", 3 => "30"};
-    /// let parsed: Result<HashMap<i32, i32>, _> =
-    ///     map.try_map_values(|_, v| v.parse::<i32>());
-    /// assert_eq!(parsed, Ok(hashmap!{1 => 10, 2 => 20, 3 => 30}));
-    /// ```
-    pub fn try_map_values<V2, E, F>(&self, mut f: F) -> Result<GenericHashMap<K, V2, S, P>, E>
-    where
-        V2: Clone,
-        S: Default,
-        F: FnMut(&K, &V) -> Result<V2, E>,
-    {
-        let mut out = GenericHashMap::default();
-        for (k, v) in self.iter() {
-            out.insert(k.clone(), f(k, v)?);
-        }
-        Ok(out)
-    }
-
-    /// Construct a new map with keys transformed by the given
-    /// function, keeping the values. If the function maps two
-    /// different keys to the same new key, one entry is kept
-    /// (unspecified which).
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
-    /// let map = hashmap!{1 => "a", 2 => "b", 3 => "c"};
-    /// let negated = map.map_keys(|k| -k);
-    /// assert_eq!(negated.len(), 3);
-    /// assert_eq!(negated.get(&-1), Some(&"a"));
-    /// ```
-    #[must_use]
-    pub fn map_keys<K2, F>(&self, mut f: F) -> GenericHashMap<K2, V, S, P>
-    where
-        K2: Hash + Eq + Clone,
-        S: Default,
-        F: FnMut(&K) -> K2,
-    {
-        self.iter().map(|(k, v)| (f(k), v.clone())).collect()
-    }
-
     /// Split a map into two maps, where the first contains entries
     /// that satisfy the predicate and the second contains entries
     /// that do not.
@@ -1025,71 +922,18 @@ where
         result
     }
 
-    /// Thread an accumulator through a traversal, producing a new
-    /// map with transformed values.
-    ///
-    /// Note: HashMap iteration order is not guaranteed, so the
-    /// accumulator sees entries in an arbitrary order.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
-    /// let map = hashmap!{1 => 10, 2 => 20};
-    /// let (total, doubled): (i32, HashMap<i32, i32>) =
-    ///     map.map_accum(0, |acc, _k, v| (acc + v, v * 2));
-    /// assert_eq!(total, 30);
-    /// assert_eq!(doubled[&1], 20);
-    /// assert_eq!(doubled[&2], 40);
-    /// ```
-    #[must_use]
-    pub fn map_accum<St, V2, F>(
-        &self,
-        init: St,
-        mut f: F,
-    ) -> (St, GenericHashMap<K, V2, S, P>)
-    where
-        V2: Clone,
-        S: Default,
-        F: FnMut(St, &K, &V) -> (St, V2),
-    {
-        let mut acc = init;
-        let mut result = GenericHashMap::new();
-        for (k, v) in self.iter() {
-            let (new_acc, v2) = f(acc, k, v);
-            acc = new_acc;
-            result.insert(k.clone(), v2);
-        }
-        (acc, result)
-    }
+}
 
-    /// Check whether two maps share no keys.
-    ///
-    /// Time: O(n) — iterates the smaller map and checks each key
-    /// against the larger map.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
-    /// let a = hashmap!{1 => "a", 2 => "b"};
-    /// let b = hashmap!{3 => "c", 4 => "d"};
-    /// let c = hashmap!{2 => "x", 5 => "e"};
-    /// assert!(a.disjoint(&b));
-    /// assert!(!a.disjoint(&c));
-    /// ```
-    #[must_use]
-    pub fn disjoint(&self, other: &Self) -> bool {
-        let (smaller, larger) = if self.len() <= other.len() {
-            (self, other)
-        } else {
-            (other, self)
-        };
-        smaller.keys().all(|k| !larger.contains_key(k))
-    }
-
+// Mutating methods that need K: Clone + V: Clone for copy-on-write but NOT S: Clone.
+// These use SharedPointer::make_mut (which clones the node, needing K+V Clone)
+// but never clone the hasher.
+impl<K, V, S, P> GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
     /// Get a mutable iterator over the values of a hash map.
     ///
     /// Please note that the order is consistent between maps using
@@ -1248,6 +1092,50 @@ where
         result
     }
 
+    /// Filter out values from a map which don't satisfy a predicate.
+    ///
+    /// This is slightly more efficient than filtering using an
+    /// iterator, in that it doesn't need to rehash the retained
+    /// values, but it still needs to reconstruct the entire tree
+    /// structure of the map.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::HashMap;
+    /// let mut map = hashmap!{1 => 1, 2 => 2, 3 => 3};
+    /// map.retain(|k, v| *k > 1);
+    /// let expected = hashmap!{2 => 2, 3 => 3};
+    /// assert_eq!(expected, map);
+    /// ```
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&K, &V) -> bool,
+    {
+        let Some(root) = &mut self.root else {
+            return;
+        };
+        let old_root = root.clone();
+        let root = SharedPointer::make_mut(root);
+        for ((key, value), hash) in NodeIter::new(Some(&old_root), self.size) {
+            if !f(key, value) && root.remove(hash, 0, key).is_some() {
+                self.size -= 1;
+            }
+        }
+    }
+}
+
+// Methods that need S: Clone (clone self, create new maps, or use Entry API).
+impl<K, V, S, P> GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
     /// Get the [`Entry`][Entry] for a key in the map for in-place manipulation.
     ///
     /// Time: O(log n)
@@ -1406,41 +1294,6 @@ where
         match self.extract_with_key(k) {
             None => self.clone(),
             Some((_, _, map)) => map,
-        }
-    }
-
-    /// Filter out values from a map which don't satisfy a predicate.
-    ///
-    /// This is slightly more efficient than filtering using an
-    /// iterator, in that it doesn't need to rehash the retained
-    /// values, but it still needs to reconstruct the entire tree
-    /// structure of the map.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::HashMap;
-    /// let mut map = hashmap!{1 => 1, 2 => 2, 3 => 3};
-    /// map.retain(|k, v| *k > 1);
-    /// let expected = hashmap!{2 => 2, 3 => 3};
-    /// assert_eq!(expected, map);
-    /// ```
-    pub fn retain<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&K, &V) -> bool,
-    {
-        let Some(root) = &mut self.root else {
-            return;
-        };
-        let old_root = root.clone();
-        let root = SharedPointer::make_mut(root);
-        for ((key, value), hash) in NodeIter::new(Some(&old_root), self.size) {
-            if !f(key, value) && root.remove(hash, 0, key).is_some() {
-                self.size -= 1;
-            }
         }
     }
 
@@ -2035,6 +1888,199 @@ where
     }
 }
 
+// Methods that need K: Hash + Eq but not K: Clone, V: Clone, or S: Clone
+impl<K, V, S, P> GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    /// Check whether two maps share no keys.
+    ///
+    /// Time: O(n) — iterates the smaller map and checks each key
+    /// against the larger map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let a = hashmap!{1 => "a", 2 => "b"};
+    /// let b = hashmap!{3 => "c", 4 => "d"};
+    /// let c = hashmap!{2 => "x", 5 => "e"};
+    /// assert!(a.disjoint(&b));
+    /// assert!(!a.disjoint(&c));
+    /// ```
+    #[must_use]
+    pub fn disjoint(&self, other: &Self) -> bool {
+        let (smaller, larger) = if self.len() <= other.len() {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        smaller.keys().all(|k| !larger.contains_key(k))
+    }
+}
+
+// Methods that need K: Clone but not V: Clone
+impl<K, V, S, P> GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    /// Construct a new map with the same keys but values transformed
+    /// by the given function.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let doubled = map.map_values(|v| v * 2);
+    /// assert_eq!(doubled, hashmap!{1 => 20, 2 => 40, 3 => 60});
+    /// ```
+    #[must_use]
+    pub fn map_values<V2, F>(&self, mut f: F) -> GenericHashMap<K, V2, S, P>
+    where
+        V2: Clone,
+        S: Default,
+        F: FnMut(&V) -> V2,
+    {
+        self.iter().map(|(k, v)| (k.clone(), f(v))).collect()
+    }
+
+    /// Construct a new map with the same keys but values transformed
+    /// by the given function, which also receives the key.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let sums = map.map_values_with_key(|k, v| k + v);
+    /// assert_eq!(sums, hashmap!{1 => 11, 2 => 22, 3 => 33});
+    /// ```
+    #[must_use]
+    pub fn map_values_with_key<V2, F>(&self, mut f: F) -> GenericHashMap<K, V2, S, P>
+    where
+        V2: Clone,
+        S: Default,
+        F: FnMut(&K, &V) -> V2,
+    {
+        self.iter().map(|(k, v)| (k.clone(), f(k, v))).collect()
+    }
+
+    /// Construct a new map with the same keys but values transformed
+    /// by a fallible function. Returns the first error encountered.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => "10", 2 => "20", 3 => "30"};
+    /// let parsed: Result<HashMap<i32, i32>, _> =
+    ///     map.try_map_values(|_, v| v.parse::<i32>());
+    /// assert_eq!(parsed, Ok(hashmap!{1 => 10, 2 => 20, 3 => 30}));
+    /// ```
+    pub fn try_map_values<V2, E, F>(&self, mut f: F) -> Result<GenericHashMap<K, V2, S, P>, E>
+    where
+        V2: Clone,
+        S: Default,
+        F: FnMut(&K, &V) -> Result<V2, E>,
+    {
+        let mut out = GenericHashMap::default();
+        for (k, v) in self.iter() {
+            out.insert(k.clone(), f(k, v)?);
+        }
+        Ok(out)
+    }
+
+    /// Thread an accumulator through a traversal, producing a new
+    /// map with transformed values.
+    ///
+    /// Note: HashMap iteration order is not guaranteed, so the
+    /// accumulator sees entries in an arbitrary order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => 10, 2 => 20};
+    /// let (total, doubled): (i32, HashMap<i32, i32>) =
+    ///     map.map_accum(0, |acc, _k, v| (acc + v, v * 2));
+    /// assert_eq!(total, 30);
+    /// assert_eq!(doubled[&1], 20);
+    /// assert_eq!(doubled[&2], 40);
+    /// ```
+    #[must_use]
+    pub fn map_accum<St, V2, F>(
+        &self,
+        init: St,
+        mut f: F,
+    ) -> (St, GenericHashMap<K, V2, S, P>)
+    where
+        V2: Clone,
+        S: Default,
+        F: FnMut(St, &K, &V) -> (St, V2),
+    {
+        let mut acc = init;
+        let mut result = GenericHashMap::new();
+        for (k, v) in self.iter() {
+            let (new_acc, v2) = f(acc, k, v);
+            acc = new_acc;
+            result.insert(k.clone(), v2);
+        }
+        (acc, result)
+    }
+}
+
+// Methods that need V: Clone but not K: Clone
+impl<K, V, S, P> GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq,
+    V: Clone,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    /// Construct a new map with keys transformed by the given
+    /// function, keeping the values. If the function maps two
+    /// different keys to the same new key, one entry is kept
+    /// (unspecified which).
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => "a", 2 => "b", 3 => "c"};
+    /// let negated = map.map_keys(|k| -k);
+    /// assert_eq!(negated.len(), 3);
+    /// assert_eq!(negated.get(&-1), Some(&"a"));
+    /// ```
+    #[must_use]
+    pub fn map_keys<K2, F>(&self, mut f: F) -> GenericHashMap<K2, V, S, P>
+    where
+        K2: Hash + Eq + Clone,
+        S: Default,
+        F: FnMut(&K) -> K2,
+    {
+        self.iter().map(|(k, v)| (f(k), v.clone())).collect()
+    }
+}
+
 // Entries
 
 /// A handle for a key and its associated value.
@@ -2270,8 +2316,8 @@ impl<K, V, S1, S2, P1, P2> PartialEq<GenericHashMap<K, V, S2, P2>> for GenericHa
 where
     K: Hash + Eq,
     V: PartialEq,
-    S1: BuildHasher + Clone,
-    S2: BuildHasher + Clone,
+    S1: BuildHasher,
+    S2: BuildHasher,
     P1: SharedPointerKind,
     P2: SharedPointerKind,
 {
@@ -2284,7 +2330,7 @@ impl<K, V, S, P> Eq for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq,
     V: Eq,
-    S: BuildHasher + Clone,
+    S: BuildHasher,
     P: SharedPointerKind,
 {
 }
@@ -2597,7 +2643,7 @@ impl<K, V, S, P> FromIterator<(K, V)> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
     V: Clone,
-    S: BuildHasher + Default + Clone,
+    S: BuildHasher + Default,
     P: SharedPointerKind,
 {
     fn from_iter<T>(i: T) -> Self
@@ -2799,7 +2845,7 @@ fn diff_iterate_and_lookup<'a, 'b, K, V, S, P>(
 ) where
     K: Hash + Eq,
     V: PartialEq,
-    S: BuildHasher + Clone,
+    S: BuildHasher,
     P: SharedPointerKind,
 {
     // Phase 0: iterate old map, find Remove/Update items.

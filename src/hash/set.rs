@@ -426,10 +426,11 @@ where
     }
 }
 
+// Mutating methods that need A: Clone for copy-on-write but NOT S: Clone.
 impl<A, S, P> GenericHashSet<A, S, P>
 where
     A: Hash + Eq + Clone,
-    S: BuildHasher + Clone,
+    S: BuildHasher,
     P: SharedPointerKind,
 {
     /// Insert a value into a set.
@@ -461,143 +462,6 @@ where
             self.size -= 1;
         }
         result.map(|v| v.0)
-    }
-
-    /// Apply a diff to produce a new set.
-    ///
-    /// Takes any iterator of [`DiffItem`] values (such as from
-    /// [`diff`][GenericHashSet::diff]) and applies each change —
-    /// `Add` inserts values, `Remove` removes values.
-    ///
-    /// Time: O(d log n) where d is the number of diff items
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
-    /// let base = hashset!{1, 2, 3};
-    /// let modified = hashset!{2, 3, 4};
-    /// let diff: Vec<_> = base.diff(&modified).collect();
-    /// let patched = base.apply_diff(diff);
-    /// assert_eq!(patched, modified);
-    /// ```
-    #[must_use]
-    pub fn apply_diff<'a, 'b, I>(&self, diff: I) -> Self
-    where
-        I: IntoIterator<Item = DiffItem<'a, 'b, A>>,
-        A: 'a + 'b,
-    {
-        let mut out = self.clone();
-        for item in diff {
-            match item {
-                DiffItem::Add(a) => {
-                    out.insert(a.clone());
-                }
-                DiffItem::Remove(a) => {
-                    out.remove(a);
-                }
-            }
-        }
-        out
-    }
-
-    /// Split a set into two sets, where the first contains values
-    /// that satisfy the predicate and the second contains values
-    /// that do not.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
-    /// let set = hashset!{1, 2, 3, 4, 5};
-    /// let (evens, odds) = set.partition(|v| v % 2 == 0);
-    /// assert_eq!(evens, hashset!{2, 4});
-    /// assert_eq!(odds, hashset!{1, 3, 5});
-    /// ```
-    #[must_use]
-    pub fn partition<F>(&self, mut f: F) -> (Self, Self)
-    where
-        S: Default,
-        F: FnMut(&A) -> bool,
-    {
-        let mut left = Self::new();
-        let mut right = Self::new();
-        for a in self.iter() {
-            if f(a) {
-                left.insert(a.clone());
-            } else {
-                right.insert(a.clone());
-            }
-        }
-        (left, right)
-    }
-
-    /// Check whether two sets share no elements.
-    ///
-    /// Time: O(n) — iterates the smaller set and checks each element
-    /// against the larger set.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
-    /// let a = hashset!{1, 2, 3};
-    /// let b = hashset!{4, 5, 6};
-    /// let c = hashset!{3, 4, 5};
-    /// assert!(a.disjoint(&b));
-    /// assert!(!a.disjoint(&c));
-    /// ```
-    #[must_use]
-    pub fn disjoint(&self, other: &Self) -> bool {
-        let (smaller, larger) = if self.len() <= other.len() {
-            (self, other)
-        } else {
-            (other, self)
-        };
-        smaller.iter().all(|a| !larger.contains(a))
-    }
-
-    /// Construct a new set from the current set with the given value
-    /// added.
-    ///
-    /// Time: O(log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
-    /// # use std::sync::Arc;
-    /// let set = hashset![123];
-    /// assert_eq!(
-    ///   set.update(456),
-    ///   hashset![123, 456]
-    /// );
-    /// ```
-    #[must_use]
-    pub fn update(&self, a: A) -> Self {
-        let mut out = self.clone();
-        out.insert(a);
-        out
-    }
-
-    /// Construct a new set with the given value removed if it's in
-    /// the set.
-    ///
-    /// Time: O(log n)
-    #[must_use]
-    pub fn without<Q>(&self, value: &Q) -> Self
-    where
-        Q: Hash + Equivalent<A> + ?Sized,
-    {
-        let mut out = self.clone();
-        out.remove(value);
-        out
     }
 
     /// Filter out values from a set which don't satisfy a predicate.
@@ -635,9 +499,11 @@ where
         }
     }
 
-    /// Keep only values that are in the given set.
+    /// Split a set into two sets, where the first contains values
+    /// that satisfy the predicate and the second contains values
+    /// that do not.
     ///
-    /// Time: O(n log m) where n = self.len(), m = other.len()
+    /// Time: O(n log n)
     ///
     /// # Examples
     ///
@@ -645,14 +511,26 @@ where
     /// # #[macro_use] extern crate imbl;
     /// # use imbl::hashset::HashSet;
     /// let set = hashset!{1, 2, 3, 4, 5};
-    /// let keep = hashset!{2, 4, 6};
-    /// assert_eq!(set.restrict(&keep), hashset!{2, 4});
+    /// let (evens, odds) = set.partition(|v| v % 2 == 0);
+    /// assert_eq!(evens, hashset!{2, 4});
+    /// assert_eq!(odds, hashset!{1, 3, 5});
     /// ```
     #[must_use]
-    pub fn restrict(&self, other: &Self) -> Self {
-        let mut out = self.clone();
-        out.retain(|a| other.contains(a));
-        out
+    pub fn partition<F>(&self, mut f: F) -> (Self, Self)
+    where
+        S: Default,
+        F: FnMut(&A) -> bool,
+    {
+        let mut left = Self::new();
+        let mut right = Self::new();
+        for a in self.iter() {
+            if f(a) {
+                left.insert(a.clone());
+            } else {
+                right.insert(a.clone());
+            }
+        }
+        (left, right)
     }
 
     /// Construct the union of two sets.
@@ -768,6 +646,111 @@ where
         }
         self
     }
+}
+
+// Methods that need S: Clone (clone self, create new maps via new_from/clone).
+impl<A, S, P> GenericHashSet<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    /// Apply a diff to produce a new set.
+    ///
+    /// Takes any iterator of [`DiffItem`] values (such as from
+    /// [`diff`][GenericHashSet::diff]) and applies each change —
+    /// `Add` inserts values, `Remove` removes values.
+    ///
+    /// Time: O(d log n) where d is the number of diff items
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashset::HashSet;
+    /// let base = hashset!{1, 2, 3};
+    /// let modified = hashset!{2, 3, 4};
+    /// let diff: Vec<_> = base.diff(&modified).collect();
+    /// let patched = base.apply_diff(diff);
+    /// assert_eq!(patched, modified);
+    /// ```
+    #[must_use]
+    pub fn apply_diff<'a, 'b, I>(&self, diff: I) -> Self
+    where
+        I: IntoIterator<Item = DiffItem<'a, 'b, A>>,
+        A: 'a + 'b,
+    {
+        let mut out = self.clone();
+        for item in diff {
+            match item {
+                DiffItem::Add(a) => {
+                    out.insert(a.clone());
+                }
+                DiffItem::Remove(a) => {
+                    out.remove(a);
+                }
+            }
+        }
+        out
+    }
+
+    /// Construct a new set from the current set with the given value
+    /// added.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashset::HashSet;
+    /// # use std::sync::Arc;
+    /// let set = hashset![123];
+    /// assert_eq!(
+    ///   set.update(456),
+    ///   hashset![123, 456]
+    /// );
+    /// ```
+    #[must_use]
+    pub fn update(&self, a: A) -> Self {
+        let mut out = self.clone();
+        out.insert(a);
+        out
+    }
+
+    /// Construct a new set with the given value removed if it's in
+    /// the set.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn without<Q>(&self, value: &Q) -> Self
+    where
+        Q: Hash + Equivalent<A> + ?Sized,
+    {
+        let mut out = self.clone();
+        out.remove(value);
+        out
+    }
+
+    /// Keep only values that are in the given set.
+    ///
+    /// Time: O(n log m) where n = self.len(), m = other.len()
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashset::HashSet;
+    /// let set = hashset!{1, 2, 3, 4, 5};
+    /// let keep = hashset!{2, 4, 6};
+    /// assert_eq!(set.restrict(&keep), hashset!{2, 4});
+    /// ```
+    #[must_use]
+    pub fn restrict(&self, other: &Self) -> Self {
+        let mut out = self.clone();
+        out.retain(|a| other.contains(a));
+        out
+    }
 
     /// Construct the intersection of two sets.
     ///
@@ -792,6 +775,40 @@ where
             }
         }
         out
+    }
+}
+
+// Methods that need A: Hash + Eq but not A: Clone
+impl<A, S, P> GenericHashSet<A, S, P>
+where
+    A: Hash + Eq,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    /// Check whether two sets share no elements.
+    ///
+    /// Time: O(n) — iterates the smaller set and checks each element
+    /// against the larger set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashset::HashSet;
+    /// let a = hashset!{1, 2, 3};
+    /// let b = hashset!{4, 5, 6};
+    /// let c = hashset!{3, 4, 5};
+    /// assert!(a.disjoint(&b));
+    /// assert!(!a.disjoint(&c));
+    /// ```
+    #[must_use]
+    pub fn disjoint(&self, other: &Self) -> bool {
+        let (smaller, larger) = if self.len() <= other.len() {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        smaller.iter().all(|a| !larger.contains(a))
     }
 }
 
