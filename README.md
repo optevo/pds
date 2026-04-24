@@ -25,6 +25,44 @@ All collections use structural sharing for efficient cloning — cloning a
 collection is O(1), and modified versions share unchanged subtrees with the
 original.
 
+## Comparison with similar crates
+
+pds is forked from [imbl](https://github.com/jneem/imbl), which is itself a
+fork of the unmaintained [im](https://github.com/bodil/im-rs). The API is
+largely compatible with imbl 7.x, but pds prioritises performance and
+capability over strict backward compatibility.
+
+[rpds](https://github.com/orium/rpds) is an independent implementation with
+a different collection set and design philosophy.
+
+| | **pds** | **imbl** | **im** | **rpds** |
+|---|---|---|---|---|
+| **Version** | 1.0.0 | 7.0.0 | 15.1.0 | 1.2.0 |
+| **Last release** | 2026 | Jan 2026 | Apr 2022 | Nov 2025 |
+| **Vector** | RRB tree | RRB tree | RRB tree | — (indexable sequence) |
+| **HashMap / Set** | SIMD HAMT | HAMT | HAMT | HAMT |
+| **OrdMap / Set** | B+ tree | B+ tree | B-tree | Red-black tree |
+| **PBag** | yes | — | — | — |
+| **HashMultiMap** | yes | — | — | — |
+| **InsertionOrderMap** | yes | — | — | — |
+| **Trie** | yes | — | — | — |
+| **List / Stack / Queue** | — | — | — | yes |
+| **Merkle hashing** | O(1) equality | — | — | — |
+| **SIMD node ops** | yes | — | — | — |
+| **`no_std`** | yes (via `foldhash`) | — | — | yes |
+| **`triomphe::Arc`** | yes | — | — | — |
+| **serde** | yes | yes | yes | yes |
+| **rayon** | yes | yes | yes | yes (hash maps only) |
+| **proptest / quickcheck** | yes | yes | yes | — |
+
+**Key differences from imbl:**
+- SIMD-accelerated HAMT nodes for faster hash map/set operations
+- Merkle hashing on all collections for O(1) structural equality checks
+- Four additional collection types (PBag, HashMultiMap, InsertionOrderMap, Trie)
+- `no_std` support via the `foldhash` feature flag
+- `triomphe::Arc` support (no weak count, 8 bytes smaller per node)
+- Deprecated API aliases removed; breaking changes for correctness accepted
+
 ## Documentation
 
 - API docs — build locally with `cargo doc --open --all-features`
