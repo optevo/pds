@@ -335,6 +335,15 @@ where
                 if a_ptr == b_ptr {
                     return true;
                 }
+                // Merkle negative check: if both sets share the same hasher
+                // instance (common ancestor via clone), their key hashes are
+                // computed identically. If the root Merkle hashes differ, the
+                // key sets differ and the sets are definitely not equal.
+                let a_hasher = &*self.hasher as *const S as *const ();
+                let b_hasher = &*other.hasher as *const S2 as *const ();
+                if a_hasher == b_hasher && a.merkle_hash != b.merkle_hash {
+                    return false;
+                }
             }
             _ => {}
         }
@@ -1523,6 +1532,24 @@ mod test {
     }
 
     #[test]
+    fn partial_eq_merkle_negative_check() {
+        // Cloned sets share a hasher. Merkle negative check should catch
+        // inequality without full tree traversal.
+        let mut a: HashSet<i32> = (0..1000).collect();
+        let b = a.clone();
+        assert_eq!(a, b);
+
+        // Modify a — different Merkle hash, same hasher
+        a.insert(9999);
+        assert_ne!(a, b);
+
+        // Remove to make same length but different elements
+        a.remove(&0);
+        assert_eq!(a.len(), b.len()); // same length
+        assert_ne!(a, b); // Merkle catches this
+    }
+
+    #[test]
     fn diff_identical_sets() {
         let set: HashSet<i32> = (0..50).collect();
         let set2 = set.clone();
@@ -1898,7 +1925,6 @@ mod test {
 
     #[test]
     fn from_ordset() {
-        use crate::OrdSet;
         let os = ordset! {3, 1, 2};
         let hs: HashSet<i32> = HashSet::from(os);
         assert_eq!(hs.len(), 3);
