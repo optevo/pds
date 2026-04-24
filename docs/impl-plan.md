@@ -64,6 +64,12 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] 4.7 Stage 1: Widen HashBits from u32 to u64.** Eliminated
+  truncation of BuildHasher output. 12 usable trie levels (up from 6).
+  Collision nodes virtually eliminated for collections under ~4B entries.
+  Benchmarks: performance neutral at 100K–500K entries. Small keys (i32)
+  pay +8 bytes/entry from alignment; larger keys pay nothing.
+
 - **[2026-04-25] Docs review, coverage tests, and trait audit.**
   Fixed stale doc comments across crate (branching factor, OrdSet "map"→"set",
   broken links, missing features in README). Added ~100 coverage tests for
@@ -404,8 +410,8 @@ items killed (6.3, 6.7, and 6.2 by inheritance), one deprioritised (6.1).
 1. ~~6.8 Arena batch construction~~ — **KILLED** (DEC-019). PoC failed:
    partitioning + clone overhead negated tree-traversal savings. Gap is
    inherent to HAMT structure.
-2. [ ] 4.7 Pluggable hash width — stage 1 (widen `HashBits` to u64) is
-   non-breaking. Reduces collision probability at large sizes.
+2. [x] 4.7 Stage 1 — **DONE.** HashBits widened to u64. Performance
+   neutral at tested sizes. Stage 2 (configurable width via trait) next.
 3. [ ] 6.9 Persistent trie — to be explored (research + PoC gate)
 4. [ ] 4.6 Vector Merkle hash caching — PoC gate needed (overhead vs gain)
 5. [x] Test coverage gaps — **DONE.** ord/set.rs 58%→96%, ord/map.rs
