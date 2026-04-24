@@ -250,6 +250,20 @@ where
     }
 }
 
+impl<K, V, S, P> Extend<(K, V)> for GenericInsertionOrderMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
+        for (k, v) in iter {
+            self.insert(k, v);
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

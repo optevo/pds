@@ -323,6 +323,19 @@ where
     }
 }
 
+impl<A, S, P> Extend<A> for GenericPBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    fn extend<I: IntoIterator<Item = A>>(&mut self, iter: I) {
+        for item in iter {
+            self.insert(item);
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

@@ -293,6 +293,20 @@ where
     }
 }
 
+impl<K, V, S, P> Extend<(K, V)> for GenericHashMultiMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
+        for (k, v) in iter {
+            self.insert(k, v);
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
