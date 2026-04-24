@@ -64,6 +64,13 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 2.11: Companion collection types.** Added four new types:
+  `PBag<A>` (persistent multiset backed by HashMap<A, usize>),
+  `Atom<T>` (thread-safe atomic state holder wrapping arc-swap, behind
+  `atom` feature flag), `HashMultiMap<K, V>` (persistent multimap backed
+  by HashMap<K, HashSet<V>>), `InsertionOrderMap<K, V>` (insertion-ordered
+  map backed by HashMap<K, usize> + OrdMap<usize, (K, V)>).
+
 - **[2026-04-24] 2.7: General merge.** Added `merge_with` to OrdMap and
   HashMap. Takes three closures (left-only, both, right-only) each
   returning `Option<V3>` — subsumes union_with, intersection_with,
@@ -201,10 +208,10 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — items 2.2–2.7, 2.10 complete, 2.8/2.9 substantially complete
-(core methods done, lower-priority items deferred). Remaining: 2.1 (RRB
-concat fix), 2.11 (companion types). Phase 3 item 3.5 complete. Items
-3.1–3.4 and 3.6 unblocked.
+Phase 2 — items 2.2–2.7, 2.10, 2.11 complete, 2.8/2.9 substantially
+complete (core methods done, lower-priority items deferred). Remaining:
+2.1 (RRB concat fix). Phase 3 item 3.5 complete. Items 3.1–3.4 and 3.6
+unblocked.
 
 ---
 
