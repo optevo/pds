@@ -120,7 +120,11 @@ caught by review. They are listed because they recur in AI-assisted development.
   it. When touching code near an unsafe block, check whether the safe
   alternative is viable — if it is, replace the unsafe and verify with
   tests. Unsafe blocks that must remain require a `// SAFETY:` comment
-  documenting the invariant. See also Phase 3.2 (unsafe audit).
+  documenting the invariant and a `debug_assert!` checking the
+  precondition where feasible (e.g. pointer non-null, index in-bounds).
+  Debug assertions compile to nothing in release builds, so they do not
+  affect benchmarks or production performance.
+  See also Phase 3.2 (unsafe audit).
 - **No undeclared dependencies.** NEVER add a crate to `Cargo.toml` that is
   not already present, without explicit approval. Consult `Cargo.toml` for
   the authoritative list of available crates and their pinned versions; do
