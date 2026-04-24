@@ -68,12 +68,11 @@ Two devShells are available:
   highlight Rust-specific choices where they differ from the obvious approach.
 - Use glossary terminology (`docs/glossary.md`) — do not introduce synonyms.
 
-### Upstream-first
+### Change discipline
 
-Every change should be structured as an independent, upstreamable PR: small,
-focused, well-tested, with a clear commit message. Avoid coupling unrelated
-changes. Breaking changes are batched into v2.0.0 (Phase 5 of the
-implementation plan).
+Every change should be small, focused, well-tested, with a clear commit
+message. Avoid coupling unrelated changes. Breaking changes are batched
+into v2.0.0 (Phase 5 of the implementation plan).
 
 ### Compiler and clippy warnings
 
