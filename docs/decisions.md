@@ -170,3 +170,40 @@ item 3.3 (Transient/Builder API), not 3.1.
 3.1 is closed. The sole-owner mutation performance win is redirected to
 3.3 (Transient/Builder), which takes explicit ownership before bulk
 mutation. No code changes needed for 3.1.
+
+---
+
+## DEC-005: 4.1 Vector prefix buffer — already implemented
+
+**Date:** 2026-04-24
+**Status:** Accepted
+
+**Context:**
+Plan item 4.1 proposed adding a prefix (head) buffer to the RRB tree to
+give O(1) amortised push_front symmetric with push_back. The description
+stated "prepend still requires tree modification in many cases" and cited
+Scala 2.13's 2-3× improvement from their finger tree rewrite.
+
+**Decision:**
+Mark 4.1 as already implemented. The RRB tree's 4-buffer structure
+(outer_f, inner_f, middle, inner_b, outer_b) already provides symmetric
+front and back buffers. push_front works identically to push_back: fill
+outer buffer, swap to inner buffer, push old inner to the middle tree
+once every CHUNK_SIZE operations. Benchmarked at 100K elements:
+push_front 444µs vs push_back 432µs (~3% difference, within noise).
+
+The plan's description was based on an incorrect assumption about the
+existing architecture. Scala 2.13's improvement was relative to their
+old Vector which had only a tail buffer — imbl already has the
+equivalent of Scala 2.13's improved structure.
+
+**Alternatives considered:**
+- Implement a different prefix buffer scheme (e.g. Hinze-Paterson
+  finger tree style) — unnecessary since existing buffers already work.
+- Optimise the minor left-side push_chunk asymmetry (size table
+  conversion for non-full left-edge nodes) — too invasive for a ~3%
+  difference.
+
+**Consequences:**
+4.1 is closed. No code changes needed. The existing 4-buffer structure
+is documented in docs/architecture.md.

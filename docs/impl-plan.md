@@ -87,6 +87,16 @@ single v8.0.0 release in Phase 5.
   methods. Added `concat_depth_bounded` and `concat_depth_equal_sized`
   regression tests verifying O(log n) height for repeated concatenation.
 
+- **[2026-04-24] 4.1: Vector prefix buffer — already implemented.**
+  Investigation revealed the 4-buffer RRB structure (outer_f, inner_f,
+  middle, inner_b, outer_b) already provides symmetric O(1) amortised
+  push_front and push_back. Benchmarked at 100K elements: push_front
+  444µs vs push_back 432µs (~3% difference). The plan description was
+  based on an incorrect assumption that front buffers were absent or
+  asymmetric. Scala 2.13's improvement was relative to their old
+  implementation which lacked front buffers entirely — imbl already has
+  them. No code changes needed.
+
 - **[2026-04-24] 3.6: Pointer-aware subtree skipping in diff.**
   Rewrote HashMap and HashSet `DiffIter` from iterate-and-lookup to
   simultaneous HAMT tree walk. At each node, `Entry::ptr_eq` checks
@@ -276,18 +286,16 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — all items complete. Phase 3:
-3.1 resolved (already handled by Arc::make_mut — see DEC-004).
-3.2 complete (unsafe audit — 3 removals, 16 documented with SAFETY comments).
-3.4 partially complete (par_iter, FromParallelIterator, ParallelExtend
-done for all four hash/ord types; par_iter_mut done for HashMap;
-par_sort/par_sort_by done for Vector; parallel bulk ops remaining —
-deferred as it requires tree-level parallelism for meaningful speedup).
-3.5 complete. 3.6 complete (HashMap/HashSet simultaneous HAMT walk,
-OrdMap upstream `advance_skipping_shared`, Vector Focus-based chunk
-pointer comparison). Remaining Phase 3: 3.3 (transient/builder,
-deferred — thin wrapper provides no benefit without owned-node
-internals, depends on 3.1 which is resolved). Next: Phase 4.
+Phase 3 effectively complete. 3.1 resolved (DEC-004). 3.2 complete.
+3.4 partially complete (par_iter/FromParallelIterator/ParallelExtend
+done for all hash/ord types; par_iter_mut for HashMap; par_sort for
+Vector; parallel bulk ops deferred — needs tree-level parallelism).
+3.5 complete. 3.6 complete (all collection types). 3.3 deferred (thin
+wrapper provides no benefit without owned-node internals). Phase 4:
+4.1 resolved — 4-buffer structure already provides symmetric O(1)
+amortised push_front/push_back (benchmarked: ~3% difference at 100K
+elements). 4.2 (CHAMP prototype) and 4.4 (Merkle caching) remaining.
+Next: Phase 4 or Phase 5.
 
 ---
 
