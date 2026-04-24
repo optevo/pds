@@ -1100,3 +1100,115 @@ DEC-015, and DEC-019.
   removed", 4.7 step referencing champ files removed, 6.8 and 6.9
   cross-references to dead items cleaned up, dependency map updated.
 - Code remains accessible via git history if ever needed.
+
+## DEC-021: kv_merkle_hash — O(1) positive equality for HashMap {#sec:dec-021}
+
+**Date:** 2026-04-25
+**Status:** Accepted
+
+**Context:**
+HashMap already had per-node `merkle_hash` on HAMT nodes (key-only), but
+comparing maps still required O(n) element-wise iteration. Adding a
+value-aware Merkle hash enables O(1) positive equality — if two maps have
+the same kv_merkle_hash, they are equal without checking elements.
+
+**Decision:**
+Add `kv_merkle_hash: u64` to `GenericHashMap`. Maintained incrementally on
+`insert`/`remove` when `V: Hash`. Contribution per entry:
+`fmix64(key_hash.wrapping_add(value_hash))`, accumulated via commutative
+addition (order-independent). Two-tier internal API: public methods require
+`V: Hash` and maintain the hash; internal `_invalidate_kv` helpers don't
+require `V: Hash` and mark the hash invalid.
+
+**Alternatives considered:**
+- **Key-only Merkle** — already existed. Cannot detect value changes, so
+  cannot skip element-wise comparison.
+- **Require V: Hash everywhere** — too viral. Would propagate to `partition`,
+  `merge_with`, serialisation, and all internal callers. The two-tier
+  approach confines `V: Hash` to the public insert/remove surface.
+
+**Consequences:**
+- `V: Hash` added to public `insert`, `remove`, `From<Vec>`, `From<BTreeMap>`,
+  `FromIterator`, `Extend`, serde `Deserialize`, quickcheck `Arbitrary`,
+  `arbitrary::Arbitrary`, proptest `Arbitrary`, rayon `FromParallelIterator`
+  and `ParallelExtend`.
+- Internal callers (set operations, `hash_multimap`, `bincode`) use
+  invalidating helpers — no `V: Hash` required.
+- Positive equality check in `PartialEq::eq` only fires when both maps have
+  valid kv_merkle and the same hasher instance (pointer equality on
+  `RandomState`).
+
+## DEC-022: Vector per-node lazy Merkle hashing {#sec:dec-022}
+
+**Date:** 2026-04-25
+**Status:** Accepted
+
+**Context:**
+Vector equality was always O(n) element-wise comparison. For large vectors
+that share most of their structure (common with persistent data structures),
+this is wasteful — subtrees that haven't been modified don't need comparison.
+
+**Decision:**
+Two-level lazy Merkle scheme:
+
+1. **Node level** (`nodes/rrb.rs`): Each `Node<A, P>` gets `merkle: AtomicU64`.
+   Sentinel `u64::MAX` = "not computed". Computed lazily on first request;
+   cached until mutation. `AtomicU64` with `Relaxed` ordering — concurrent
+   computations are benign (deterministic hash). Hash is position-sensitive:
+   `h = h * PRIME + child_hash` so `[a,b] ≠ [b,a]`.
+
+2. **Vector level** (`vector/mod.rs`): `merkle_hash: u64` + `merkle_valid: bool`
+   on `GenericVector`. Invalidated by any `&mut self` method. `recompute_merkle()`
+   combines all five RRB segments (outer_f, inner_f, middle tree, inner_b,
+   outer_b). The middle tree's hash is lazy — only modified subtrees are
+   recomputed, giving O(k log n) cost where k is modified nodes.
+
+Positive equality in `PartialEq::eq`: if both vectors have valid Merkle and
+matching hashes (and same length), return `true` without element comparison.
+
+**Alternatives considered:**
+- **Eager hash maintenance** — would require `A: Hash` on every mutation
+  method. Too viral for a library type. Lazy is strictly better: only paid
+  when explicitly requested.
+- **Vector-level only (no per-node)** — loses the key benefit. Invalidation
+  would require recomputing the entire O(n) hash, no subtree skipping.
+- **Separate Merkle wrapper type** — adds API complexity. The `merkle_valid`
+  bool + lazy recompute is zero-cost when not used.
+
+**Consequences:**
+- 8 bytes (`AtomicU64`) added per RRB node. For a 10k-element vector with
+  ~160 internal nodes, this is ~1.3 KB overhead.
+- 9 bytes (`u64` + `bool`) added per `GenericVector` instance.
+- No `A: Hash` requirement on any existing method. Hash bound only on
+  `recompute_merkle()` and `merkle_hash()`.
+- Positive equality is probabilistic (64-bit hash). See DEC-023 for the
+  threshold policy.
+
+## DEC-023: Merkle positive equality requires ≥64-bit hash width {#sec:dec-023}
+
+**Date:** 2026-04-25
+**Status:** Accepted
+
+**Context:**
+Merkle-based positive equality assumes hash collisions are astronomically
+unlikely. At 64 bits this holds (~1/2^64 per comparison). If the HashWidth
+trait (plan item 4.7) introduces smaller hash widths (e.g. 32-bit for
+memory savings), the birthday-bound collision probability becomes
+non-negligible (~65k entries for 50% collision chance at 32 bits).
+
+**Decision:**
+Positive equality shortcuts (in `PartialEq::eq` for HashMap, HashSet, and
+Vector) must only fire when the effective Merkle hash width is ≥ 64 bits.
+Currently all Merkle hashes are `u64`, so the check is always satisfied.
+When HashWidth is implemented, add a compile-time or runtime guard.
+
+**Alternatives considered:**
+- **Always allow positive equality regardless of width** — unacceptable
+  false-positive risk at 32 bits.
+- **Only support 64-bit Merkle** — overly restrictive. 32-bit nodes can
+  still benefit from Merkle for *negative* checks (different hash ⇒
+  definitely different) and diff acceleration, just not positive equality.
+
+**Consequences:**
+- HashWidth implementation must expose a mechanism to query hash width.
+- Positive equality guards must be updated when HashWidth lands.

@@ -36,6 +36,7 @@ use core::ops::{Add, Index, IndexMut};
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
 
+use crate::config::{MERKLE_HASH_BITS, MERKLE_POSITIVE_EQ_MIN_BITS};
 use crate::hashset::GenericHashSet;
 use crate::nodes::hamt::{
     fmix64, hash_key, Drain as NodeDrain, Entry as NodeEntry, HashBits, HashValue,
@@ -601,9 +602,10 @@ where
                     if a.merkle_hash != b.merkle_hash {
                         return false;
                     }
-                    // KV Merkle positive check: same key+value Merkle → equal
-                    // with probability 1 − 2⁻⁶⁴ (below hardware error rates).
-                    if self.kv_merkle_valid
+                    // KV Merkle positive check: same key+value Merkle → equal.
+                    // Only safe when hash width ≥ 64 bits (DEC-023).
+                    if MERKLE_HASH_BITS >= MERKLE_POSITIVE_EQ_MIN_BITS
+                        && self.kv_merkle_valid
                         && other.kv_merkle_valid
                         && self.kv_merkle_hash == other.kv_merkle_hash
                     {

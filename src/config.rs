@@ -37,3 +37,18 @@ pub(crate) const HASH_LEVEL_SIZE: usize = 3;
 // 5 is arguably better overall.
 #[cfg(not(feature = "small-chunks"))]
 pub(crate) const HASH_LEVEL_SIZE: usize = 5;
+
+/// Width of Merkle hashes in bits. Must be ≥ 64 for positive equality
+/// shortcuts to be safe (collision probability ~2⁻⁶⁴). See DEC-023.
+pub(crate) const MERKLE_HASH_BITS: usize = 64;
+
+/// Minimum hash width (bits) for Merkle-based positive equality.
+/// When `MERKLE_HASH_BITS < MERKLE_POSITIVE_EQ_MIN_BITS`, positive
+/// equality checks are disabled — only negative checks (different
+/// hash ⇒ definitely different) remain safe.
+///
+/// **Do not set below 64.** At 32 bits the birthday-bound collision
+/// probability is ~1/65k entries — far too high for correctness.
+/// For super-conservative deployments, increase to 128 (requires
+/// widening Merkle hashes to u128).
+pub(crate) const MERKLE_POSITIVE_EQ_MIN_BITS: usize = 64;

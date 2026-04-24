@@ -3,18 +3,54 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 use alloc::vec::Vec;
+use core::hash::{Hash, Hasher};
 use core::mem::replace;
 use core::ops::Range;
+use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use archery::{SharedPointer, SharedPointerKind};
 
 use crate::nodes::chunk::{Chunk, CHUNK_SIZE};
+use crate::nodes::hamt::fmix64;
 use crate::util::clone_ref;
 use crate::util::Side::{self, Left, Right};
 
 use self::Entry::*;
 
 pub(crate) const NODE_SIZE: usize = CHUNK_SIZE;
+
+/// Sentinel value meaning "Merkle hash not yet computed".
+const MERKLE_NOT_COMPUTED: u64 = u64::MAX;
+
+/// Prime multiplier for position-sensitive Merkle combining.
+/// Ensures [a, b] hashes differently from [b, a].
+pub(crate) const MERKLE_PRIME: u64 = 0x517c_c1b7_2722_0a95;
+
+/// Deterministic hasher for Merkle computation. FNV-1a variant.
+struct MerkleElementHasher(u64);
+
+impl Hasher for MerkleElementHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 ^= b as u64;
+            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+}
+
+/// Hash a single element using the deterministic Merkle hasher.
+#[inline]
+pub(crate) fn hash_element<A: Hash>(a: &A) -> u64 {
+    let mut h = MerkleElementHasher(0xcbf2_9ce4_8422_2325); // FNV offset basis
+    a.hash(&mut h);
+    fmix64(h.finish())
+}
 
 #[derive(Debug)]
 enum Size<P: SharedPointerKind> {
@@ -230,12 +266,18 @@ impl<A: Clone, P: SharedPointerKind> Entry<A, P> {
 
 pub(crate) struct Node<A, P: SharedPointerKind> {
     children: Entry<A, P>,
+    /// Cached Merkle hash of this subtree. `MERKLE_NOT_COMPUTED` means
+    /// the hash has not been computed yet or was invalidated by mutation.
+    /// Uses `AtomicU64` for thread-safe lazy caching — concurrent
+    /// computations are benign since the hash is deterministic.
+    merkle: AtomicU64,
 }
 
 impl<A: Clone, P: SharedPointerKind> Clone for Node<A, P> {
     fn clone(&self) -> Self {
         Node {
             children: self.children.clone(),
+            merkle: AtomicU64::new(self.merkle.load(Relaxed)),
         }
     }
 }
@@ -248,7 +290,10 @@ impl<A, P: SharedPointerKind> Default for Node<A, P> {
 
 impl<A, P: SharedPointerKind> Node<A, P> {
     pub(crate) fn new() -> Self {
-        Node { children: Empty }
+        Node {
+            children: Empty,
+            merkle: AtomicU64::new(0), // empty node has hash 0
+        }
     }
 
     pub(crate) fn parent(level: usize, children: Chunk<Self>) -> Self {
@@ -272,16 +317,19 @@ impl<A, P: SharedPointerKind> Node<A, P> {
         }
         Node {
             children: Nodes(size, SharedPointer::new(children)),
+            merkle: AtomicU64::new(MERKLE_NOT_COMPUTED),
         }
     }
 
     pub(crate) fn clear_node(&mut self) {
         self.children = Empty;
+        *self.merkle.get_mut() = 0;
     }
 
     pub(crate) fn from_chunk(level: usize, chunk: SharedPointer<Chunk<A>, P>) -> Self {
         let node = Node {
             children: Values(chunk),
+            merkle: AtomicU64::new(MERKLE_NOT_COMPUTED),
         };
         node.elevate(level)
     }
@@ -296,6 +344,7 @@ impl<A, P: SharedPointerKind> Node<A, P> {
         let children = SharedPointer::new(Chunk::unit(node));
         Node {
             children: Nodes(size, children),
+            merkle: AtomicU64::new(MERKLE_NOT_COMPUTED),
         }
     }
 
@@ -307,6 +356,7 @@ impl<A, P: SharedPointerKind> Node<A, P> {
                 let children = SharedPointer::new(Chunk::pair(left, right));
                 Nodes(Size::Size(left_len + right_len), children)
             },
+            merkle: AtomicU64::new(MERKLE_NOT_COMPUTED),
         }
     }
 
@@ -332,6 +382,7 @@ impl<A, P: SharedPointerKind> Node<A, P> {
                 let children = Chunk::pair(self, right);
                 Nodes(size, SharedPointer::new(children))
             },
+            merkle: AtomicU64::new(MERKLE_NOT_COMPUTED),
         }
     }
 
@@ -592,8 +643,67 @@ impl<A, P: SharedPointerKind> Node<A, P> {
     // }
 }
 
+impl<A: Hash, P: SharedPointerKind> Node<A, P> {
+    /// Get the cached Merkle hash of this subtree, computing it lazily
+    /// if not yet computed. The hash is position-sensitive: `[a, b]`
+    /// and `[b, a]` produce different hashes.
+    ///
+    /// Thread-safe: concurrent calls compute the same deterministic
+    /// value; AtomicU64 with Relaxed ordering is sufficient.
+    pub(crate) fn merkle_hash(&self) -> u64 {
+        let cached = self.merkle.load(Relaxed);
+        if cached != MERKLE_NOT_COMPUTED {
+            return cached;
+        }
+        let hash = self.compute_merkle();
+        self.merkle.store(hash, Relaxed);
+        hash
+    }
+
+    fn compute_merkle(&self) -> u64 {
+        let h = match &self.children {
+            Values(chunk) => {
+                let mut h: u64 = 0;
+                for elem in chunk.iter() {
+                    h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(hash_element(elem));
+                }
+                h
+            }
+            Nodes(_, children) => {
+                let mut h: u64 = 0;
+                for child in children.iter() {
+                    let child_hash = child.merkle_hash();
+                    h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(child_hash);
+                }
+                h
+            }
+            Empty => 0,
+        };
+        // Avoid colliding with the sentinel value.
+        if h == MERKLE_NOT_COMPUTED { 0 } else { h }
+    }
+}
+
+/// Hash a `Chunk<A>` using the same position-sensitive scheme as node
+/// Merkle. Used for the RRB buffer chunks (outer_f, inner_f, etc.)
+/// which live outside the tree.
+pub(crate) fn chunk_merkle_hash<A: Hash>(chunk: &Chunk<A>) -> u64 {
+    let mut h: u64 = 0;
+    for elem in chunk.iter() {
+        h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(hash_element(elem));
+    }
+    if h == MERKLE_NOT_COMPUTED { 0 } else { h }
+}
+
 impl<A: Clone, P: SharedPointerKind> Node<A, P> {
+    /// Invalidate the cached Merkle hash. Called on mutation.
+    #[inline]
+    fn invalidate_merkle(&mut self) {
+        *self.merkle.get_mut() = MERKLE_NOT_COMPUTED;
+    }
+
     pub(crate) fn index_mut(&mut self, level: usize, index: usize) -> &mut A {
+        self.invalidate_merkle();
         if level == 0 {
             &mut self.children.unwrap_values_mut()[index]
         } else {
@@ -610,6 +720,7 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
         base: usize,
         index: usize,
     ) -> (Range<usize>, *mut Chunk<A>) {
+        self.invalidate_merkle();
         if level == 0 {
             (
                 base..(base + self.children.len()),
@@ -626,6 +737,7 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
     }
 
     fn push_child_node(&mut self, side: Side, child: Node<A, P>) {
+        self.invalidate_merkle();
         let children = self.children.unwrap_nodes_mut();
         match side {
             Left => children.push_front(child),
@@ -634,6 +746,7 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
     }
 
     fn pop_child_node(&mut self, side: Side) -> Node<A, P> {
+        self.invalidate_merkle();
         let children = self.children.unwrap_nodes_mut();
         match side {
             Left => children.pop_front(),
@@ -650,6 +763,7 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
         if chunk.is_empty() {
             return PushResult::Done;
         }
+        self.invalidate_merkle();
         let is_full = self.is_full();
         if level == 0 {
             if self.children.is_empty_node() {
@@ -791,6 +905,7 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
         if self.is_empty() {
             return PopResult::Empty;
         }
+        self.invalidate_merkle();
         if level == 0 {
             // should only get here if the tree is just one leaf node
             match replace(&mut self.children, Empty) {
@@ -845,6 +960,7 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
     }
 
     pub(crate) fn split(&mut self, level: usize, drop_side: Side, index: usize) -> SplitResult {
+        self.invalidate_merkle();
         if index == 0 && drop_side == Side::Left {
             // Dropped nothing
             return SplitResult::Dropped(0);
@@ -969,6 +1085,8 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
         } else if right.children.is_empty_node() {
             Self::single_parent(left)
         } else {
+            left.invalidate_merkle();
+            right.invalidate_merkle();
             {
                 let left_vals = left.children.unwrap_values_mut();
                 let left_len = left_vals.len();
@@ -1042,6 +1160,7 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
             if chunk.is_full() {
                 result.push(Node {
                     children: Values(SharedPointer::new(chunk)),
+                    merkle: AtomicU64::new(MERKLE_NOT_COMPUTED),
                 });
                 chunk = Chunk::new();
             }
@@ -1049,6 +1168,7 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
         if !chunk.is_empty() {
             result.push(Node {
                 children: Values(SharedPointer::new(chunk)),
+                merkle: AtomicU64::new(MERKLE_NOT_COMPUTED),
             });
         }
         result
@@ -1154,6 +1274,8 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
         if level == 0 {
             (Self::merge_leaves(left, right), 1)
         } else {
+            left.invalidate_merkle();
+            right.invalidate_merkle();
             let left_last =
                 if let Entry::Nodes(ref mut size, ref mut children) = left.children {
                     let node = SharedPointer::make_mut(children).pop_back();

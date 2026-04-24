@@ -59,8 +59,11 @@ use core::ops::{Add, Index, IndexMut, RangeBounds};
 use archery::{SharedPointer, SharedPointerKind};
 use imbl_sized_chunks::InlineArray;
 
+use crate::config::{MERKLE_HASH_BITS, MERKLE_POSITIVE_EQ_MIN_BITS};
 use crate::nodes::chunk::{Chunk, CHUNK_SIZE};
-use crate::nodes::rrb::{Node, PopResult, PushResult, SplitResult};
+use crate::nodes::rrb::{
+    chunk_merkle_hash, hash_element, Node, PopResult, PushResult, SplitResult, MERKLE_PRIME,
+};
 use crate::shared_ptr::DefaultSharedPtr;
 use crate::sort;
 use crate::util::{clone_ref, to_range, Side};
@@ -153,6 +156,13 @@ pub type Vector<A> = GenericVector<A, DefaultSharedPtr>;
 /// [VecDeque]: https://doc.rust-lang.org/std/collections/struct.VecDeque.html
 pub struct GenericVector<A, P: SharedPointerKind> {
     vector: VectorInner<A, P>,
+    /// Cached Merkle hash of the entire vector. Position-sensitive:
+    /// `[a, b]` and `[b, a]` produce different hashes. Enables O(1)
+    /// positive equality when both vectors have valid hashes.
+    merkle_hash: u64,
+    /// Whether `merkle_hash` is current. Invalidated by any mutation.
+    /// Call `recompute_merkle()` to restore.
+    merkle_valid: bool,
 }
 
 enum VectorInner<A, P: SharedPointerKind> {
@@ -187,6 +197,16 @@ impl<A, P: SharedPointerKind> Clone for RRB<A, P> {
 }
 
 impl<A, P: SharedPointerKind> GenericVector<A, P> {
+    /// Wrap a `VectorInner` into a `GenericVector` with invalidated Merkle.
+    #[inline]
+    fn from_inner(vector: VectorInner<A, P>) -> Self {
+        Self {
+            vector,
+            merkle_hash: 0,
+            merkle_valid: false,
+        }
+    }
+
     /// True if a vector is a full inline or single chunk, ie. must be promoted
     /// to grow further.
     fn needs_promotion(&self) -> bool {
@@ -255,6 +275,8 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
     pub fn new() -> Self {
         Self {
             vector: Inline(InlineArray::new()),
+            merkle_hash: 0,
+            merkle_valid: true,
         }
     }
 
@@ -604,6 +626,8 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
     pub fn clear(&mut self) {
         if !self.is_empty() {
             self.vector = Inline(InlineArray::new());
+            self.merkle_hash = 0;
+            self.merkle_valid = true;
         }
     }
 
@@ -703,14 +727,10 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         if InlineArray::<A, RRB<A, P>>::CAPACITY > 0 {
             let mut array = InlineArray::new();
             array.push(a);
-            Self {
-                vector: Inline(array),
-            }
+            Self::from_inner(Inline(array))
         } else {
             let chunk = SharedPointer::new(Chunk::unit(a));
-            Self {
-                vector: Single(chunk),
-            }
+            Self::from_inner(Single(chunk))
         }
     }
 
@@ -776,6 +796,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         if index >= self.len() {
             return None;
         }
+        self.merkle_valid = false;
 
         match &mut self.vector {
             Inline(chunk) => chunk.get_mut(index),
@@ -847,6 +868,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     #[inline]
     #[must_use]
     pub fn focus_mut(&mut self) -> FocusMut<'_, A, P> {
+        self.merkle_valid = false;
         FocusMut::new(self)
     }
 
@@ -856,6 +878,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     #[inline]
     #[must_use]
     pub fn iter_mut(&mut self) -> IterMut<'_, A, P> {
+        self.merkle_valid = false;
         IterMut::new(self)
     }
 
@@ -871,6 +894,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     #[inline]
     #[must_use]
     pub fn leaves_mut(&mut self) -> ChunksMut<'_, A, P> {
+        self.merkle_valid = false;
         ChunksMut::new(self)
     }
 
@@ -935,6 +959,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// assert_eq!(vector![4, 5, 6, 7], vec);
     /// ```
     pub fn push_front(&mut self, value: A) {
+        self.merkle_valid = false;
         if self.needs_promotion() {
             self.promote_back();
         }
@@ -960,6 +985,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// assert_eq!(vector![1, 2, 3, 4], vec);
     /// ```
     pub fn push_back(&mut self, value: A) {
+        self.merkle_valid = false;
         if self.needs_promotion() {
             self.promote_front();
         }
@@ -1208,6 +1234,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         if self.is_empty() {
             None
         } else {
+            self.merkle_valid = false;
             match &mut self.vector {
                 Inline(chunk) => chunk.remove(0),
                 Single(chunk) => Some(SharedPointer::make_mut(chunk).pop_front()),
@@ -1233,6 +1260,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         if self.is_empty() {
             None
         } else {
+            self.merkle_valid = false;
             match &mut self.vector {
                 Inline(chunk) => chunk.pop(),
                 Single(chunk) => Some(SharedPointer::make_mut(chunk).pop_back()),
@@ -1262,6 +1290,8 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
             *self = other;
             return;
         }
+
+        self.merkle_valid = false;
 
         self.promote_inline();
         other.promote_inline();
@@ -1434,16 +1464,13 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     #[must_use]
     pub fn split_off(&mut self, index: usize) -> Self {
         assert!(index <= self.len());
+        self.merkle_valid = false;
 
         match &mut self.vector {
-            Inline(chunk) => Self {
-                vector: Inline(chunk.split_off(index)),
-            },
-            Single(chunk) => Self {
-                vector: Single(SharedPointer::new(
-                    SharedPointer::make_mut(chunk).split_off(index),
-                )),
-            },
+            Inline(chunk) => Self::from_inner(Inline(chunk.split_off(index))),
+            Single(chunk) => Self::from_inner(Single(SharedPointer::new(
+                SharedPointer::make_mut(chunk).split_off(index),
+            ))),
             Full(tree) => {
                 let mut local_index = index;
 
@@ -1460,9 +1487,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
                     };
                     tree.length = index;
                     tree.middle_level = 0;
-                    return Self {
-                        vector: Full(right),
-                    };
+                    return Self::from_inner(Full(right));
                 }
 
                 local_index -= tree.outer_f.len();
@@ -1481,9 +1506,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
                     tree.length = index;
                     tree.middle_level = 0;
                     swap(&mut tree.outer_b, &mut tree.inner_f);
-                    return Self {
-                        vector: Full(right),
-                    };
+                    return Self::from_inner(Full(right));
                 }
 
                 local_index -= tree.inner_f.len();
@@ -1531,9 +1554,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
                     tree.length = index;
                     tree.prune();
                     right.prune();
-                    return Self {
-                        vector: Full(right),
-                    };
+                    return Self::from_inner(Full(right));
                 }
 
                 local_index -= tree.middle.len();
@@ -1548,18 +1569,14 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
                     };
                     tree.length = index;
                     swap(&mut tree.outer_b, &mut tree.inner_b);
-                    return Self {
-                        vector: Full(right),
-                    };
+                    return Self::from_inner(Full(right));
                 }
 
                 local_index -= tree.inner_b.len();
 
                 let ob2 = SharedPointer::make_mut(&mut tree.outer_b).split_off(local_index);
                 tree.length = index;
-                Self {
-                    vector: Single(SharedPointer::new(ob2)),
-                }
+                Self::from_inner(Single(SharedPointer::new(ob2)))
             }
         }
     }
@@ -1645,6 +1662,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     ///
     /// Time: O(log n)
     pub fn insert(&mut self, index: usize, value: A) {
+        self.merkle_valid = false;
         if index == 0 {
             return self.push_front(value);
         }
@@ -1689,6 +1707,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// [slice]: #method.slice
     pub fn remove(&mut self, index: usize) -> A {
         assert!(index < self.len());
+        self.merkle_valid = false;
         match &mut self.vector {
             Inline(chunk) => chunk.remove(index).unwrap(),
             Single(chunk) => SharedPointer::make_mut(chunk).remove(index),
@@ -1914,6 +1933,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         if self.len() <= 1 {
             return;
         }
+        self.merkle_valid = false;
         let mut vec: Vec<A> = core::mem::take(self).into_iter().collect();
         vec.par_sort_unstable_by(|a, b| cmp(a, b));
         *self = vec.into_iter().collect();
@@ -2102,7 +2122,73 @@ impl<A: Clone, P: SharedPointerKind> Clone for GenericVector<A, P> {
                 Single(chunk) => Single(chunk.clone()),
                 Full(tree) => Full(tree.clone()),
             },
+            merkle_hash: self.merkle_hash,
+            merkle_valid: self.merkle_valid,
         }
+    }
+}
+
+impl<A, P: SharedPointerKind> GenericVector<A, P> {
+    /// Whether the cached Merkle hash is current.
+    ///
+    /// Returns `false` after any mutation. Call [`recompute_merkle`] to
+    /// restore validity.
+    #[inline]
+    #[must_use]
+    pub fn merkle_valid(&self) -> bool {
+        self.merkle_valid
+    }
+}
+
+impl<A: Clone + Hash, P: SharedPointerKind> GenericVector<A, P> {
+    /// Recompute the Merkle hash from the tree structure.
+    ///
+    /// The hash is position-sensitive: `[a, b]` and `[b, a]` produce
+    /// different hashes. For the `Full` representation this combines
+    /// the hashes of all five RRB segments (outer_f, inner_f, middle,
+    /// inner_b, outer_b) using the same prime-multiply scheme as the
+    /// per-node hashes. The middle tree's hash is computed lazily —
+    /// only modified subtrees are recomputed.
+    ///
+    /// Time: O(k log n) where k is the number of modified nodes since
+    /// the last computation. O(1) when no nodes have changed.
+    pub fn recompute_merkle(&mut self) {
+        if self.merkle_valid {
+            return;
+        }
+        self.merkle_hash = match &self.vector {
+            Inline(chunk) => {
+                let mut h: u64 = 0;
+                for elem in chunk.iter() {
+                    h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(hash_element(elem));
+                }
+                h
+            }
+            Single(chunk) => chunk_merkle_hash(chunk),
+            Full(tree) => {
+                let mut h: u64 = 0;
+                // Combine the five RRB segments in order.
+                h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(chunk_merkle_hash(&tree.outer_f));
+                h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(chunk_merkle_hash(&tree.inner_f));
+                h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(tree.middle.merkle_hash());
+                h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(chunk_merkle_hash(&tree.inner_b));
+                h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(chunk_merkle_hash(&tree.outer_b));
+                h
+            }
+        };
+        self.merkle_valid = true;
+    }
+
+    /// Get the Merkle hash, recomputing if necessary.
+    ///
+    /// Equivalent to calling [`recompute_merkle`] then reading the
+    /// cached value, but expressed as a single call.
+    ///
+    /// Time: O(k log n) amortised — see [`recompute_merkle`].
+    #[inline]
+    pub fn merkle_hash(&mut self) -> u64 {
+        self.recompute_merkle();
+        self.merkle_hash
     }
 }
 
@@ -2122,7 +2208,23 @@ impl<A: Debug, P: SharedPointerKind> Debug for GenericVector<A, P> {
 
 impl<A: PartialEq, P: SharedPointerKind> PartialEq for GenericVector<A, P> {
     fn eq(&self, other: &Self) -> bool {
-        self.ptr_eq(other) || (self.len() == other.len() && self.iter().eq(other.iter()))
+        if self.ptr_eq(other) {
+            return true;
+        }
+        if self.len() != other.len() {
+            return false;
+        }
+        // Positive Merkle check: if both hashes are valid and equal,
+        // the vectors are equal without element-wise comparison.
+        // Only safe when Merkle hash width ≥ 64 bits (DEC-023).
+        if MERKLE_HASH_BITS >= MERKLE_POSITIVE_EQ_MIN_BITS
+            && self.merkle_valid
+            && other.merkle_valid
+            && self.merkle_hash == other.merkle_hash
+        {
+            return true;
+        }
+        self.iter().eq(other.iter())
     }
 }
 
@@ -2219,6 +2321,7 @@ impl<A: Clone, P: SharedPointerKind> IndexMut<usize> for GenericVector<A, P> {
     ///
     /// Time: O(log n)
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.merkle_valid = false;
         match self.get_mut(index) {
             Some(value) => value,
             None => panic!("Vector::index_mut: index out of bounds"),
@@ -4208,6 +4311,251 @@ mod test {
                 total,
                 CHUNK_SIZE,
             );
+        }
+    }
+
+    // --- Merkle hash tests ---
+
+    #[test]
+    fn merkle_empty_vector_is_valid() {
+        let v: Vector<i32> = Vector::new();
+        assert!(v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_new_vector_invalidated_after_push() {
+        let mut v: Vector<i32> = Vector::new();
+        v.push_back(1);
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_recompute_makes_valid() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        assert!(!v.merkle_valid());
+        v.recompute_merkle();
+        assert!(v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_identical_vectors_same_hash() {
+        let mut a: Vector<i32> = vector![1, 2, 3, 4, 5];
+        let mut b: Vector<i32> = vector![1, 2, 3, 4, 5];
+        a.recompute_merkle();
+        b.recompute_merkle();
+        assert_eq!(a.merkle_hash, b.merkle_hash);
+    }
+
+    #[test]
+    fn merkle_different_vectors_different_hash() {
+        let mut a: Vector<i32> = vector![1, 2, 3];
+        let mut b: Vector<i32> = vector![1, 2, 4];
+        a.recompute_merkle();
+        b.recompute_merkle();
+        assert_ne!(a.merkle_hash, b.merkle_hash);
+    }
+
+    #[test]
+    fn merkle_order_sensitive() {
+        let mut a: Vector<i32> = vector![1, 2, 3];
+        let mut b: Vector<i32> = vector![3, 2, 1];
+        a.recompute_merkle();
+        b.recompute_merkle();
+        assert_ne!(a.merkle_hash, b.merkle_hash);
+    }
+
+    #[test]
+    fn merkle_clone_preserves_hash() {
+        let mut a: Vector<i32> = vector![1, 2, 3];
+        a.recompute_merkle();
+        let b = a.clone();
+        assert!(b.merkle_valid());
+        assert_eq!(a.merkle_hash, b.merkle_hash);
+    }
+
+    #[test]
+    fn merkle_invalidated_by_set() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        v.set(1, 20);
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_push_front() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        v.push_front(0);
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_push_back() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        v.push_back(4);
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_pop_front() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        v.pop_front();
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_pop_back() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        v.pop_back();
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_append() {
+        let mut a: Vector<i32> = vector![1, 2, 3];
+        a.recompute_merkle();
+        a.append(vector![4, 5]);
+        assert!(!a.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_split_off() {
+        let mut v: Vector<i32> = vector![1, 2, 3, 4, 5];
+        v.recompute_merkle();
+        let right = v.split_off(3);
+        assert!(!v.merkle_valid());
+        assert!(!right.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_insert() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        v.insert(1, 10);
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_remove() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        v.remove(1);
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_get_mut() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        let _ = v.get_mut(1);
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_iter_mut() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        { let _ = v.iter_mut(); }
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_focus_mut() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        { let _ = v.focus_mut(); }
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_invalidated_by_sort() {
+        let mut v: Vector<i32> = vector![3, 1, 2];
+        v.recompute_merkle();
+        v.sort();
+        assert!(!v.merkle_valid());
+    }
+
+    #[test]
+    fn merkle_clear_sets_valid_zero() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        v.recompute_merkle();
+        v.clear();
+        assert!(v.merkle_valid());
+        assert_eq!(v.merkle_hash, 0);
+    }
+
+    #[test]
+    fn merkle_positive_equality() {
+        // Two separately constructed identical vectors with valid
+        // Merkle hashes should compare equal via the Merkle shortcut.
+        let mut a: Vector<i32> = vector![10, 20, 30, 40, 50];
+        let mut b: Vector<i32> = vector![10, 20, 30, 40, 50];
+        a.recompute_merkle();
+        b.recompute_merkle();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn merkle_hash_method_recomputes() {
+        let mut v: Vector<i32> = vector![1, 2, 3];
+        assert!(!v.merkle_valid());
+        let h = v.merkle_hash();
+        assert!(v.merkle_valid());
+        assert_ne!(h, 0); // non-trivial hash
+    }
+
+    #[test]
+    fn merkle_stable_across_recomputation() {
+        let mut v: Vector<i32> = vector![1, 2, 3, 4, 5];
+        let h1 = v.merkle_hash();
+        v.merkle_valid = false; // force recomputation
+        let h2 = v.merkle_hash();
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn merkle_large_vector() {
+        // Test with a vector large enough to use the Full representation.
+        let mut a: Vector<i32> = (0..10000).collect();
+        let mut b: Vector<i32> = (0..10000).collect();
+        let ha = a.merkle_hash();
+        let hb = b.merkle_hash();
+        assert_eq!(ha, hb);
+
+        // Mutate one element — hashes should diverge.
+        b.set(5000, -1);
+        b.recompute_merkle();
+        assert_ne!(ha, b.merkle_hash);
+    }
+
+    proptest! {
+        #[test]
+        fn merkle_proptest_identical_vectors(ref v in vector(i32::ANY, 0..1000)) {
+            let mut a = v.clone();
+            let mut b = v.clone();
+            a.recompute_merkle();
+            b.recompute_merkle();
+            assert_eq!(a.merkle_hash, b.merkle_hash);
+        }
+
+        #[test]
+        fn merkle_proptest_mutation_changes_hash(ref v in vector(i32::ANY, 2..500)) {
+            let mut original = v.clone();
+            original.recompute_merkle();
+            let orig_hash = original.merkle_hash;
+
+            let mut modified = v.clone();
+            // Flip the first element to something different.
+            let first = modified[0];
+            modified.set(0, first.wrapping_add(1));
+            modified.recompute_merkle();
+
+            // Collision is theoretically possible but astronomically
+            // unlikely for a 64-bit hash.
+            assert_ne!(orig_hash, modified.merkle_hash);
         }
     }
 }

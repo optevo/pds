@@ -35,6 +35,7 @@ use core::ops::{Add, Deref, Mul};
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
 
+use crate::config::{MERKLE_HASH_BITS, MERKLE_POSITIVE_EQ_MIN_BITS};
 use crate::nodes::hamt::{
     hash_key, Drain as NodeDrain, Entry as NodeEntry, HashValue, Iter as NodeIter, Node,
     HASH_WIDTH,
@@ -351,7 +352,14 @@ where
                 let a_hasher = &*self.hasher as *const S as *const ();
                 let b_hasher = &*other.hasher as *const S2 as *const ();
                 if a_hasher == b_hasher {
-                    return a.merkle_hash == b.merkle_hash;
+                    // Negative check is always safe: different Merkle → not equal.
+                    if a.merkle_hash != b.merkle_hash {
+                        return false;
+                    }
+                    // Positive check: only safe when hash width ≥ 64 bits (DEC-023).
+                    if MERKLE_HASH_BITS >= MERKLE_POSITIVE_EQ_MIN_BITS {
+                        return true;
+                    }
                 }
             }
             _ => {}

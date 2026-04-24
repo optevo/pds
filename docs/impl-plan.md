@@ -82,6 +82,23 @@ single v8.0.0 release in Phase 5.
   86.4% functions (up from ~79%/76%). Trait audit: core 5 types complete;
   PBag/HashMultiMap/InsertionOrderMap lack IntoIterator (needs named iterators).
 
+- **[2026-04-25] kv_merkle_hash for HashMap (DEC-021).** Added V: Hash
+  key+value Merkle hash for O(1) positive equality. Two-tier API: public
+  insert/remove maintain hash incrementally; internal helpers invalidate.
+  19 unit tests + 2 proptests. Guard: positive equality only when hash
+  width ≥ 64 bits (DEC-023).
+
+- **[2026-04-25] Vector per-node lazy Merkle (DEC-022).** Two-level scheme:
+  AtomicU64 per RRB node (lazy, Relaxed ordering) + merkle_hash/merkle_valid
+  on GenericVector. O(k log n) recomputation where k = modified nodes.
+  Positive equality in PartialEq with hash-width guard (DEC-023).
+  27 unit tests + 2 proptests.
+
+- **[2026-04-25] Merkle hash width guard (DEC-023).** Added
+  MERKLE_HASH_BITS / MERKLE_POSITIVE_EQ_MIN_BITS constants in config.rs.
+  All three positive equality sites (HashMap, HashSet, Vector) guarded.
+  Compile-time elimination when both are 64.
+
 - **[2026-04-25] Demotion edge case regression tests.** Added 12 tests in
   hash/map.rs covering all HAMT node upgrade/demotion paths using LolHasher
   for deterministic hash control. Guards against the proptest flake root cause
