@@ -1224,6 +1224,133 @@ where
         (left, right)
     }
 
+    /// Partition and transform a map into two maps with potentially
+    /// different value types. The closure returns `Ok(v1)` to place
+    /// the entry in the left map, or `Err(v2)` for the right map.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let (small, big): (OrdMap<i32, String>, OrdMap<i32, String>) =
+    ///     map.partition_map(|_k, v| {
+    ///         if *v <= 15 { Ok(format!("small:{v}")) }
+    ///         else { Err(format!("big:{v}")) }
+    ///     });
+    /// assert_eq!(small, ordmap!{1 => "small:10".to_string()});
+    /// assert_eq!(big, ordmap!{2 => "big:20".to_string(), 3 => "big:30".to_string()});
+    /// ```
+    #[must_use]
+    pub fn partition_map<V1, V2, F>(
+        &self,
+        mut f: F,
+    ) -> (GenericOrdMap<K, V1, P>, GenericOrdMap<K, V2, P>)
+    where
+        V1: Clone,
+        V2: Clone,
+        F: FnMut(&K, &V) -> Result<V1, V2>,
+    {
+        let mut left = GenericOrdMap::new();
+        let mut right = GenericOrdMap::new();
+        for (k, v) in self.iter() {
+            match f(k, v) {
+                Ok(v1) => {
+                    left.insert(k.clone(), v1);
+                }
+                Err(v2) => {
+                    right.insert(k.clone(), v2);
+                }
+            }
+        }
+        (left, right)
+    }
+
+    /// Asymmetric difference with a resolver function.
+    ///
+    /// For keys in both `self` and `other`, `f` decides whether to
+    /// keep, modify, or discard the entry. Keys only in `self` are
+    /// kept. Keys only in `other` are discarded.
+    ///
+    /// Time: O(n + m)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let a = ordmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let b = ordmap!{2 => 5, 3 => 50, 4 => 40};
+    /// let result = a.relative_complement_with(&b, |_k, v_self, v_other| {
+    ///     if v_self > v_other { Some(*v_self - *v_other) } else { None }
+    /// });
+    /// assert_eq!(result, ordmap!{1 => 10, 2 => 15});
+    /// ```
+    #[must_use]
+    pub fn relative_complement_with<F>(&self, other: &Self, mut f: F) -> Self
+    where
+        F: FnMut(&K, &V, &V) -> Option<V>,
+    {
+        let mut result = Self::new();
+        let mut it_other = other.iter().peekable();
+
+        for (k, v) in self.iter() {
+            // Advance other iterator past keys less than k
+            while it_other.peek().is_some_and(|(k2, _)| *k2 < k) {
+                it_other.next();
+            }
+            match it_other.peek() {
+                Some((k2, v2)) if *k2 == k => {
+                    if let Some(new_v) = f(k, v, v2) {
+                        result.insert(k.clone(), new_v);
+                    }
+                }
+                _ => {
+                    // Key only in self — keep it
+                    result.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        result
+    }
+
+    /// Thread an accumulator through a key-order traversal, producing
+    /// a new map with transformed values.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let (total, cumulative) = map.map_accum(0, |acc, _k, v| {
+    ///     let new_acc = acc + v;
+    ///     (new_acc, new_acc)
+    /// });
+    /// assert_eq!(total, 60);
+    /// assert_eq!(cumulative, ordmap!{1 => 10, 2 => 30, 3 => 60});
+    /// ```
+    #[must_use]
+    pub fn map_accum<S, V2, F>(&self, init: S, mut f: F) -> (S, GenericOrdMap<K, V2, P>)
+    where
+        V2: Clone,
+        F: FnMut(S, &K, &V) -> (S, V2),
+    {
+        let mut acc = init;
+        let mut result = GenericOrdMap::new();
+        for (k, v) in self.iter() {
+            let (new_acc, v2) = f(acc, k, v);
+            acc = new_acc;
+            result.insert(k.clone(), v2);
+        }
+        (acc, result)
+    }
+
     /// Remove all entries from a map that do not satisfy the given
     /// predicate.
     ///
@@ -3864,5 +3991,90 @@ mod test {
             |_, v| Some(*v),
         );
         assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn partition_map_basic() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let (small, big): (OrdMap<i32, String>, OrdMap<i32, String>) =
+            map.partition_map(|_k, v| {
+                if *v <= 15 {
+                    Ok(format!("small:{v}"))
+                } else {
+                    Err(format!("big:{v}"))
+                }
+            });
+        assert_eq!(small, ordmap! {1 => "small:10".to_string()});
+        assert_eq!(
+            big,
+            ordmap! {2 => "big:20".to_string(), 3 => "big:30".to_string()}
+        );
+    }
+
+    #[test]
+    fn partition_map_all_left() {
+        let map = ordmap! {1 => 1, 2 => 2};
+        let (left, right): (OrdMap<i32, i32>, OrdMap<i32, i32>) =
+            map.partition_map(|_, v| Ok(*v));
+        assert_eq!(left, map);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn partition_map_empty() {
+        let map: OrdMap<i32, i32> = OrdMap::new();
+        let (left, right): (OrdMap<i32, String>, OrdMap<i32, String>) =
+            map.partition_map(|_, _| Ok(String::new()));
+        assert!(left.is_empty());
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn relative_complement_with_basic() {
+        let a = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let b = ordmap! {2 => 5, 3 => 50, 4 => 40};
+        let result = a.relative_complement_with(&b, |_k, v_self, v_other| {
+            if v_self > v_other {
+                Some(*v_self - *v_other)
+            } else {
+                None
+            }
+        });
+        assert_eq!(result, ordmap! {1 => 10, 2 => 15});
+    }
+
+    #[test]
+    fn relative_complement_with_no_overlap() {
+        let a = ordmap! {1 => 10, 2 => 20};
+        let b = ordmap! {3 => 30, 4 => 40};
+        let result = a.relative_complement_with(&b, |_, _, _| None);
+        assert_eq!(result, a);
+    }
+
+    #[test]
+    fn relative_complement_with_empty_other() {
+        let a = ordmap! {1 => 10};
+        let b: OrdMap<i32, i32> = OrdMap::new();
+        let result = a.relative_complement_with(&b, |_, _, _| None);
+        assert_eq!(result, a);
+    }
+
+    #[test]
+    fn map_accum_basic() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let (total, cumulative) = map.map_accum(0, |acc, _k, v| {
+            let new_acc = acc + v;
+            (new_acc, new_acc)
+        });
+        assert_eq!(total, 60);
+        assert_eq!(cumulative, ordmap! {1 => 10, 2 => 30, 3 => 60});
+    }
+
+    #[test]
+    fn map_accum_empty() {
+        let map: OrdMap<i32, i32> = OrdMap::new();
+        let (acc, result) = map.map_accum(42, |a, _, v| (a + v, *v));
+        assert_eq!(acc, 42);
+        assert!(result.is_empty());
     }
 }

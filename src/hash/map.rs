@@ -906,6 +906,134 @@ where
         (left, right)
     }
 
+    /// Partition and transform a map into two maps with potentially
+    /// different value types. The closure returns `Ok(v1)` to place
+    /// the entry in the left map, or `Err(v2)` for the right map.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let (small, big): (HashMap<i32, String>, HashMap<i32, String>) =
+    ///     map.partition_map(|_k, v| {
+    ///         if *v <= 15 { Ok(format!("small:{v}")) }
+    ///         else { Err(format!("big:{v}")) }
+    ///     });
+    /// assert_eq!(small.len(), 1);
+    /// assert_eq!(small[&1], "small:10");
+    /// assert_eq!(big.len(), 2);
+    /// ```
+    #[must_use]
+    pub fn partition_map<V1, V2, F>(
+        &self,
+        mut f: F,
+    ) -> (GenericHashMap<K, V1, S, P>, GenericHashMap<K, V2, S, P>)
+    where
+        V1: Clone,
+        V2: Clone,
+        S: Default,
+        F: FnMut(&K, &V) -> Result<V1, V2>,
+    {
+        let mut left = GenericHashMap::new();
+        let mut right = GenericHashMap::new();
+        for (k, v) in self.iter() {
+            match f(k, v) {
+                Ok(v1) => {
+                    left.insert(k.clone(), v1);
+                }
+                Err(v2) => {
+                    right.insert(k.clone(), v2);
+                }
+            }
+        }
+        (left, right)
+    }
+
+    /// Asymmetric difference with a resolver function.
+    ///
+    /// For keys in both `self` and `other`, `f` decides whether to
+    /// keep, modify, or discard the entry. Keys only in `self` are
+    /// kept. Keys only in `other` are discarded.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let a = hashmap!{1 => 10, 2 => 20, 3 => 30};
+    /// let b = hashmap!{2 => 5, 3 => 50, 4 => 40};
+    /// let result = a.relative_complement_with(&b, |_k, v_self, v_other| {
+    ///     if v_self > v_other { Some(*v_self - *v_other) } else { None }
+    /// });
+    /// assert_eq!(result.len(), 2);
+    /// assert_eq!(result[&1], 10);
+    /// assert_eq!(result[&2], 15);
+    /// ```
+    #[must_use]
+    pub fn relative_complement_with<F>(&self, other: &Self, mut f: F) -> Self
+    where
+        S: Default,
+        F: FnMut(&K, &V, &V) -> Option<V>,
+    {
+        let mut result = Self::new();
+        for (k, v) in self.iter() {
+            match other.get(k) {
+                Some(v2) => {
+                    if let Some(new_v) = f(k, v, v2) {
+                        result.insert(k.clone(), new_v);
+                    }
+                }
+                None => {
+                    result.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        result
+    }
+
+    /// Thread an accumulator through a traversal, producing a new
+    /// map with transformed values.
+    ///
+    /// Note: HashMap iteration order is not guaranteed, so the
+    /// accumulator sees entries in an arbitrary order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => 10, 2 => 20};
+    /// let (total, doubled): (i32, HashMap<i32, i32>) =
+    ///     map.map_accum(0, |acc, _k, v| (acc + v, v * 2));
+    /// assert_eq!(total, 30);
+    /// assert_eq!(doubled[&1], 20);
+    /// assert_eq!(doubled[&2], 40);
+    /// ```
+    #[must_use]
+    pub fn map_accum<St, V2, F>(
+        &self,
+        init: St,
+        mut f: F,
+    ) -> (St, GenericHashMap<K, V2, S, P>)
+    where
+        V2: Clone,
+        S: Default,
+        F: FnMut(St, &K, &V) -> (St, V2),
+    {
+        let mut acc = init;
+        let mut result = GenericHashMap::new();
+        for (k, v) in self.iter() {
+            let (new_acc, v2) = f(acc, k, v);
+            acc = new_acc;
+            result.insert(k.clone(), v2);
+        }
+        (acc, result)
+    }
+
     /// Check whether two maps share no keys.
     ///
     /// Time: O(n) — iterates the smaller map and checks each key
@@ -3391,5 +3519,72 @@ mod test {
             |_, v| Some(*v),
         );
         assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn partition_map_basic() {
+        let map = hashmap! {1 => 10, 2 => 20, 3 => 30};
+        let (small, big): (HashMap<i32, String>, HashMap<i32, String>) =
+            map.partition_map(|_k, v| {
+                if *v <= 15 {
+                    Ok(format!("small:{v}"))
+                } else {
+                    Err(format!("big:{v}"))
+                }
+            });
+        assert_eq!(small.len(), 1);
+        assert_eq!(small[&1], "small:10");
+        assert_eq!(big.len(), 2);
+    }
+
+    #[test]
+    fn partition_map_all_left() {
+        let map = hashmap! {1 => 1, 2 => 2};
+        let (left, right): (HashMap<i32, i32>, HashMap<i32, i32>) =
+            map.partition_map(|_, v| Ok(*v));
+        assert_eq!(left, map);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn relative_complement_with_basic() {
+        let a = hashmap! {1 => 10, 2 => 20, 3 => 30};
+        let b = hashmap! {2 => 5, 3 => 50, 4 => 40};
+        let result = a.relative_complement_with(&b, |_k, v_self, v_other| {
+            if v_self > v_other {
+                Some(*v_self - *v_other)
+            } else {
+                None
+            }
+        });
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[&1], 10);
+        assert_eq!(result[&2], 15);
+    }
+
+    #[test]
+    fn relative_complement_with_no_overlap() {
+        let a = hashmap! {1 => 10, 2 => 20};
+        let b = hashmap! {3 => 30, 4 => 40};
+        let result = a.relative_complement_with(&b, |_, _, _| None);
+        assert_eq!(result, a);
+    }
+
+    #[test]
+    fn map_accum_basic() {
+        let map = hashmap! {1 => 10, 2 => 20};
+        let (total, doubled): (i32, HashMap<i32, i32>) =
+            map.map_accum(0, |acc, _k, v| (acc + v, v * 2));
+        assert_eq!(total, 30);
+        assert_eq!(doubled[&1], 20);
+        assert_eq!(doubled[&2], 40);
+    }
+
+    #[test]
+    fn map_accum_empty() {
+        let map: HashMap<i32, i32> = HashMap::new();
+        let (acc, result) = map.map_accum(42, |a, _, v| (a + v, *v));
+        assert_eq!(acc, 42);
+        assert!(result.is_empty());
     }
 }
