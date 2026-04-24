@@ -1433,7 +1433,8 @@ mod slice_ext {
         while low < high {
             // the midpoint is biased (truncated) towards low so it will always be less than high
             let mid = low + (high - low) / 2;
-            // Safety: mid is always in bounds as low < high <= slice.len(); thus mid < slice.len()
+            // SAFETY: mid is always in bounds because low < high <= slice.len(),
+            // so mid = low + (high - low) / 2 < high <= slice.len().
             let cmp = f(unsafe { slice.get_unchecked(mid) });
             // TODO: Use select_unpredictable when min rustc_version >= 1.88
             // to guarantee conditional move optimization.
@@ -1441,14 +1442,18 @@ mod slice_ext {
             low = if cmp == Less { mid + 1 } else { low };
             high = if cmp == Greater { mid } else { high };
             if cmp == Equal {
-                // Safety: same as above
+                // SAFETY: mid < slice.len() as established above (bounds-checked
+                // by the loop invariant). Hint enables the compiler to elide a
+                // redundant bounds check on the return value.
                 unsafe {
                     std::hint::assert_unchecked(mid < slice.len());
                 }
                 return Ok(mid);
             }
         }
-        // Safety: see low assignment above
+        // SAFETY: low can only advance to mid + 1 where mid < slice.len(),
+        // so low <= slice.len(). Hint enables the compiler to elide a
+        // redundant bounds check on the Err return value.
         unsafe {
             std::hint::assert_unchecked(low <= slice.len());
         }

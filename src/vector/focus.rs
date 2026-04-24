@@ -303,6 +303,10 @@ impl<A, P: SharedPointerKind> Clone for TreeFocus<A, P> {
     }
 }
 
+// SAFETY: TreeFocus contains a *const Chunk<A> which opts out of auto-Send/Sync.
+// The pointer borrows from the Arc-managed tree data — sending the Focus across
+// threads is safe when A and P are Send (the underlying data can be accessed from
+// any thread). Sync follows the same logic.
 unsafe impl<A: Send, P: SharedPointerKind + Send> Send for TreeFocus<A, P> {}
 unsafe impl<A: Sync, P: SharedPointerKind + Sync> Sync for TreeFocus<A, P> {}
 
@@ -397,6 +401,10 @@ impl<A, P: SharedPointerKind> TreeFocus<A, P> {
 
     /// Gets the chunk that this TreeFocus is focused on.
     fn get_focus(&self) -> &Chunk<A> {
+        debug_assert!(!self.target_ptr.is_null(), "TreeFocus: target_ptr is null — set_focus not called");
+        // SAFETY: target_ptr is set by set_focus() which obtains a valid pointer
+        // into the Arc-managed tree. The tree cannot be modified through a
+        // &self reference, so the pointer remains valid for the borrow's lifetime.
         unsafe { &*self.target_ptr }
     }
 
@@ -651,12 +659,13 @@ where
         check_indices(self.len(), &indices)?;
         match self {
             FocusMut::Single(chunk) => {
-                // FIXME: Stable polyfill for std `get_many_mut`
+                // Stable polyfill for std `get_many_mut` (unstable).
                 let chunk: *mut A = (*chunk).as_mut_ptr();
                 Some(indices.map(|index| {
-                    // Safety:
-                    // - `check_indices` ensures each index is `< self.len()`, which for `FocusMut::Single` is `chunk.len()`
-                    // - `check_indices` ensures the indexes do not overlap
+                    // SAFETY: check_indices() (called above) verified that every
+                    // index is < self.len() (== chunk.len() for Single) and that
+                    // no two indices are equal, so each pointer is in-bounds and
+                    // the resulting &mut references do not alias.
                     unsafe { &mut *chunk.add(index) }
                 }))
             }
@@ -895,7 +904,13 @@ where
 
     /// Gets the chunk for an index and its corresponding range within the TreeFocusMut.
     fn get_focus(&mut self) -> &mut Chunk<A> {
-        unsafe { &mut *self.target_ptr.load(Ordering::Relaxed) }
+        let ptr = self.target_ptr.load(Ordering::Relaxed);
+        debug_assert!(!ptr.is_null(), "TreeFocusMut: target_ptr is null — set_focus not called");
+        // SAFETY: target_ptr is set by set_focus() which acquires the tree's Mutex,
+        // calls SharedPointer::make_mut (ensuring exclusive ownership of the chunk),
+        // and stores the resulting pointer. Relaxed ordering suffices because the
+        // Mutex provides the happens-before edge.
+        unsafe { &mut *ptr }
     }
 
     fn get_focus_ptr(&mut self) -> *mut Chunk<A> {
@@ -974,8 +989,11 @@ where
                 self.set_focus(phys_idx);
             }
             let target_idx = phys_idx - self.target_range.start;
-            // Safety: we have called `set_focus` to get a valid chunk pointer
-            // and `target_idx` lies within it
+            // SAFETY: set_focus() ensures target_ptr points to a valid,
+            // exclusively-owned chunk. check_indices() (called above) ensures
+            // each index is in-bounds and unique, so the resulting &mut
+            // references don't alias. Raw pointers are needed because
+            // get_focus() would reborrow &mut self on each iteration.
             unsafe {
                 let chunk = self.get_focus_ptr();
                 let ptr: *mut [A] = Chunk::as_mut_slice_ptr(chunk);

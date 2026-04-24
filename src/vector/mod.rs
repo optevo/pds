@@ -890,8 +890,11 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
             let a: *mut A = &mut self[i];
             let b: *mut A = &mut self[j];
 
-            // Vector's implementation of IndexMut ensures that if `i` and `j` are different
-            // indices then `&mut self[i]` and `&mut self[j]` are non-overlapping.
+            // SAFETY: `i != j` is checked above, and IndexMut returns a
+            // reference into the tree node containing that index. Different
+            // indices point to non-overlapping locations. Raw pointers are
+            // needed because the borrow checker cannot prove that two
+            // IndexMut calls on `self` with different indices don't alias.
             unsafe {
                 std::ptr::swap(a, b);
             }
@@ -2280,6 +2283,12 @@ impl<'a, A, P: SharedPointerKind + 'a> Iterator for Iter<'a, A, P> {
         if self.front_index >= self.back_index {
             return None;
         }
+        // SAFETY: Lifetime extension from &mut self to 'a. The Focus holds
+        // a reference to tree data with lifetime 'a. get() returns &'a A
+        // pointing into that tree, not into the Focus's cache. Each call
+        // accesses a distinct index so returned references don't alias.
+        // The borrow checker can't prove this because &mut self is shorter
+        // than 'a, but the Focus lives for 'a inside the Iter struct.
         let focus: &'a mut Focus<'a, A, P> = unsafe { &mut *(&mut self.focus as *mut _) };
         let value = focus.get(self.front_index);
         self.front_index += 1;
@@ -2301,6 +2310,8 @@ impl<'a, A, P: SharedPointerKind + 'a> DoubleEndedIterator for Iter<'a, A, P> {
             return None;
         }
         self.back_index -= 1;
+        // SAFETY: Same as Iter::next — lifetime extension for lending
+        // iterator pattern. See SAFETY comment in next() above.
         let focus: &'a mut Focus<'a, A, P> = unsafe { &mut *(&mut self.focus as *mut _) };
         focus.get(self.back_index)
     }
@@ -2356,6 +2367,10 @@ where
         if self.front_index >= self.back_index {
             return None;
         }
+        // SAFETY: Same lending iterator pattern as Iter::next. FocusMut
+        // uses copy-on-write (make_mut) so each get_mut() returns a &'a mut A
+        // into a now-unique tree node. Distinct indices yield non-aliasing
+        // mutable references.
         let focus: &'a mut FocusMut<'a, A, P> = unsafe { &mut *(&mut self.focus as *mut _) };
         let value = focus.get_mut(self.front_index);
         self.front_index += 1;
@@ -2380,6 +2395,7 @@ where
             return None;
         }
         self.back_index -= 1;
+        // SAFETY: Same as IterMut::next — see SAFETY comment above.
         let focus: &'a mut FocusMut<'a, A, P> = unsafe { &mut *(&mut self.focus as *mut _) };
         focus.get_mut(self.back_index)
     }
@@ -2460,6 +2476,8 @@ impl<'a, A, P: SharedPointerKind + 'a> Iterator for Chunks<'a, A, P> {
         if self.front_index >= self.back_index {
             return None;
         }
+        // SAFETY: Same lending iterator pattern as Iter::next —
+        // lifetime extension so chunk_at() can return &'a [A].
         let focus: &'a mut Focus<'a, A, P> = unsafe { &mut *(&mut self.focus as *mut _) };
         let (range, value) = focus.chunk_at(self.front_index);
         self.front_index = range.end;
@@ -2476,6 +2494,7 @@ impl<'a, A, P: SharedPointerKind + 'a> DoubleEndedIterator for Chunks<'a, A, P> 
             return None;
         }
         self.back_index -= 1;
+        // SAFETY: Same as Chunks::next — see SAFETY comment above.
         let focus: &'a mut Focus<'a, A, P> = unsafe { &mut *(&mut self.focus as *mut _) };
         let (range, value) = focus.chunk_at(self.back_index);
         self.back_index = range.start;
@@ -2517,6 +2536,8 @@ impl<'a, A: Clone, P: SharedPointerKind> Iterator for ChunksMut<'a, A, P> {
         if self.front_index >= self.back_index {
             return None;
         }
+        // SAFETY: Same lending iterator pattern as IterMut::next —
+        // lifetime extension so chunk_at() can return &'a mut [A].
         let focus: &'a mut FocusMut<'a, A, P> = unsafe { &mut *(&mut self.focus as *mut _) };
         let (range, value) = focus.chunk_at(self.front_index);
         self.front_index = range.end;
@@ -2533,6 +2554,7 @@ impl<'a, A: Clone, P: SharedPointerKind> DoubleEndedIterator for ChunksMut<'a, A
             return None;
         }
         self.back_index -= 1;
+        // SAFETY: Same as ChunksMut::next — see SAFETY comment above.
         let focus: &'a mut FocusMut<'a, A, P> = unsafe { &mut *(&mut self.focus as *mut _) };
         let (range, value) = focus.chunk_at(self.back_index);
         self.back_index = range.start;
