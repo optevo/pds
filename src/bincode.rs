@@ -221,10 +221,10 @@ mod test {
 
         #[cfg_attr(miri, ignore)]
         #[test]
-        fn encoding_std_hashmap_and_decoding_as_imbl_hashmap_is_same_as_converting(
+        fn encoding_std_hashmap_and_decoding_as_pds_hashmap_is_same_as_converting(
             ref std_hm in ::proptest::collection::hash_map(i32::ANY, i32::ANY, 0..100)
         ) {
-            // In fact, std's HashMap and imbl's HashMap are _not_ encoded the same since the order of the items can differ.
+            // In fact, std's HashMap and pds.s HashMap are _not_ encoded the same since the order of the items can differ.
             let config =  bincode::config::standard();
             let encoded = encode_to_vec(std_hm, config).unwrap();
             let converted = HashMap::from(std_hm);
@@ -244,10 +244,10 @@ mod test {
         #[cfg_attr(miri, ignore)]
         #[cfg_attr(miri, ignore)]
         #[test]
-        fn encoding_std_hashset_and_decoding_as_imbl_hashset_is_same_as_converting(
+        fn encoding_std_hashset_and_decoding_as_pds_hashset_is_same_as_converting(
             ref std_hs in ::proptest::collection::hash_set(i32::ANY, 0..100)
         ) {
-            // In fact, std's HashSet and imbl's HashSet are _not_ encoded the same since the order of the items can differ.
+            // In fact, std's HashSet and pds.s HashSet are _not_ encoded the same since the order of the items can differ.
             let config =  bincode::config::standard();
             let encoded = encode_to_vec(std_hs, config).unwrap();
             let converted = HashSet::from(std_hs);

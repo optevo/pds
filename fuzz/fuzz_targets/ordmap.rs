@@ -7,7 +7,7 @@ use std::ops::Bound;
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
-use imbl::OrdMap;
+use pds::OrdMap;
 
 #[derive(Arbitrary, Debug)]
 enum NextAction {

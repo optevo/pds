@@ -1,6 +1,6 @@
 # Architecture {#sec:architecture}
 
-Internal architecture of imbl's core data structure modules. This document
+Internal architecture of pds's core data structure modules. This document
 covers the current implementation as of v7.0.0 (~7.5K lines across 6 core
 files). It is a prerequisite for making safe structural changes — read this
 before modifying any module described here.
@@ -19,7 +19,7 @@ before modifying any module described here.
 
 ## Overview {#overview}
 
-imbl provides five persistent collection types, each backed by a different
+pds provides five persistent collection types, each backed by a different
 tree structure:
 
 | Type | Backing structure | Module | Lines |

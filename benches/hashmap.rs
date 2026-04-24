@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
-use imbl::hashmap::HashMap;
+use pds::hashmap::HashMap;
 use std::borrow::Borrow;
 use std::collections::HashMap as StdHashMap;
 use std::hash::Hash;
@@ -38,14 +38,14 @@ where
     fn iter(&self) -> Self::Iter<'_>;
 }
 
-// Implementation for imbl::HashMap
+// Implementation for pds::HashMap
 impl<K, V> BenchMap<K, V> for HashMap<K, V>
 where
     K: Clone + Hash + Eq,
     V: Clone,
 {
     type Iter<'a>
-        = imbl::hashmap::Iter<'a, K, V, imbl::shared_ptr::DefaultSharedPtr>
+        = pds::hashmap::Iter<'a, K, V, pds::shared_ptr::DefaultSharedPtr>
     where
         K: 'a,
         V: 'a;

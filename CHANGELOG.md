@@ -5,7 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/) and this project
 adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
-## [7.0.0] - 2026-01-25
+## [1.0.0] - 2026-04-25
+
+### Changed
+
+ - Renamed crate from `imbl` to `pds` (persistent data structures)
+ - Reset version to 1.0.0 — this is a new project with different design priorities
+ - SIMD-accelerated HAMT nodes with 3-tier node hierarchy
+ - Merkle hash caching for O(1) equality negative checks (HashMap, HashSet, Vector)
+ - kv_merkle_hash for O(1) positive equality on HashMap
+ - Vector per-node lazy Merkle with O(k log n) recomputation
+ - HashBits widened from u32 to u64 (12 usable trie levels)
+ - B+ tree node size increased to 32 (Apple Silicon optimised)
+ - Default to triomphe::Arc (no weak count, 8 bytes smaller per node)
+ - no_std support
+ - Persistent Trie as derived structure
+ - O() complexity documentation comparing to std equivalents
+
+## [7.0.0] - 2026-01-25 (as imbl)
 
 ### Changed
 

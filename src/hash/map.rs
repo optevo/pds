@@ -50,8 +50,8 @@ use crate::shared_ptr::DefaultSharedPtr;
 /// # Examples
 ///
 /// ```
-/// # #[macro_use] extern crate imbl;
-/// # use imbl::HashMap;
+/// # #[macro_use] extern crate pds;
+/// # use pds::HashMap;
 /// # fn main() {
 /// assert_eq!(
 ///   hashmap!{
@@ -206,8 +206,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::HashMap;
     /// let map = HashMap::unit(123, "onetwothree");
     /// assert_eq!(
     ///   map.get(&123),
@@ -254,8 +254,8 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// assert!(
     ///   !hashmap!{1 => 2}.is_empty()
     /// );
@@ -276,8 +276,8 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// assert_eq!(3, hashmap!{
     ///   1 => 11,
     ///   2 => 22,
@@ -401,8 +401,8 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::HashMap;
     /// let mut map = hashmap![1=>1, 2=>2, 3=>3];
     /// map.clear();
     /// assert!(map.is_empty());
@@ -661,8 +661,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{123 => "lol"};
     /// assert_eq!(
     ///   map.get(&123),
@@ -689,8 +689,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{123 => "lol"};
     /// assert_eq!(
     ///   map.get_key_value(&123),
@@ -717,8 +717,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{123 => "lol"};
     /// assert!(
     ///   map.contains_key(&123)
@@ -779,8 +779,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 2 => 2};
     /// let map2 = hashmap!{1 => 1, 2 => 2, 3 => 3};
     /// assert!(map1.is_submap(map2));
@@ -805,8 +805,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 2 => 2};
     /// let map2 = hashmap!{1 => 1, 2 => 2, 3 => 3};
     /// assert!(map1.is_proper_submap(map2));
@@ -903,8 +903,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let base = hashmap!{1 => "a", 2 => "b", 3 => "c"};
     /// let modified = hashmap!{1 => "a", 2 => "B", 4 => "d"};
     /// let diff: Vec<_> = base.diff(&modified).collect();
@@ -941,8 +941,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{1 => "one", 2 => "two", 3 => "three", 4 => "four"};
     /// let (evens, odds) = map.partition(|k, _| k % 2 == 0);
     /// assert_eq!(evens, hashmap!{2 => "two", 4 => "four"});
@@ -975,8 +975,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{1 => 10, 2 => 20, 3 => 30};
     /// let (small, big): (HashMap<i32, String>, HashMap<i32, String>) =
     ///     map.partition_map(|_k, v| {
@@ -1022,8 +1022,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let a = hashmap!{1 => 10, 2 => 20, 3 => 30};
     /// let b = hashmap!{2 => 5, 3 => 50, 4 => 40};
     /// let result = a.relative_complement_with(&b, |_k, v_self, v_other| {
@@ -1137,8 +1137,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let mut map = hashmap!{123 => "lol"};
     /// if let Some(value) = map.get_mut(&123) {
     ///     *value = "omg";
@@ -1165,8 +1165,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let mut map = hashmap!{123 => "lol"};
     /// assert_eq!(
     ///   map.get_key_value_mut(&123),
@@ -1197,8 +1197,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let mut map = hashmap!{};
     /// map.insert(123, "123");
     /// map.insert(456, "456");
@@ -1245,8 +1245,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let mut map = hashmap!{123 => "123", 456 => "456"};
     /// assert_eq!(Some("123"), map.remove(&123));
     /// assert_eq!(Some("456"), map.remove(&456));
@@ -1269,8 +1269,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let mut map = hashmap!{123 => "123", 456 => "456"};
     /// assert_eq!(Some((123, "123")), map.remove_with_key(&123));
     /// assert_eq!(Some((456, "456")), map.remove_with_key(&456));
@@ -1310,8 +1310,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::HashMap;
     /// let mut map = hashmap!{1 => 1, 2 => 2, 3 => 3};
     /// map.retain(|k, v| *k > 1);
     /// let expected = hashmap!{2 => 2, 3 => 3};
@@ -1382,8 +1382,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{};
     /// assert_eq!(
     ///   map.update(123, "123"),
@@ -1520,9 +1520,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
+    /// # use pds::hashset::HashSet;
     /// let map = hashmap!{1 => "a", 2 => "b", 3 => "c", 4 => "d"};
     /// let keys = hashset!{2, 4};
     /// let restricted = map.restrict_keys(&keys);
@@ -1542,9 +1542,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
+    /// # use pds::hashset::HashSet;
     /// let map = hashmap!{1 => "a", 2 => "b", 3 => "c", 4 => "d"};
     /// let keys = hashset!{2, 4};
     /// let reduced = map.without_keys(&keys);
@@ -1571,8 +1571,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let left = hashmap!{1 => "a", 2 => "b", 3 => "c"};
     /// let right = hashmap!{2 => 10, 3 => 20, 4 => 30};
     /// let merged: HashMap<i32, String> = left.merge_with(
@@ -1665,8 +1665,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 3 => 3};
     /// let map2 = hashmap!{2 => 2, 3 => 4};
     /// let expected = hashmap!{1 => 1, 2 => 2, 3 => 3};
@@ -1725,8 +1725,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 3 => 4};
     /// let map2 = hashmap!{2 => 2, 3 => 5};
     /// let expected = hashmap!{1 => 1, 2 => 2, 3 => 9};
@@ -1775,8 +1775,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 3 => 3};
     /// let map2 = hashmap!{2 => 2};
     /// let expected = hashmap!{1 => 1, 2 => 2, 3 => 3};
@@ -1845,8 +1845,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 3 => 4};
     /// let map2 = hashmap!{2 => 2, 3 => 5};
     /// let expected = hashmap!{1 => 1, 2 => 2};
@@ -1856,7 +1856,7 @@ where
     /// [symmetric_difference]: #method.symmetric_difference
     #[deprecated(
         since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and imbl, the `difference` alias for `symmetric_difference` will be removed."
+        note = "to avoid conflicting behaviors between std and pds, the `difference` alias for `symmetric_difference` will be removed."
     )]
     #[inline]
     #[must_use]
@@ -1872,8 +1872,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 3 => 4};
     /// let map2 = hashmap!{2 => 2, 3 => 5};
     /// let expected = hashmap!{1 => 1, 2 => 2};
@@ -1896,7 +1896,7 @@ where
     /// [symmetric_difference_with]: #method.symmetric_difference_with
     #[deprecated(
         since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and imbl, the `difference_with` alias for `symmetric_difference_with` will be removed."
+        note = "to avoid conflicting behaviors between std and pds, the `difference_with` alias for `symmetric_difference_with` will be removed."
     )]
     #[inline]
     #[must_use]
@@ -1933,8 +1933,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 3 => 4};
     /// let map2 = hashmap!{2 => 2, 3 => 5};
     /// let expected = hashmap!{1 => 1, 2 => 2, 3 => 9};
@@ -1947,7 +1947,7 @@ where
     /// [symmetric_difference_with_key]: #method.symmetric_difference_with_key
     #[deprecated(
         since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and imbl, the `difference_with_key` alias for `symmetric_difference_with_key` will be removed."
+        note = "to avoid conflicting behaviors between std and pds, the `difference_with_key` alias for `symmetric_difference_with_key` will be removed."
     )]
     #[must_use]
     pub fn difference_with_key<F>(self, other: Self, f: F) -> Self
@@ -1966,8 +1966,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 3 => 4};
     /// let map2 = hashmap!{2 => 2, 3 => 5};
     /// let expected = hashmap!{1 => 1, 2 => 2, 3 => 9};
@@ -2005,8 +2005,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 3 => 4};
     /// let map2 = hashmap!{2 => 2, 3 => 5};
     /// let expected = hashmap!{1 => 1};
@@ -2029,8 +2029,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 2 => 2};
     /// let map2 = hashmap!{2 => 3, 3 => 4};
     /// let expected = hashmap!{2 => 2};
@@ -2071,8 +2071,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map1 = hashmap!{1 => 1, 2 => 2};
     /// let map2 = hashmap!{2 => 3, 3 => 4};
     /// let expected = hashmap!{2 => 5};
@@ -2121,8 +2121,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let a = hashmap!{1 => "a", 2 => "b"};
     /// let b = hashmap!{3 => "c", 4 => "d"};
     /// let c = hashmap!{2 => "x", 5 => "e"};
@@ -2155,8 +2155,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{1 => 10, 2 => 20, 3 => 30};
     /// let doubled = map.map_values(|v| v * 2);
     /// assert_eq!(doubled, hashmap!{1 => 20, 2 => 40, 3 => 60});
@@ -2183,8 +2183,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{1 => 10, 2 => 20, 3 => 30};
     /// let sums = map.map_values_with_key(|k, v| k + v);
     /// assert_eq!(sums, hashmap!{1 => 11, 2 => 22, 3 => 33});
@@ -2211,8 +2211,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{1 => "10", 2 => "20", 3 => "30"};
     /// let parsed: Result<HashMap<i32, i32>, _> =
     ///     map.try_map_values(|_, v| v.parse::<i32>());
@@ -2240,8 +2240,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{1 => 10, 2 => 20};
     /// let (total, doubled): (i32, HashMap<i32, i32>) =
     ///     map.map_accum(0, |acc, _k, v| (acc + v, v * 2));
@@ -2289,8 +2289,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashmap::HashMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashmap::HashMap;
     /// let map = hashmap!{1 => "a", 2 => "b", 3 => "c"};
     /// let negated = map.map_keys(|k| -k);
     /// assert_eq!(negated.len(), 3);
@@ -3306,7 +3306,7 @@ where
 pub mod proptest {
     #[deprecated(
         since = "14.3.0",
-        note = "proptest strategies have moved to imbl::proptest"
+        note = "proptest strategies have moved to pds::proptest"
     )]
     pub use crate::proptest::hash_map;
 }

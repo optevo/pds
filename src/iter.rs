@@ -14,9 +14,9 @@
 ///
 /// # Examples
 /// ```
-/// # #[macro_use] extern crate imbl;
-/// # use imbl::iter::unfold;
-/// # use imbl::vector::Vector;
+/// # #[macro_use] extern crate pds;
+/// # use pds::iter::unfold;
+/// # use pds::vector::Vector;
 /// # use core::iter::FromIterator;
 /// // Create an infinite stream of numbers, starting at 0.
 /// let mut it = unfold(0, |i| Some((i, i + 1)));

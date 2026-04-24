@@ -1,6 +1,6 @@
 [package]
-name = "imbl"
-version = "7.0.0"
+name = "pds"
+version = "1.0.0"
 authors = [
     "Bodil Stokke <bodil@bodil.org>",
     "Joe Neeman <joeneeman@gmail.com>",
@@ -9,10 +9,10 @@ authors = [
 edition = "2021"
 license = "MPL-2.0+"
 rust-version = "1.85"
-description = "Immutable collection datatypes"
-repository = "https://github.com/optevo/imbl"
-documentation = "https://github.com/optevo/imbl"
-homepage = "https://github.com/optevo/imbl"
+description = "Persistent data structures with structural sharing for Rust"
+repository = "https://github.com/optevo/pds"
+documentation = "https://github.com/optevo/pds"
+homepage = "https://github.com/optevo/pds"
 readme = "./README.md"
 categories = ["data-structures"]
 keywords = ["immutable", "persistent", "hamt", "b-tree", "rrb-tree"]

@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use equivalent::Comparable;
-use imbl::ordmap::OrdMap;
+use pds::ordmap::OrdMap;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::hint::black_box;
@@ -54,12 +54,12 @@ where
     V: Clone,
 {
     type Iter<'a>
-        = imbl::ordmap::Iter<'a, K, V, imbl::shared_ptr::DefaultSharedPtr>
+        = pds::ordmap::Iter<'a, K, V, pds::shared_ptr::DefaultSharedPtr>
     where
         K: 'a,
         V: 'a;
     type RangeIter<'a>
-        = imbl::ordmap::RangedIter<'a, K, V, imbl::shared_ptr::DefaultSharedPtr>
+        = pds::ordmap::RangedIter<'a, K, V, pds::shared_ptr::DefaultSharedPtr>
     where
         K: 'a,
         V: 'a;

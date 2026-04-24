@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
-use imbl::OrdSet;
+use pds::OrdSet;
 use std::collections::BTreeSet;
 use std::hint::black_box;
 use std::iter::FromIterator;

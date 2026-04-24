@@ -10,13 +10,13 @@ cargo-fuzz = true
 
 [features]
 default = ["small-chunks"]
-small-chunks = ["imbl/small-chunks"]
+small-chunks = ["pds/small-chunks"]
 
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 
-[dependencies.imbl]
+[dependencies.pds]
 path = ".."
 features = ["debug"]
 

@@ -11,7 +11,7 @@
 //! # Examples
 //!
 //! ```
-//! use imbl::HashMultiMap;
+//! use pds::HashMultiMap;
 //!
 //! let mut mm = HashMultiMap::new();
 //! mm.insert("fruit", "apple");

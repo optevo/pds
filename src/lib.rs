@@ -54,7 +54,7 @@
 //! just pick the one that has the right shape and it should have
 //! acceptable performance characteristics for every operation you
 //! might need. Specialised data structures will always be faster at
-//! what they've been specialised for, but `imbl` aims to provide the
+//! what they've been specialised for, but `pds` aims to provide the
 //! data structures which deliver the least chance of accidentally
 //! using them for the wrong thing.
 //!
@@ -297,13 +297,13 @@
 //!
 //! ## Thread Safety
 //!
-//! The data structures in `imbl` are thread safe by default using
+//! The data structures in `pds` are thread safe by default using
 //! [`triomphe::Arc`](https://docs.rs/triomphe/latest/triomphe/struct.Arc.html)
 //! (a drop-in replacement for `std::sync::Arc` without the weak reference
 //! count — saves 8 bytes per node and eliminates one atomic operation per
 //! clone/drop). Disable the `triomphe` feature to fall back to `std::sync::Arc`.
 //!
-//! `imbl` also supports `Rc` as the pointer type through the [`archery`]
+//! `pds` also supports `Rc` as the pointer type through the [`archery`]
 //! crate, just like `im-rc` in the original `im` crate. If you prioritise
 //! speed over thread safety, you can use
 //! [`GenericVector<T, shared_pointer::RcK>`](vector::GenericVector) with
@@ -312,12 +312,12 @@
 //!
 //! ## `no_std` Support
 //!
-//! `imbl` supports `no_std` environments that provide `alloc`. Disable the
+//! `pds` supports `no_std` environments that provide `alloc`. Disable the
 //! default `std` feature:
 //!
 //! ```no_compile
 //! [dependencies]
-//! imbl = { version = "*", default-features = false, features = ["triomphe"] }
+//! pds = { version = "*", default-features = false, features = ["triomphe"] }
 //! ```
 //!
 //! In `no_std` mode, convenience type aliases (`HashMap`, `HashSet`, `PBag`,
@@ -333,11 +333,11 @@
 //! | ------- | :-----: | ----------- |
 //! | `std` | Yes | Enables `std`-dependent functionality: `RandomState`-based type aliases (`HashMap`, `HashSet`, etc.), `From<std::collections::*>` conversions, and `Mutex`-based locking. Disable for `no_std + alloc` environments. |
 //! | [`triomphe`](https://crates.io/crates/triomphe/) | Yes | Use [`triomphe::Arc`](https://docs.rs/triomphe/latest/triomphe/struct.Arc.html) as the default shared pointer — faster than `std::sync::Arc` (no weak reference count). |
-//! | [`proptest`](https://crates.io/crates/proptest) | No | Strategies for all `imbl` datatypes under a `proptest` namespace, e.g. `imbl::vector::proptest::vector()` |
-//! | [`quickcheck`](https://crates.io/crates/quickcheck) | No | [`quickcheck::Arbitrary`](https://docs.rs/quickcheck/latest/quickcheck/trait.Arbitrary.html) implementations for all `imbl` datatypes |
+//! | [`proptest`](https://crates.io/crates/proptest) | No | Strategies for all `pds` datatypes under a `proptest` namespace, e.g. `pds::vector::proptest::vector()` |
+//! | [`quickcheck`](https://crates.io/crates/quickcheck) | No | [`quickcheck::Arbitrary`](https://docs.rs/quickcheck/latest/quickcheck/trait.Arbitrary.html) implementations for all `pds` datatypes |
 //! | [`rayon`](https://crates.io/crates/rayon) | No | Parallel iterator implementations for all collection types |
-//! | [`serde`](https://crates.io/crates/serde) | No | [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html) and [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html) implementations for all `imbl` datatypes |
-//! | [`arbitrary`](https://crates.io/crates/arbitrary/) | No | [`arbitrary::Arbitrary`](https://docs.rs/arbitrary/latest/arbitrary/trait.Arbitrary.html) implementations for all `imbl` datatypes |
+//! | [`serde`](https://crates.io/crates/serde) | No | [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html) and [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html) implementations for all `pds` datatypes |
+//! | [`arbitrary`](https://crates.io/crates/arbitrary/) | No | [`arbitrary::Arbitrary`](https://docs.rs/arbitrary/latest/arbitrary/trait.Arbitrary.html) implementations for all `pds` datatypes |
 //! | [`foldhash`](https://crates.io/crates/foldhash/) | No | Enables `HashMap`, `HashSet`, etc. type aliases in `no_std` environments using `foldhash::fast::RandomState` as the default hasher. |
 //! | [`atom`](https://crates.io/crates/arc-swap/) | No | Thread-safe shared values via `arc-swap` (requires `std`) |
 //!
@@ -454,9 +454,9 @@ mod tests;
 /// # Examples
 ///
 /// ```
-/// # #[macro_use] extern crate imbl;
+/// # #[macro_use] extern crate pds;
 /// # use std::sync::Arc;
-/// # use imbl::Vector;
+/// # use pds::Vector;
 /// # fn main() {
 /// let vec_inside_vec = vector![vector![1, 2, 3], vector![4, 5, 6]];
 ///
@@ -488,9 +488,9 @@ macro_rules! update_in {
 /// # Examples
 ///
 /// ```
-/// # #[macro_use] extern crate imbl;
+/// # #[macro_use] extern crate pds;
 /// # use std::sync::Arc;
-/// # use imbl::Vector;
+/// # use pds::Vector;
 /// # fn main() {
 /// let vec_inside_vec: Vector<Vector<i64>> = vector![vector![1, 2, 3], vector![4, 5, 6]];
 ///

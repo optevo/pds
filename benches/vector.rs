@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
-use imbl::vector::Vector;
+use pds::vector::Vector;
 use rand::seq::SliceRandom;
 use std::collections::VecDeque;
 use std::hint::black_box;
@@ -46,7 +46,7 @@ where
 
 // Wrapper types for Vector's focus feature
 struct VectorFocus<'a, T> {
-    focus: imbl::vector::Focus<'a, T, imbl::shared_ptr::DefaultSharedPtr>,
+    focus: pds::vector::Focus<'a, T, pds::shared_ptr::DefaultSharedPtr>,
 }
 
 impl<'a, T> VectorFocus<'a, T> {
@@ -56,7 +56,7 @@ impl<'a, T> VectorFocus<'a, T> {
 }
 
 struct VectorFocusMut<'a, T> {
-    focus: imbl::vector::FocusMut<'a, T, imbl::shared_ptr::DefaultSharedPtr>,
+    focus: pds::vector::FocusMut<'a, T, pds::shared_ptr::DefaultSharedPtr>,
 }
 
 impl<'a, T: Clone> VectorFocusMut<'a, T> {
@@ -65,10 +65,10 @@ impl<'a, T: Clone> VectorFocusMut<'a, T> {
     }
 }
 
-// Implementation for imbl::Vector
+// Implementation for pds::Vector
 impl<T: Clone> BenchVector<T> for Vector<T> {
     type Iter<'a>
-        = imbl::vector::Iter<'a, T, imbl::shared_ptr::DefaultSharedPtr>
+        = pds::vector::Iter<'a, T, pds::shared_ptr::DefaultSharedPtr>
     where
         T: 'a;
 

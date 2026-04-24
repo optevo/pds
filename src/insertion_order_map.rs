@@ -13,7 +13,7 @@
 //! # Examples
 //!
 //! ```
-//! use imbl::InsertionOrderMap;
+//! use pds::InsertionOrderMap;
 //!
 //! let mut map = InsertionOrderMap::new();
 //! map.insert("c", 3);

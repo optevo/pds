@@ -1,12 +1,11 @@
-# imbl
+# pds
 
-![tests](https://github.com/optevo/imbl/actions/workflows/ci.yml/badge.svg)
+Persistent data structures with structural sharing for Rust.
 
-Blazing fast immutable collection datatypes for Rust.
-
-This is a fork of [jneem/imbl](https://github.com/jneem/imbl), itself a fork
-of the [`im`](https://github.com/bodil/im-rs) crate. Changes are structured
-as independent, upstreamable PRs (see [DEC-001](docs/decisions.md)).
+Forked from [imbl](https://github.com/jneem/imbl) (itself a fork of
+[`im`](https://github.com/bodil/im-rs)) with different design priorities:
+performance over compatibility, Merkle hashing for O(1) equality checks,
+SIMD-accelerated HAMT nodes, and no_std support.
 
 ## Collections
 
@@ -20,6 +19,7 @@ as independent, upstreamable PRs (see [DEC-001](docs/decisions.md)).
 | `PBag<A>` | SIMD HAMT | Persistent multiset (bag) with element counts |
 | `HashMultiMap<K, V>` | SIMD HAMT | Key → set of values multimap |
 | `InsertionOrderMap<K, V>` | SIMD HAMT + B+ tree | Map iterating in insertion order |
+| `Trie<K, V>` | HAMT of HAMTs | Hierarchical path-keyed map |
 
 All collections use structural sharing for efficient cloning — cloning a
 collection is O(1), and modified versions share unchanged subtrees with the
@@ -46,7 +46,6 @@ original.
 | `foldhash` | Enables `HashMap`/`HashSet`/etc. type aliases in `no_std` via `foldhash::fast::RandomState` |
 | `arbitrary` | `Arbitrary` implementations for fuzzing |
 | `atom` | Thread-safe atomic state holder via `arc-swap` (requires `std`) |
-| `bincode` | **Deprecated** — will be removed in v8.0.0. Use serde instead. |
 
 ## Building
 
@@ -82,4 +81,4 @@ Please note that this project is released with a [Contributor Code of
 Conduct][coc]. By participating in this project you agree to abide by its
 terms.
 
-[coc]: https://github.com/optevo/imbl/blob/main/CODE_OF_CONDUCT.md
+[coc]: https://github.com/optevo/pds/blob/main/CODE_OF_CONDUCT.md

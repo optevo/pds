@@ -6,7 +6,7 @@ comments, and documentation — do not substitute synonyms.
 ---
 
 **HAMT** — Hash Array Mapped Trie. The data structure backing `HashMap` and
-  `HashSet`. imbl uses a SIMD-accelerated hybrid with three node types
+  `HashSet`. pds uses a SIMD-accelerated hybrid with three node types
   (SmallSimdNode, LargeSimdNode, HamtNode).
 
 **CHAMP** — Compressed Hash-Array Mapped Prefix-tree. A HAMT optimisation

@@ -1,4 +1,4 @@
-# imbl — Implementation Plan
+# pds — Implementation Plan
 
 Sequenced implementation plan for improvements to the
 [imbl](https://github.com/jneem/imbl) Rust crate (persistent/immutable
@@ -232,7 +232,7 @@ single v8.0.0 release in Phase 5.
   444µs vs push_back 432µs (~3% difference). The plan description was
   based on an incorrect assumption that front buffers were absent or
   asymmetric. Scala 2.13's improvement was relative to their old
-  implementation which lacked front buffers entirely — imbl already has
+  implementation which lacked front buffers entirely — pds already has
   them. No code changes needed.
 
 - **[2026-04-24] 3.6: Pointer-aware subtree skipping in diff.**
@@ -585,7 +585,7 @@ transitive — for security, performance, staleness, and compatibility issues.
 build-dependency). Keeping deps current prevents security debt from
 accumulating and ensures compatibility with the evolving Rust ecosystem.
 Updates to core deps like `archery` and `triomphe` may include performance
-fixes that benefit imbl directly.
+fixes that benefit pds directly.
 
 **Complexity:** Low.
 
@@ -901,7 +901,7 @@ fn merge_with<V2, V3>(
 ) -> Map<K, V3>
 ```
 
-**Why:** This is the most powerful missing API in imbl. It subsumes
+**Why:** This is the most powerful missing API in pds. It subsumes
 `union_with`, `intersection_with`, `difference_with`, and
 `symmetric_difference_with` as special cases — each is just a specific
 combination of closures. More importantly, it handles mixed strategies
@@ -952,7 +952,7 @@ and loses structural sharing.
 **Why:** `map_values` is one of the most commonly needed operations on
 maps across every language ecosystem (Haskell `fmap`/`mapWithKey`, Scala
 `transform`/`mapValues`, Clojure `update-vals`). Its absence is the
-single largest ergonomic gap in imbl's map API. `try_map_values` (Haskell's
+single largest ergonomic gap in pds's map API. `try_map_values` (Haskell's
 `traverseWithKey`) fills a critical niche for validation and parsing
 pipelines. `map_keys_monotonic` enables efficient key type conversions
 on ordered maps without rebuilding.
@@ -1064,7 +1064,7 @@ window (use `skip`/`take` which are O(log n) on RRB trees).
 
 ### 2.11 Companion collection types
 
-**What:** Add new collection types built on existing imbl primitives,
+**What:** Add new collection types built on existing pds primitives,
 filling common patterns that currently require manual composition.
 
 **Types:**
@@ -1205,7 +1205,7 @@ crate uses `#[deny(unsafe_code)]` at the crate root (lib.rs:321) with
    code path — the combination of fuzzing + miri gives high confidence
 5. Enable `unsafe_op_in_unsafe_fn` lint to tighten granularity
 
-**Why:** imbl is used in production by security-sensitive projects (Matrix
+**Why:** pds is used in production by security-sensitive projects (Matrix
 SDK, Fedimint). Undocumented unsafe invariants are a credibility and safety
 liability. Issue open since August 2021.
 

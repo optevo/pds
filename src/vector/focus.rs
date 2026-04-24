@@ -68,8 +68,8 @@ fn check_indices<const N: usize>(len: usize, indices: &[usize; N]) -> Option<()>
 /// the scenes, so the performance of the two should be identical.
 ///
 /// ```rust
-/// # #[macro_use] extern crate imbl;
-/// # use imbl::vector::Vector;
+/// # #[macro_use] extern crate pds;
+/// # use pds::vector::Vector;
 /// # use core::iter::FromIterator;
 /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
 ///
@@ -178,8 +178,8 @@ where
     /// ## Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::vector::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::vector::Vector;
     /// # use core::iter::FromIterator;
     /// let vec: Vector<i64> = Vector::from_iter(0..1000);
     /// let narrowed = vec.focus().narrow(100..200);
@@ -219,8 +219,8 @@ where
     /// ## Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::vector::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::vector::Vector;
     /// # use core::iter::FromIterator;
     /// let vec: Vector<i64> = Vector::from_iter(0..1000);
     /// let (left, right) = vec.focus().split_at(500);
@@ -451,8 +451,8 @@ impl<A, P: SharedPointerKind> TreeFocus<A, P> {
 /// on the structure of the vector not changing while it exists.
 ///
 /// ```rust,compile_fail
-/// # #[macro_use] extern crate imbl;
-/// # use imbl::vector::Vector;
+/// # #[macro_use] extern crate pds;
+/// # use pds::vector::Vector;
 /// # use core::iter::FromIterator;
 /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
 /// let focus1 = vec.focus_mut();
@@ -468,8 +468,8 @@ impl<A, P: SharedPointerKind> TreeFocus<A, P> {
 /// which is safe because they can't overlap:
 ///
 /// ```rust
-/// # #[macro_use] extern crate imbl;
-/// # use imbl::vector::Vector;
+/// # #[macro_use] extern crate pds;
+/// # use pds::vector::Vector;
 /// # use core::iter::FromIterator;
 /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
 /// let focus = vec.focus_mut();
@@ -482,8 +482,8 @@ impl<A, P: SharedPointerKind> TreeFocus<A, P> {
 /// were created from goes out of scope.
 ///
 /// ```rust,compile_fail
-/// # #[macro_use] extern crate imbl;
-/// # use imbl::vector::Vector;
+/// # #[macro_use] extern crate pds;
+/// # use pds::vector::Vector;
 /// # use core::iter::FromIterator;
 /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
 /// let (left, right) = {
@@ -533,8 +533,8 @@ where
     /// ## Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::vector::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::vector::Vector;
     /// # use core::iter::FromIterator;
     /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
     /// let narrowed = vec.focus_mut().narrow(100..200);
@@ -574,8 +574,8 @@ where
     /// ## Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::vector::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::vector::Vector;
     /// # use core::iter::FromIterator;
     /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
     /// {
@@ -726,8 +726,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::vector::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::vector::Vector;
     /// # use core::iter::FromIterator;
     /// let mut vec: Vector<i64> = vector![1, 2, 3, 4, 5];
     /// vec.focus_mut().pair(1, 3, |a, b| *a += *b);
@@ -754,8 +754,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::vector::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::vector::Vector;
     /// # use core::iter::FromIterator;
     /// let mut vec: Vector<i64> = vector![1, 2, 3, 4, 5];
     /// vec.focus_mut().triplet(0, 2, 4, |a, b, c| *a += *b + *c);
@@ -927,7 +927,7 @@ where
         let mut tree = self
             .tree
             .lock()
-            .expect("imbl::vector::Focus::set_focus: unable to acquire exclusive lock on Vector");
+            .expect("pds::vector::Focus::set_focus: unable to acquire exclusive lock on Vector");
         if index < self.middle_range.start {
             let outer_len = tree.outer_f.len();
             if index < outer_len {

@@ -13,7 +13,7 @@
 //! # Examples
 //!
 //! ```
-//! use imbl::Trie;
+//! use pds::Trie;
 //!
 //! let mut trie = Trie::new();
 //! trie.insert(&["usr", "bin", "rustc"], 1);
@@ -275,8 +275,7 @@ where
     /// Paths are returned as `Vec<&K>` segments. Iteration order follows
     /// the hash map's internal ordering at each level.
     pub fn iter(&self) -> TrieIter<'_, K, V, S, P> {
-        let mut stack = alloc::vec::Vec::new();
-        stack.push((alloc::vec::Vec::new(), self));
+        let stack = alloc::vec![(alloc::vec::Vec::new(), self)];
         TrieIter { stack }
     }
 

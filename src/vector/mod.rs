@@ -82,8 +82,8 @@ pub mod rayon;
 /// # Examples
 ///
 /// ```
-/// # #[macro_use] extern crate imbl;
-/// # use imbl::Vector;
+/// # #[macro_use] extern crate pds;
+/// # use pds::Vector;
 /// # fn main() {
 /// assert_eq!(
 ///   vector![1, 2, 3],
@@ -327,8 +327,8 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::Vector;
     /// let vec: Vector<i64> = vector![1, 2, 3, 4, 5];
     /// assert_eq!(5, vec.len());
     /// ```
@@ -349,8 +349,8 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::Vector;
     /// let vec = vector!["Joe", "Mike", "Robert"];
     /// assert_eq!(false, vec.is_empty());
     /// assert_eq!(true, Vector::<i64>::new().is_empty());
@@ -506,7 +506,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let vec = vector!["Joe", "Mike", "Robert"];
     /// assert_eq!(Some(&"Robert"), vec.get(2));
     /// assert_eq!(None, vec.get(5));
@@ -614,7 +614,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![1, 2, 3, 4, 5];
     /// assert_eq!(Some(2), vec.index_of(&3));
     /// assert_eq!(None, vec.index_of(&31337));
@@ -643,7 +643,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![1, 2, 3, 4, 5];
     /// assert_eq!(true, vec.contains(&3));
     /// assert_eq!(false, vec.contains(&31337));
@@ -752,8 +752,8 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::Vector;
     /// let vec  = Vector::unit(1337);
     /// assert_eq!(1, vec.len());
     /// assert_eq!(
@@ -822,7 +822,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector!["Joe", "Mike", "Robert"];
     /// {
     ///     let robert = vec.get_mut(2).unwrap();
@@ -947,7 +947,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![1, 2, 3];
     /// assert_eq!(vector![1, 5, 3], vec.update(1, 5));
     /// ```
@@ -996,7 +996,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![5, 6, 7];
     /// vec.push_front(4);
     /// assert_eq!(vector![4, 5, 6, 7], vec);
@@ -1022,7 +1022,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![1, 2, 3];
     /// vec.push_back(4);
     /// assert_eq!(vector![1, 2, 3, 4], vec);
@@ -1058,7 +1058,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let base = vector![1, 2, 3, 4];
     /// let modified = vector![1, 20, 30, 4, 5];
     /// let diff: Vec<_> = base.diff(&modified).collect();
@@ -1102,7 +1102,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let vec = vector![1, 2, 3, 4];
     /// let updated = vec.adjust(1, |v| v * 10);
     /// assert_eq!(updated, vector![1, 20, 3, 4]);
@@ -1131,7 +1131,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let vec = vector![1, 2, 3, 4, 5];
     /// let chunks = vec.chunked(2);
     /// assert_eq!(chunks, vec![vector![1, 2], vector![3, 4], vector![5]]);
@@ -1167,7 +1167,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let vec = vector![1, 2, 3, 4, 5];
     /// let replacement = vector![20, 30];
     /// let patched = vec.patch(1, &replacement, 2);
@@ -1201,7 +1201,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let vec = vector![1, 2, 3, 4];
     /// let sums = vec.scan_left(0, |acc, x| acc + x);
     /// assert_eq!(sums, vector![0, 1, 3, 6, 10]);
@@ -1235,7 +1235,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let vec = vector![1, 2, 3, 4, 5];
     /// let windows = vec.sliding(3, 1);
     /// assert_eq!(windows, vec![
@@ -1268,7 +1268,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![1, 2, 3];
     /// assert_eq!(Some(1), vec.pop_front());
     /// assert_eq!(vector![2, 3], vec);
@@ -1293,8 +1293,8 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::Vector;
     /// let mut vec = vector![1, 2, 3];
     /// assert_eq!(Some(3), vec.pop_back());
     /// assert_eq!(vector![1, 2], vec);
@@ -1322,7 +1322,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![1, 2, 3];
     /// vec.append(vector![7, 8, 9]);
     /// assert_eq!(vector![1, 2, 3, 7, 8, 9], vec);
@@ -1479,7 +1479,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![1, 2, 3, 7, 8, 9];
     /// let (left, right) = vec.split_at(3);
     /// assert_eq!(vector![1, 2, 3], left);
@@ -1504,7 +1504,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut left = vector![1, 2, 3, 7, 8, 9];
     /// let right = left.split_off(3);
     /// assert_eq!(vector![1, 2, 3], left);
@@ -1789,7 +1789,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![1, 2, 3, 7, 8, 9];
     /// vec.insert_ord(5);
     /// assert_eq!(vector![1, 2, 3, 5, 7, 8, 9], vec);
@@ -1820,7 +1820,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![9, 8, 7, 3, 2, 1];
     /// vec.insert_ord_by(5, |a, b| a.cmp(b).reverse());
     /// assert_eq!(vector![9, 8, 7, 5, 3, 2, 1], vec);
@@ -1857,8 +1857,8 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::Vector;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::Vector;
     ///
     /// type A = (u8, &'static str);
     ///
@@ -1891,7 +1891,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![3, 2, 5, 4, 1];
     /// vec.sort();
     /// assert_eq!(vector![1, 2, 3, 4, 5], vec);
@@ -1910,7 +1910,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![3, 2, 5, 4, 1];
     /// vec.sort_by(|left, right| left.cmp(right));
     /// assert_eq!(vector![1, 2, 3, 4, 5], vec);
@@ -1939,7 +1939,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![3, 2, 5, 4, 1];
     /// vec.par_sort();
     /// assert_eq!(vector![1, 2, 3, 4, 5], vec);
@@ -1968,7 +1968,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// let mut vec = vector![3, 2, 5, 4, 1];
     /// vec.par_sort_by(|left, right| left.cmp(right));
     /// assert_eq!(vector![1, 2, 3, 4, 5], vec);
@@ -2945,7 +2945,7 @@ impl<'a, 'b, A: PartialEq, P: SharedPointerKind + 'a + 'b> FusedIterator
 pub mod proptest {
     #[deprecated(
         since = "14.3.0",
-        note = "proptest strategies have moved to imbl::proptest"
+        note = "proptest strategies have moved to pds::proptest"
     )]
     pub use crate::proptest::vector;
 }

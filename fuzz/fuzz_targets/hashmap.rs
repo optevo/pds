@@ -7,7 +7,7 @@ use std::iter::FromIterator;
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
-use imbl::HashMap;
+use pds::HashMap;
 
 #[derive(Arbitrary, Debug)]
 enum Action<K, V> {

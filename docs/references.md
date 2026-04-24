@@ -69,4 +69,4 @@
 |----------|---------------|-------|
 | imbl upstream | github.com/jneem/imbl | Upstream repository |
 | archery crate | docs.rs/archery | SharedPointer abstraction (`get_mut`, `make_mut`) |
-| imbl docs.rs | docs.rs/imbl | Published API documentation |
+| pds docs.rs | docs.rs/pds | Published API documentation |

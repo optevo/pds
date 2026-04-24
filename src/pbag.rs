@@ -12,7 +12,7 @@
 //! # Examples
 //!
 //! ```
-//! use imbl::PBag;
+//! use pds::PBag;
 //!
 //! let mut bag = PBag::new();
 //! bag.insert("apple");

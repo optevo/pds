@@ -1,7 +1,7 @@
-# Project Directives — imbl
+# Project Directives — pds
 
-Persistent/immutable collection datatypes for Rust. Fork of
-[jneem/imbl](https://github.com/jneem/imbl) with a long-term improvement plan.
+Persistent data structures with structural sharing for Rust. Forked from
+[imbl](https://github.com/jneem/imbl) with different design priorities.
 
 ## Contents
 
@@ -241,14 +241,14 @@ edge cases, upgrade/downgrade paths, and rarely-exercised branches.
 
 ### Property-based testing
 
-imbl already uses `proptest` extensively. When adding or modifying data structure
+pds already uses `proptest` extensively. When adding or modifying data structure
 operations, add proptest strategies that exercise the new code paths. Fuzz targets
 (`fuzz/`) complement proptest for longer-running, coverage-guided exploration —
 particularly important for unsafe code paths (Focus/FocusMut).
 
 ### Benchmarking
 
-imbl has criterion benchmarks in `benches/` for ordmap, hashmap, and vector.
+pds has criterion benchmarks in `benches/` for ordmap, hashmap, and vector.
 When making performance-sensitive changes, run the relevant benchmarks before
 and after. Wrap inputs in `std::hint::black_box` — without it the optimiser
 may eliminate the work and the benchmark measures nothing.
@@ -424,7 +424,7 @@ documented reason not to (e.g. incompatibility with another dependency,
 a regression in the new release, or a removed feature the project relies on).
 When pinning to an older version, record the reason in `docs/decisions.md`.
 
-imbl's existing dependencies are established and well-tested. Before adding
+pds's existing dependencies are established and well-tested. Before adding
 any new crate, evaluate it against the project's goals and record the result
 in `docs/decisions.md`. Criteria:
 

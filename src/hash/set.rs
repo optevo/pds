@@ -50,8 +50,8 @@ use crate::GenericVector;
 /// # Examples
 ///
 /// ```
-/// # #[macro_use] extern crate imbl;
-/// # use imbl::HashSet;
+/// # #[macro_use] extern crate pds;
+/// # use pds::HashSet;
 /// # fn main() {
 /// assert_eq!(
 ///   hashset![1, 2, 3],
@@ -191,8 +191,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// # use std::sync::Arc;
     /// let set = HashSet::unit(123);
     /// assert!(set.contains(&123));
@@ -221,8 +221,8 @@ impl<A, S, P: SharedPointerKind> GenericHashSet<A, S, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// assert!(
     ///   !hashset![1, 2, 3].is_empty()
     /// );
@@ -243,8 +243,8 @@ impl<A, S, P: SharedPointerKind> GenericHashSet<A, S, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// assert_eq!(3, hashset![1, 2, 3].len());
     /// ```
     #[inline]
@@ -313,8 +313,8 @@ impl<A, S, P: SharedPointerKind> GenericHashSet<A, S, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::HashSet;
     /// let mut set = hashset![1, 2, 3];
     /// set.clear();
     /// assert!(set.is_empty());
@@ -539,8 +539,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::HashSet;
     /// let mut set = hashset![1, 2, 3];
     /// set.retain(|v| *v > 1);
     /// let expected = hashset![2, 3];
@@ -571,8 +571,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// let set = hashset!{1, 2, 3, 4, 5};
     /// let (evens, odds) = set.partition(|v| v % 2 == 0);
     /// assert_eq!(evens, hashset!{2, 4});
@@ -603,8 +603,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// let set1 = hashset!{1, 2};
     /// let set2 = hashset!{2, 3};
     /// let expected = hashset!{1, 2, 3};
@@ -645,8 +645,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// let set1 = hashset!{1, 2};
     /// let set2 = hashset!{2, 3};
     /// let expected = hashset!{1, 3};
@@ -656,7 +656,7 @@ where
     /// [symmetric_difference]: #method.symmetric_difference
     #[deprecated(
         since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and imbl, the `difference` alias for `symmetric_difference` will be removed."
+        note = "to avoid conflicting behaviors between std and pds, the `difference` alias for `symmetric_difference` will be removed."
     )]
     #[must_use]
     pub fn difference(self, other: Self) -> Self {
@@ -670,8 +670,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// let set1 = hashset!{1, 2};
     /// let set2 = hashset!{2, 3};
     /// let expected = hashset!{1, 3};
@@ -695,8 +695,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// let set1 = hashset!{1, 2};
     /// let set2 = hashset!{2, 3};
     /// let expected = hashset!{1};
@@ -730,8 +730,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// let base = hashset!{1, 2, 3};
     /// let modified = hashset!{2, 3, 4};
     /// let diff: Vec<_> = base.diff(&modified).collect();
@@ -766,8 +766,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// # use std::sync::Arc;
     /// let set = hashset![123];
     /// assert_eq!(
@@ -803,8 +803,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// let set = hashset!{1, 2, 3, 4, 5};
     /// let keep = hashset!{2, 4, 6};
     /// assert_eq!(set.restrict(&keep), hashset!{2, 4});
@@ -823,8 +823,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// let set1 = hashset!{1, 2};
     /// let set2 = hashset!{2, 3};
     /// let expected = hashset!{2};
@@ -857,8 +857,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::hashset::HashSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::hashset::HashSet;
     /// let a = hashset!{1, 2, 3};
     /// let b = hashset!{4, 5, 6};
     /// let c = hashset!{3, 4, 5};
@@ -1475,7 +1475,7 @@ where
 pub mod proptest {
     #[deprecated(
         since = "14.3.0",
-        note = "proptest strategies have moved to imbl::proptest"
+        note = "proptest strategies have moved to pds::proptest"
     )]
     pub use crate::proptest::hash_set;
 }

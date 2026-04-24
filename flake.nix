@@ -1,5 +1,5 @@
 {
-  description = "imbl — immutable collection datatypes";
+  description = "pds — persistent data structures";
 
   inputs = {
     nixpkgs.url     = "github:nixos/nixpkgs/nixpkgs-unstable";

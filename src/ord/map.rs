@@ -44,8 +44,8 @@ use crate::shared_ptr::DefaultSharedPtr;
 /// # Examples
 ///
 /// ```
-/// # #[macro_use] extern crate imbl;
-/// # use imbl::ordmap::OrdMap;
+/// # #[macro_use] extern crate pds;
+/// # use pds::ordmap::OrdMap;
 /// # fn main() {
 /// assert_eq!(
 ///   ordmap!{
@@ -131,8 +131,8 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # type OrdMap<K, V> = imbl::ordmap::OrdMap<K, V>;
+    /// # #[macro_use] extern crate pds;
+    /// # type OrdMap<K, V> = pds::ordmap::OrdMap<K, V>;
     /// let map = OrdMap::unit(123, "onetwothree");
     /// assert_eq!(
     ///   map.get(&123),
@@ -155,8 +155,8 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// assert!(
     ///   !ordmap!{1 => 2}.is_empty()
     /// );
@@ -194,8 +194,8 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// assert_eq!(3, ordmap!{
     ///   1 => 11,
     ///   2 => 22,
@@ -218,8 +218,8 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdMap;
     /// let mut map = ordmap![1=>1, 2=>2, 3=>3];
     /// map.clear();
     /// assert!(map.is_empty());
@@ -243,8 +243,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// assert_eq!(Some(&(3, 33)), ordmap!{
     ///   1 => 11,
     ///   2 => 22,
@@ -264,8 +264,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// assert_eq!(Some(&(1, 11)), ordmap!{
     ///   1 => 11,
     ///   2 => 22,
@@ -342,8 +342,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{123 => "lol"};
     /// assert_eq!(
     ///   map.get(&123),
@@ -367,8 +367,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{123 => "lol"};
     /// assert_eq!(
     ///   map.get_key_value(&123),
@@ -396,8 +396,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdMap;
     /// let map = ordmap![1 => 1, 3 => 3, 5 => 5];
     /// assert_eq!(Some((&3, &3)), map.get_prev(&4));
     /// ```
@@ -421,8 +421,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdMap;
     /// let map = ordmap![1 => 1, 3 => 3, 5 => 5];
     /// assert_eq!(Some((&5, &5)), map.get_next(&4));
     /// ```
@@ -444,8 +444,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdMap;
     /// let map = ordmap![1 => 1, 3 => 3, 5 => 5];
     /// assert_eq!(Some((&1, &1)), map.get_prev_exclusive(&3));
     /// assert_eq!(Some((&3, &3)), map.get_prev_exclusive(&4));
@@ -468,8 +468,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdMap;
     /// let map = ordmap![1 => 1, 3 => 3, 5 => 5];
     /// assert_eq!(Some((&5, &5)), map.get_next_exclusive(&3));
     /// assert_eq!(Some((&5, &5)), map.get_next_exclusive(&4));
@@ -490,8 +490,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{123 => "lol"};
     /// assert!(
     ///   map.contains_key(&123)
@@ -553,8 +553,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 2 => 2};
     /// let map2 = ordmap!{1 => 1, 2 => 2, 3 => 3};
     /// assert!(map1.is_submap(map2));
@@ -578,8 +578,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 2 => 2};
     /// let map2 = ordmap!{1 => 1, 2 => 2, 3 => 3};
     /// assert!(map1.is_proper_submap(map2));
@@ -621,8 +621,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let a = ordmap!{1 => "a", 2 => "b"};
     /// let b = ordmap!{3 => "c", 4 => "d"};
     /// let c = ordmap!{2 => "x", 5 => "e"};
@@ -661,8 +661,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let left = ordmap!{1 => "a", 2 => "b", 3 => "c"};
     /// let right = ordmap!{2 => 10, 3 => 20, 4 => 30};
     /// let merged: OrdMap<i32, String> = left.merge_with(
@@ -753,8 +753,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let mut map = ordmap!{123 => "lol"};
     /// if let Some(value) = map.get_mut(&123) {
     ///     *value = "omg";
@@ -780,8 +780,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let mut map = ordmap!{123 => "lol"};
     /// assert_eq!(
     ///   map.get_key_value_mut(&123),
@@ -805,8 +805,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdMap;
     /// let mut map = ordmap![1 => 10, 2 => 20, 3 => 30];
     /// for (k, v) in map.iter_mut() {
     ///     *v += *k;
@@ -830,8 +830,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdMap;
     /// let mut map = ordmap![1 => 1, 3 => 3, 5 => 5];
     /// if let Some((key, value)) = map.get_prev_mut(&4) {
     ///     *value = 4;
@@ -859,8 +859,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdMap;
     /// let mut map = ordmap![1 => 1, 3 => 3, 5 => 5];
     /// if let Some((key, value)) = map.get_next_mut(&4) {
     ///     *value = 4;
@@ -886,8 +886,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdMap;
     /// let mut map = ordmap![1 => 1, 3 => 3, 5 => 5];
     /// if let Some((key, value)) = map.get_prev_exclusive_mut(&3) {
     ///     *value = 2;
@@ -913,8 +913,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdMap;
     /// let mut map = ordmap![1 => 1, 3 => 3, 5 => 5];
     /// if let Some((key, value)) = map.get_next_exclusive_mut(&3) {
     ///     *value = 4;
@@ -945,8 +945,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let mut map = ordmap!{};
     /// map.insert(123, "123");
     /// map.insert(456, "456");
@@ -992,8 +992,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let mut map = ordmap!{123 => "123", 456 => "456"};
     /// map.remove(&123);
     /// map.remove(&456);
@@ -1043,8 +1043,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let base = ordmap!{1 => "a", 2 => "b", 3 => "c"};
     /// let modified = ordmap!{1 => "a", 2 => "B", 4 => "d"};
     /// let diff: Vec<_> = base.diff(&modified).collect();
@@ -1081,8 +1081,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{1 => "one", 2 => "two", 3 => "three", 4 => "four"};
     /// let (evens, odds) = map.partition(|k, _| k % 2 == 0);
     /// assert_eq!(evens, ordmap!{2 => "two", 4 => "four"});
@@ -1116,8 +1116,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let a = ordmap!{1 => 10, 2 => 20, 3 => 30};
     /// let b = ordmap!{2 => 5, 3 => 50, 4 => 40};
     /// let result = a.relative_complement_with(&b, |_k, v_self, v_other| {
@@ -1163,8 +1163,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let mut map = ordmap!{1 => "one", 2 => "two", 3 => "three"};
     /// map.retain(|k, _| k % 2 != 0);
     /// assert_eq!(map, ordmap!{1 => "one", 3 => "three"});
@@ -1190,9 +1190,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
+    /// # use pds::ordset::OrdSet;
     /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c", 4 => "d"};
     /// let keys = ordset!{2, 4};
     /// let restricted = map.restrict_keys(&keys);
@@ -1212,9 +1212,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
+    /// # use pds::ordset::OrdSet;
     /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c", 4 => "d"};
     /// let keys = ordset!{2, 4};
     /// let reduced = map.without_keys(&keys);
@@ -1240,8 +1240,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{};
     /// assert_eq!(
     ///   map.update(123, "123"),
@@ -1389,8 +1389,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 3 => 3};
     /// let map2 = ordmap!{2 => 2, 3 => 4};
     /// let expected = ordmap!{1 => 1, 2 => 2, 3 => 3};
@@ -1446,8 +1446,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 3 => 4};
     /// let map2 = ordmap!{2 => 2, 3 => 5};
     /// let expected = ordmap!{1 => 1, 2 => 2, 3 => 9};
@@ -1496,8 +1496,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 3 => 3};
     /// let map2 = ordmap!{2 => 2};
     /// let expected = ordmap!{1 => 1, 2 => 2, 3 => 3};
@@ -1563,8 +1563,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 3 => 4};
     /// let map2 = ordmap!{2 => 2, 3 => 5};
     /// let expected = ordmap!{1 => 1, 2 => 2};
@@ -1574,7 +1574,7 @@ where
     /// [symmetric_difference]: #method.symmetric_difference
     #[deprecated(
         since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and imbl, the `difference` alias for `symmetric_difference` will be removed."
+        note = "to avoid conflicting behaviors between std and pds, the `difference` alias for `symmetric_difference` will be removed."
     )]
     #[inline]
     #[must_use]
@@ -1590,8 +1590,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 3 => 4};
     /// let map2 = ordmap!{2 => 2, 3 => 5};
     /// let expected = ordmap!{1 => 1, 2 => 2};
@@ -1614,7 +1614,7 @@ where
     /// [symmetric_difference_with]: #method.symmetric_difference_with
     #[deprecated(
         since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and imbl, the `difference_with` alias for `symmetric_difference_with` will be removed."
+        note = "to avoid conflicting behaviors between std and pds, the `difference_with` alias for `symmetric_difference_with` will be removed."
     )]
     #[inline]
     #[must_use]
@@ -1651,8 +1651,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 3 => 4};
     /// let map2 = ordmap!{2 => 2, 3 => 5};
     /// let expected = ordmap!{1 => 1, 2 => 2, 3 => 9};
@@ -1664,7 +1664,7 @@ where
     /// [symmetric_difference_with_key]: #method.symmetric_difference_with_key
     #[deprecated(
         since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and imbl, the `difference_with_key` alias for `symmetric_difference_with_key` will be removed."
+        note = "to avoid conflicting behaviors between std and pds, the `difference_with_key` alias for `symmetric_difference_with_key` will be removed."
     )]
     #[must_use]
     pub fn difference_with_key<F>(self, other: Self, f: F) -> Self
@@ -1683,8 +1683,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 3 => 4};
     /// let map2 = ordmap!{2 => 2, 3 => 5};
     /// let expected = ordmap!{1 => 1, 2 => 2, 3 => 9};
@@ -1722,8 +1722,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 3 => 4};
     /// let map2 = ordmap!{2 => 2, 3 => 5};
     /// let expected = ordmap!{1 => 1};
@@ -1746,8 +1746,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 2 => 2};
     /// let map2 = ordmap!{2 => 3, 3 => 4};
     /// let expected = ordmap!{2 => 2};
@@ -1790,8 +1790,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map1 = ordmap!{1 => 1, 2 => 2};
     /// let map2 = ordmap!{2 => 3, 3 => 4};
     /// let expected = ordmap!{2 => 5};
@@ -1952,8 +1952,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
     /// let doubled = map.map_values(|v| v * 2);
     /// assert_eq!(doubled, ordmap!{1 => 20, 2 => 40, 3 => 60});
@@ -1975,8 +1975,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
     /// let sums = map.map_values_with_key(|k, v| k + v);
     /// assert_eq!(sums, ordmap!{1 => 11, 2 => 22, 3 => 33});
@@ -1998,8 +1998,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{1 => "10", 2 => "20", 3 => "30"};
     /// let parsed: Result<OrdMap<i32, i32>, _> =
     ///     map.try_map_values(|_, v| v.parse::<i32>());
@@ -2025,8 +2025,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
     /// let (total, cumulative) = map.map_accum(0, |acc, _k, v| {
     ///     let new_acc = acc + v;
@@ -2060,8 +2060,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{1 => 10, 2 => 20, 3 => 30};
     /// let (small, big): (OrdMap<i32, String>, OrdMap<i32, String>) =
     ///     map.partition_map(|_k, v| {
@@ -2114,8 +2114,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c"};
     /// let negated = map.map_keys(|k| -k);
     /// assert_eq!(negated, ordmap!{-3 => "c", -2 => "b", -1 => "a"});
@@ -2141,8 +2141,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordmap::OrdMap;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
     /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c"};
     /// let doubled = map.map_keys_monotonic(|k| k * 2);
     /// assert_eq!(doubled, ordmap!{2 => "a", 4 => "b", 6 => "c"});
@@ -3067,7 +3067,7 @@ where
 pub mod proptest {
     #[deprecated(
         since = "14.3.0",
-        note = "proptest strategies have moved to imbl::proptest"
+        note = "proptest strategies have moved to pds::proptest"
     )]
     pub use crate::proptest::ord_map;
 }

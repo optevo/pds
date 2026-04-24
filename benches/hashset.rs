@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
-use imbl::HashSet;
+use pds::HashSet;
 use std::collections::HashSet as StdHashSet;
 use std::hash::Hash;
 use std::hint::black_box;

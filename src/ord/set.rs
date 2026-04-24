@@ -38,8 +38,8 @@ use crate::GenericOrdMap;
 /// # Examples
 ///
 /// ```
-/// # #[macro_use] extern crate imbl;
-/// # use imbl::ordset::OrdSet;
+/// # #[macro_use] extern crate pds;
+/// # use pds::ordset::OrdSet;
 /// # fn main() {
 /// assert_eq!(
 ///   ordset![1, 2, 3],
@@ -116,8 +116,8 @@ impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # type OrdSet<T> = imbl::ordset::OrdSet<T>;
+    /// # #[macro_use] extern crate pds;
+    /// # type OrdSet<T> = pds::ordset::OrdSet<T>;
     /// let set = OrdSet::unit(123);
     /// assert!(set.contains(&123));
     /// ```
@@ -136,8 +136,8 @@ impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// assert!(
     ///   !ordset![1, 2, 3].is_empty()
     /// );
@@ -158,8 +158,8 @@ impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// assert_eq!(3, ordset![1, 2, 3].len());
     /// ```
     #[inline]
@@ -191,8 +191,8 @@ impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdSet;
     /// let mut set = ordset![1, 2, 3];
     /// set.clear();
     /// assert!(set.is_empty());
@@ -272,8 +272,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let mut set = ordset!{1, 2, 3};
     /// assert!(set.contains(&1));
     /// assert!(!set.contains(&4));
@@ -297,10 +297,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
+    /// # #[macro_use] extern crate pds;
     /// # use core::borrow::Borrow;
     /// # use core::cmp::Ordering;
-    /// # use imbl::ordset::OrdSet;
+    /// # use pds::ordset::OrdSet;
     /// # #[derive(Clone)]
     /// // Implements Eq and ord by delegating to id
     /// struct FancyItem {
@@ -337,8 +337,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdSet;
     /// let set = ordset![1, 3, 5, 7, 9];
     /// assert_eq!(Some(&5), set.get_prev(&6));
     /// ```
@@ -360,8 +360,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdSet;
     /// let set = ordset![1, 3, 5, 7, 9];
     /// assert_eq!(Some(&5), set.get_next(&4));
     /// ```
@@ -381,8 +381,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdSet;
     /// let set = ordset![1, 3, 5, 7, 9];
     /// assert_eq!(Some(&1), set.get_prev_exclusive(&3));
     /// assert_eq!(Some(&3), set.get_prev_exclusive(&4));
@@ -403,8 +403,8 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdSet;
     /// let set = ordset![1, 3, 5, 7, 9];
     /// assert_eq!(Some(&5), set.get_next_exclusive(&3));
     /// assert_eq!(Some(&5), set.get_next_exclusive(&4));
@@ -454,8 +454,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let a = ordset!{1, 2, 3};
     /// let b = ordset!{4, 5, 6};
     /// let c = ordset!{3, 4, 5};
@@ -490,8 +490,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let mut set = ordset!{};
     /// set.insert(123);
     /// set.insert(456);
@@ -527,8 +527,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let base = ordset!{1, 2, 3};
     /// let modified = ordset!{2, 3, 4};
     /// let diff: Vec<_> = base.diff(&modified).collect();
@@ -563,8 +563,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let mut set = ordset!{1, 2, 3, 4, 5};
     /// set.retain(|v| v % 2 != 0);
     /// assert_eq!(set, ordset!{1, 3, 5});
@@ -588,8 +588,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let set = ordset!{1, 2, 3, 4, 5};
     /// let (evens, odds) = set.partition(|v| v % 2 == 0);
     /// assert_eq!(evens, ordset!{2, 4});
@@ -619,8 +619,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let set = ordset!{1, 2, 3, 4, 5};
     /// let keep = ordset!{2, 4, 6};
     /// assert_eq!(set.restrict(&keep), ordset!{2, 4});
@@ -658,8 +658,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let set = ordset![456];
     /// assert_eq!(
     ///   set.update(123),
@@ -718,8 +718,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let set1 = ordset!{1, 2};
     /// let set2 = ordset!{2, 3};
     /// let expected = ordset!{1, 2, 3};
@@ -759,8 +759,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let set1 = ordset!{1, 2};
     /// let set2 = ordset!{2, 3};
     /// let expected = ordset!{1, 3};
@@ -770,7 +770,7 @@ where
     /// [symmetric_difference]: #method.symmetric_difference
     #[deprecated(
         since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and imbl, the `difference` alias for `symmetric_difference` will be removed."
+        note = "to avoid conflicting behaviors between std and pds, the `difference` alias for `symmetric_difference` will be removed."
     )]
     #[must_use]
     pub fn difference(self, other: Self) -> Self {
@@ -784,8 +784,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let set1 = ordset!{1, 2};
     /// let set2 = ordset!{2, 3};
     /// let expected = ordset!{1, 3};
@@ -809,8 +809,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let set1 = ordset!{1, 2};
     /// let set2 = ordset!{2, 3};
     /// let expected = ordset!{1};
@@ -831,8 +831,8 @@ where
     /// # Examples
     ///
     /// ```
-    /// # #[macro_use] extern crate imbl;
-    /// # use imbl::ordset::OrdSet;
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
     /// let set1 = ordset!{1, 2};
     /// let set2 = ordset!{2, 3};
     /// let expected = ordset!{2};

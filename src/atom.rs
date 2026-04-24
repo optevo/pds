@@ -17,7 +17,7 @@
 //! # Examples
 //!
 //! ```rust,ignore
-//! use imbl::{atom::Atom, HashMap};
+//! use pds::{atom::Atom, HashMap};
 //!
 //! let state = Atom::new(HashMap::new());
 //!
