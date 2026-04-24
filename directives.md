@@ -384,6 +384,18 @@ performance numbers). Do not benchmark in debug mode — the numbers are meaning
 If any step fails, the script exits non-zero. A green `test.sh` is the proof
 required by the completion gate.
 
+### Local rustdocs
+
+Whenever documentation is updated (doc comments, module-level docs, or
+README changes), rebuild the local rustdocs:
+
+```bash
+cargo doc --no-deps --all-features --target-dir rustdocs
+```
+
+This places the generated docs in `rustdocs/doc/pds/`. The `rustdocs/`
+directory must be in `.gitignore` (build artefact, not committed).
+
 ### Benchmarking (`bench.sh`)
 
 `bench.sh` runs criterion benchmarks in release mode. Use it to measure
