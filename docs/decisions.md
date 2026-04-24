@@ -131,3 +131,42 @@ versions — harmless, resolves with rand update).
 Breaking updates are deferred to natural integration points (CHAMP work
 for wide, v8.0.0 for bincode removal). The semver-compatible deps are
 all current and audit-clean except the known bincode advisory.
+
+---
+
+## DEC-004: 3.1 Arc::get_mut — already handled by Arc::make_mut
+
+**Date:** 2026-04-24
+**Status:** Accepted
+
+**Context:**
+Plan item 3.1 proposed replacing `SharedPointer::make_mut` calls with a
+`SharedPointer::get_mut` check (returns `Some(&mut T)` when refcount == 1)
+followed by `make_mut` as fallback, to avoid unnecessary cloning when the
+caller is the sole owner.
+
+**Decision:**
+Mark 3.1 as already handled. `std::sync::Arc::make_mut` (which archery's
+`SharedPointer::make_mut` delegates to) already performs an atomic
+compare-exchange on the strong count (sync.rs:2503): if strong == 1 and
+weak == 0, it provides `&mut T` directly without cloning. Adding a
+`get_mut` pre-check would be redundant — it performs the same refcount
+test that `make_mut` already does internally.
+
+The performance scenario described in the plan ("let mut map =
+map.insert(k, v) clones unnecessarily") is about binding semantics, not
+`make_mut` behaviour: during `insert`, the original binding still holds
+a strong reference, so refcount is genuinely >1 and cloning is correct.
+Avoiding that clone requires _moving_ ownership before mutating, which is
+item 3.3 (Transient/Builder API), not 3.1.
+
+**Alternatives considered:**
+- Proceed with mechanical replacement of 110 `make_mut` call sites —
+  would produce identical runtime behaviour with added code complexity.
+- Introduce a helper `fn make_mut_or_get` — same issue, `make_mut`
+  already does this.
+
+**Consequences:**
+3.1 is closed. The sole-owner mutation performance win is redirected to
+3.3 (Transient/Builder), which takes explicit ownership before bulk
+mutation. No code changes needed for 3.1.
