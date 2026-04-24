@@ -1212,3 +1212,34 @@ When HashWidth is implemented, add a compile-time or runtime guard.
 **Consequences:**
 - HashWidth implementation must expose a mechanism to query hash width.
 - Positive equality guards must be updated when HashWidth lands.
+
+---
+
+## DEC-024: Consider unwrapping SharedPointer-wrapped hasher {#sec:dec-024}
+
+**Date:** 2026-04-25
+**Status:** Pending — needs user decision
+
+**Context:**
+DEC-006 wrapped the hasher in `SharedPointer<S, P>` to eliminate ~50
+`S: Clone` bounds from the HashMap/HashSet API. This incurs a 3-5%
+regression on i64 lookups (pointer indirection on every hash call).
+
+Since then, DEC-021 (kv_merkle_hash) added `V: Hash` to all mutating
+HashMap methods. The user observed that requiring `V: Hash` for Merkle
+may weaken the original motivation for avoiding `S: Clone`, since
+`S: Clone` is a much lighter bound than `V: Hash`.
+
+**Trade-off:**
+- **Unwrap:** removes pointer indirection (3-5% i64 lookup improvement),
+  simplifies internal code, but re-adds `S: Clone` to clone/persistent
+  methods.
+- **Keep wrapped:** maintains the current API surface (no `S: Clone`
+  anywhere), but pays the indirection cost on every hash computation.
+
+**Note:** `V: Hash` is only on mutation paths. Read-only methods (get,
+contains_key, iter) do NOT require `V: Hash`. So `S: Clone` would
+affect a broader surface than `V: Hash` does. However, all standard
+hashers implement `Clone`, so the practical burden is low.
+
+**Decision:** Deferred — awaiting user input.
