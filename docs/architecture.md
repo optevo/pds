@@ -47,7 +47,7 @@ implements `SharedPointerKind`. This abstraction provides:
 - `SharedPointer::make_mut(&mut self) -> &mut T` — clone-on-write (clones
   if refcount > 1)
 - `SharedPointer::get_mut(&mut self) -> Option<&mut T>` — in-place mutation
-  if sole owner (refcount == 1). **Not currently used** — item 3.1 adds this.
+  if sole owner (refcount == 1).
 - `SharedPointer::ptr_eq(&self, &other) -> bool` — identity comparison
 - `SharedPointer::strong_count(&self) -> usize` — refcount
 
@@ -55,11 +55,9 @@ implements `SharedPointerKind`. This abstraction provides:
 
 The `DefaultSharedPtr` type alias selects the concrete pointer:
 
-- **Without `triomphe` feature (default):** `ArcK` → `std::sync::Arc`
-- **With `triomphe` feature:** `ArcTK` → `triomphe::Arc` (no weak count,
-  8 bytes smaller per allocation)
-
-Item 5.1 flips the default to `ArcTK` as a breaking change in v8.0.0.
+- **With `triomphe` feature (default):** `ArcTK` → `triomphe::Arc` (no weak
+  count, 8 bytes smaller per allocation)
+- **Without `triomphe` feature:** `ArcK` → `std::sync::Arc`
 
 ---
 

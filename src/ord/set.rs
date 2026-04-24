@@ -68,7 +68,7 @@ pub type OrdSet<A> = GenericOrdSet<A, DefaultSharedPtr>;
 
 /// An ordered set.
 ///
-/// An immutable ordered map implemented as a B+tree [1].
+/// An immutable ordered set implemented as a B+tree [1].
 ///
 /// Most operations on this type of set are O(log n). A
 /// [`GenericHashSet`] is usually a better choice for
@@ -1502,5 +1502,367 @@ mod test {
         let set = ordset![1, 2, 3, 4, 5];
         let keep = ordset![2, 4, 6];
         assert_eq!(set.restrict(&keep), ordset![2, 4]);
+    }
+
+    // --- Coverage gap tests ---
+
+    #[test]
+    fn new_unit_is_empty_len() {
+        let empty: OrdSet<i32> = OrdSet::new();
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let single = OrdSet::unit(42);
+        assert!(!single.is_empty());
+        assert_eq!(single.len(), 1);
+        assert!(single.contains(&42));
+    }
+
+    #[test]
+    fn ptr_eq_and_clear() {
+        let a = ordset![1, 2, 3];
+        let b = a.clone();
+        assert!(a.ptr_eq(&b));
+
+        let c = ordset![1, 2, 3]; // independently constructed
+        assert!(!a.ptr_eq(&c));
+        assert_eq!(a, c); // structurally equal though
+
+        let mut d = a.clone();
+        d.clear();
+        assert!(d.is_empty());
+        assert_eq!(d.len(), 0);
+        assert!(!a.is_empty()); // original unaffected
+    }
+
+    #[test]
+    fn get_min_get_max() {
+        let set = ordset![3, 1, 5, 2, 4];
+        assert_eq!(set.get_min(), Some(&1));
+        assert_eq!(set.get_max(), Some(&5));
+
+        let empty: OrdSet<i32> = OrdSet::new();
+        assert_eq!(empty.get_min(), None);
+        assert_eq!(empty.get_max(), None);
+
+        let single = OrdSet::unit(99);
+        assert_eq!(single.get_min(), Some(&99));
+        assert_eq!(single.get_max(), Some(&99));
+    }
+
+    #[test]
+    fn get_exact() {
+        let set = ordset![10, 20, 30];
+        assert_eq!(set.get(&20), Some(&20));
+        assert_eq!(set.get(&25), None);
+    }
+
+    #[test]
+    fn get_prev_get_next() {
+        let set = ordset![10, 20, 30, 40, 50];
+        // Inclusive: value present → returns itself
+        assert_eq!(set.get_prev(&30), Some(&30));
+        assert_eq!(set.get_next(&30), Some(&30));
+        // Value absent → nearest neighbour
+        assert_eq!(set.get_prev(&25), Some(&20));
+        assert_eq!(set.get_next(&25), Some(&30));
+        // Boundaries
+        assert_eq!(set.get_prev(&5), None);
+        assert_eq!(set.get_next(&55), None);
+    }
+
+    #[test]
+    fn insert_returns_replaced() {
+        let mut set = ordset![1, 2, 3];
+        assert_eq!(set.insert(4), None); // new element
+        assert_eq!(set.insert(2), Some(2)); // existing element
+        assert_eq!(set.len(), 4);
+    }
+
+    #[test]
+    fn remove_returns_removed() {
+        let mut set = ordset![1, 2, 3];
+        assert_eq!(set.remove(&2), Some(2));
+        assert_eq!(set.remove(&5), None);
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn remove_min_remove_max() {
+        let mut set = ordset![1, 2, 3, 4, 5];
+        assert_eq!(set.remove_min(), Some(1));
+        assert_eq!(set, ordset![2, 3, 4, 5]);
+        assert_eq!(set.remove_max(), Some(5));
+        assert_eq!(set, ordset![2, 3, 4]);
+
+        let mut empty: OrdSet<i32> = OrdSet::new();
+        assert_eq!(empty.remove_min(), None);
+        assert_eq!(empty.remove_max(), None);
+    }
+
+    #[test]
+    fn update_persistent() {
+        let set = ordset![1, 2, 3];
+        let updated = set.update(4);
+        assert_eq!(updated, ordset![1, 2, 3, 4]);
+        assert_eq!(set, ordset![1, 2, 3]); // original unchanged
+    }
+
+    #[test]
+    fn without_min_without_max() {
+        let set = ordset![10, 20, 30];
+        let (min, rest) = set.without_min();
+        assert_eq!(min, Some(10));
+        assert_eq!(rest, ordset![20, 30]);
+
+        let (max, rest) = set.without_max();
+        assert_eq!(max, Some(30));
+        assert_eq!(rest, ordset![10, 20]);
+
+        let empty: OrdSet<i32> = OrdSet::new();
+        let (min, rest) = empty.without_min();
+        assert_eq!(min, None);
+        assert!(rest.is_empty());
+        let (max, rest) = empty.without_max();
+        assert_eq!(max, None);
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn is_subset_is_proper_subset() {
+        let a = ordset![1, 2, 3];
+        let b = ordset![1, 2, 3, 4, 5];
+        let c = ordset![1, 2, 3];
+
+        assert!(a.is_subset(&b));
+        assert!(a.is_subset(&c));
+        assert!(a.is_proper_subset(&b));
+        assert!(!a.is_proper_subset(&c)); // equal sets are not proper subsets
+        assert!(!b.is_subset(&a));
+    }
+
+    #[test]
+    fn union_basic() {
+        let a = ordset![1, 2, 3];
+        let b = ordset![3, 4, 5];
+        assert_eq!(a.union(b), ordset![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn unions_multiple() {
+        let sets = vec![ordset![1, 2], ordset![2, 3], ordset![3, 4]];
+        assert_eq!(OrdSet::unions(sets), ordset![1, 2, 3, 4]);
+
+        // Empty iterator
+        let empty: Vec<OrdSet<i32>> = vec![];
+        assert_eq!(OrdSet::unions(empty), OrdSet::new());
+    }
+
+    #[test]
+    fn difference_basic() {
+        // Note: OrdSet::difference is symmetric difference, not set-minus
+        let a = ordset![1, 2, 3];
+        let b = ordset![2, 3, 4];
+        assert_eq!(a.difference(b), ordset![1, 4]);
+    }
+
+    #[test]
+    fn symmetric_difference_basic() {
+        let a = ordset![1, 2, 3];
+        let b = ordset![2, 3, 4];
+        let result = a.symmetric_difference(b);
+        assert_eq!(result, ordset![1, 4]);
+    }
+
+    #[test]
+    fn relative_complement_basic() {
+        let a = ordset![1, 2, 3, 4, 5];
+        let b = ordset![2, 4];
+        assert_eq!(a.relative_complement(b), ordset![1, 3, 5]);
+    }
+
+    #[test]
+    fn intersection_basic() {
+        let a = ordset![1, 2, 3, 4];
+        let b = ordset![2, 4, 6];
+        assert_eq!(a.intersection(b), ordset![2, 4]);
+    }
+
+    #[test]
+    fn split_basic() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let (left, right) = set.split(&3);
+        assert_eq!(left, ordset![1, 2]);
+        assert_eq!(right, ordset![4, 5]);
+    }
+
+    #[test]
+    fn split_member_basic() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let (left, present, right) = set.clone().split_member(&3);
+        assert_eq!(left, ordset![1, 2]);
+        assert!(present);
+        assert_eq!(right, ordset![4, 5]);
+
+        let (left, present, right) = set.split_member(&6);
+        assert_eq!(left, ordset![1, 2, 3, 4, 5]);
+        assert!(!present);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn take_skip() {
+        let set = ordset![10, 20, 30, 40, 50];
+        assert_eq!(set.take(3), ordset![10, 20, 30]);
+        assert_eq!(set.skip(2), ordset![30, 40, 50]);
+        assert_eq!(set.take(0), OrdSet::new());
+        assert_eq!(set.skip(5), OrdSet::new());
+        assert_eq!(set.take(10), set); // take more than len
+    }
+
+    #[test]
+    fn add_mul_operators() {
+        // Add (union)
+        let a = ordset![1, 2];
+        let b = ordset![2, 3];
+        let union: OrdSet<i32> = a + b;
+        assert_eq!(union, ordset![1, 2, 3]);
+
+        // Mul (intersection)
+        let a = ordset![1, 2, 3];
+        let b = ordset![2, 3, 4];
+        let inter: OrdSet<i32> = a * b;
+        assert_eq!(inter, ordset![2, 3]);
+    }
+
+    #[test]
+    fn sum_trait() {
+        let sets = vec![ordset![1, 2], ordset![2, 3], ordset![3, 4]];
+        let union: OrdSet<i32> = sets.into_iter().sum();
+        assert_eq!(union, ordset![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn from_conversions() {
+        // From<Vec>
+        let set: OrdSet<i32> = OrdSet::from(vec![3, 1, 2, 1]);
+        assert_eq!(set, ordset![1, 2, 3]);
+
+        // From<BTreeSet>
+        let btree: BTreeSet<i32> = [1, 2, 3].into_iter().collect();
+        let set: OrdSet<i32> = OrdSet::from(btree);
+        assert_eq!(set, ordset![1, 2, 3]);
+
+        // OrdSet → Vec via into_iter
+        let set = ordset![1, 2, 3];
+        let v: Vec<i32> = set.into_iter().collect();
+        assert_eq!(v, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn extend_trait() {
+        let mut set = ordset![1, 2];
+        set.extend(vec![3, 4, 5]);
+        assert_eq!(set, ordset![1, 2, 3, 4, 5]);
+
+        // Extend with another set (From<OrdSet> path)
+        let mut set2 = ordset![1, 2];
+        set2.extend(ordset![3, 4, 5]);
+        assert_eq!(set2, ordset![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn partial_ord_ord() {
+        let a = ordset![1, 2, 3];
+        let b = ordset![1, 2, 4];
+        assert!(a < b);
+        assert!(b > a);
+
+        let c = ordset![1, 2, 3];
+        assert!(a <= c);
+        assert!(a >= c);
+    }
+
+    #[test]
+    fn hash_trait() {
+        use crate::test::MetroHashBuilder;
+        let a = ordset![1, 2, 3];
+        let b = ordset![1, 2, 3];
+        let bh = MetroHashBuilder::new(0);
+        let ha = bh.hash_one(&a);
+        let hb = bh.hash_one(&b);
+        assert_eq!(ha, hb);
+    }
+
+    #[test]
+    fn debug_display() {
+        let set = ordset![1, 2, 3];
+        let debug = format!("{:?}", set);
+        assert!(debug.contains('1'));
+        assert!(debug.contains('3'));
+    }
+
+    #[test]
+    fn into_iterator() {
+        let set = ordset![1, 2, 3];
+        let items: Vec<i32> = set.into_iter().collect();
+        assert_eq!(items, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn from_hashset() {
+        use crate::HashSet;
+        let hs: HashSet<i32> = vec![3, 1, 2].into_iter().collect();
+        let os: OrdSet<i32> = OrdSet::from(hs);
+        assert_eq!(os.len(), 3);
+        assert!(os.contains(&1));
+        assert!(os.contains(&2));
+        assert!(os.contains(&3));
+    }
+
+    #[test]
+    fn iter_fused_and_exact_size() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let mut it = set.iter();
+        assert_eq!(it.len(), 5);
+        it.next();
+        assert_eq!(it.len(), 4);
+        // Exhaust
+        while it.next().is_some() {}
+        assert_eq!(it.len(), 0);
+        assert_eq!(it.next(), None); // fused: stays None
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn large_set_operations() {
+        // Exercise deeper B+ tree paths (node splits, merges)
+        let n = 1000;
+        let a: OrdSet<i32> = (0..n).collect();
+        let b: OrdSet<i32> = (n / 2..n + n / 2).collect();
+
+        let u = a.clone().union(b.clone());
+        assert_eq!(u.len() as i32, n + n / 2);
+
+        let i = a.clone().intersection(b.clone());
+        assert_eq!(i.len() as i32, n / 2);
+
+        let d = a.clone().relative_complement(b.clone());
+        assert_eq!(d.len() as i32, n / 2); // elements in a but not b
+
+        let sd = a.clone().symmetric_difference(b.clone());
+        assert_eq!(sd.len() as i32, n);
+
+        // Verify ordering preserved
+        let items: Vec<i32> = u.iter().cloned().collect();
+        for w in items.windows(2) {
+            assert!(w[0] < w[1]);
+        }
+    }
+
+    #[test]
+    fn check_sane_valid_set() {
+        let set: OrdSet<i32> = (0..100).collect();
+        set.check_sane(); // should not panic
     }
 }

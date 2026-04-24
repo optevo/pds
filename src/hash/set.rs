@@ -1666,4 +1666,244 @@ mod test {
             assert!(s.len() >= 10);
         }
     }
+
+    // --- Coverage gap tests ---
+
+    #[test]
+    fn new_unit_is_empty_len() {
+        let empty: HashSet<i32> = HashSet::new();
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let single = HashSet::unit(42);
+        assert!(!single.is_empty());
+        assert_eq!(single.len(), 1);
+        assert!(single.contains(&42));
+    }
+
+    #[test]
+    fn clear() {
+        let mut set = hashset! {1, 2, 3};
+        set.clear();
+        assert!(set.is_empty());
+        assert_eq!(set.len(), 0);
+    }
+
+    #[test]
+    fn hasher_and_new_from() {
+        let set: HashSet<i32> = HashSet::new();
+        let _h = set.hasher(); // just verify it's accessible
+        let set2: HashSet<String> = set.new_from();
+        assert!(set2.is_empty());
+    }
+
+    #[test]
+    fn is_subset_is_proper_subset() {
+        let a = hashset! {1, 2, 3};
+        let b = hashset! {1, 2, 3, 4, 5};
+        let c = hashset! {1, 2, 3};
+        assert!(a.is_subset(&b));
+        assert!(a.is_subset(&c));
+        assert!(a.is_proper_subset(&b));
+        assert!(!a.is_proper_subset(&c));
+        assert!(!b.is_subset(&a));
+    }
+
+    #[test]
+    fn union_basic() {
+        let a = hashset! {1, 2, 3};
+        let b = hashset! {3, 4, 5};
+        let u = a.union(b);
+        assert_eq!(u.len(), 5);
+        for i in 1..=5 {
+            assert!(u.contains(&i));
+        }
+    }
+
+    #[test]
+    fn unions_multiple() {
+        let sets = vec![hashset! {1, 2}, hashset! {2, 3}, hashset! {3, 4}];
+        let u = HashSet::unions(sets);
+        assert_eq!(u.len(), 4);
+
+        let empty: Vec<HashSet<i32>> = vec![];
+        assert!(HashSet::unions(empty).is_empty());
+    }
+
+    #[test]
+    fn difference_basic() {
+        // Note: HashSet::difference is symmetric difference, not set-minus.
+        // Use relative_complement for set-minus.
+        let a = hashset! {1, 2, 3};
+        let b = hashset! {2, 3, 4};
+        let d = a.difference(b);
+        assert_eq!(d.len(), 2);
+        assert!(d.contains(&1));
+        assert!(d.contains(&4));
+    }
+
+    #[test]
+    fn symmetric_difference_basic() {
+        let a = hashset! {1, 2, 3};
+        let b = hashset! {2, 3, 4};
+        let sd = a.symmetric_difference(b);
+        assert_eq!(sd.len(), 2);
+        assert!(sd.contains(&1));
+        assert!(sd.contains(&4));
+    }
+
+    #[test]
+    fn relative_complement_basic() {
+        let a = hashset! {1, 2, 3, 4, 5};
+        let b = hashset! {2, 4};
+        let rc = a.relative_complement(b);
+        assert_eq!(rc.len(), 3);
+        assert!(rc.contains(&1));
+        assert!(rc.contains(&3));
+        assert!(rc.contains(&5));
+    }
+
+    #[test]
+    fn intersection_basic() {
+        let a = hashset! {1, 2, 3, 4};
+        let b = hashset! {2, 4, 6};
+        let i = a.intersection(b);
+        assert_eq!(i.len(), 2);
+        assert!(i.contains(&2));
+        assert!(i.contains(&4));
+    }
+
+    #[test]
+    fn update_persistent() {
+        let set = hashset! {1, 2, 3};
+        let updated = set.update(4);
+        assert_eq!(updated.len(), 4);
+        assert!(updated.contains(&4));
+        assert_eq!(set.len(), 3); // original unchanged
+    }
+
+    #[test]
+    fn without_persistent() {
+        let set = hashset! {1, 2, 3};
+        let smaller = set.without(&2);
+        assert_eq!(smaller.len(), 2);
+        assert!(!smaller.contains(&2));
+        assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn insert_remove_returns() {
+        let mut set = hashset! {1, 2, 3};
+        assert_eq!(set.insert(4), None);
+        assert_eq!(set.insert(2), Some(2));
+        assert_eq!(set.remove(&3), Some(3));
+        assert_eq!(set.remove(&99), None);
+    }
+
+    #[test]
+    fn retain_basic() {
+        let mut set = hashset! {1, 2, 3, 4, 5};
+        set.retain(|v| v % 2 != 0);
+        assert_eq!(set.len(), 3);
+        assert!(set.contains(&1));
+        assert!(set.contains(&3));
+        assert!(set.contains(&5));
+    }
+
+    #[test]
+    fn add_mul_operators() {
+        let a = hashset! {1, 2};
+        let b = hashset! {2, 3};
+        let union: HashSet<i32> = a + b;
+        assert_eq!(union.len(), 3);
+
+        let a = hashset! {1, 2, 3};
+        let b = hashset! {2, 3, 4};
+        let inter: HashSet<i32> = a * b;
+        assert_eq!(inter.len(), 2);
+    }
+
+    #[test]
+    fn sum_trait() {
+        let sets = vec![hashset! {1, 2}, hashset! {2, 3}, hashset! {3, 4}];
+        let union: HashSet<i32> = sets.into_iter().sum();
+        assert_eq!(union.len(), 4);
+    }
+
+    #[test]
+    fn from_conversions() {
+        // From<Vec>
+        let set: HashSet<i32> = HashSet::from(vec![3, 1, 2, 1]);
+        assert_eq!(set.len(), 3);
+
+        // From<std::HashSet>
+        let std_set: std::collections::HashSet<i32> = [1, 2, 3].into_iter().collect();
+        let set: HashSet<i32> = HashSet::from(std_set);
+        assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn extend_trait() {
+        let mut set = hashset! {1, 2};
+        set.extend(vec![3, 4, 5]);
+        assert_eq!(set.len(), 5);
+    }
+
+    #[test]
+    fn into_iterator() {
+        let set = hashset! {1, 2, 3};
+        let mut items: Vec<i32> = set.into_iter().collect();
+        items.sort();
+        assert_eq!(items, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn iter_fused_and_exact_size() {
+        let set = hashset! {1, 2, 3, 4, 5};
+        let mut it = set.iter();
+        assert_eq!(it.len(), 5);
+        it.next();
+        assert_eq!(it.len(), 4);
+        while it.next().is_some() {}
+        assert_eq!(it.len(), 0);
+        assert_eq!(it.next(), None);
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
+    fn debug_display() {
+        let set = hashset! {1, 2, 3};
+        let debug = format!("{:?}", set);
+        assert!(debug.contains('1'));
+    }
+
+    #[test]
+    fn large_set_operations() {
+        let n = 500;
+        let a: HashSet<i32> = (0..n).collect();
+        let b: HashSet<i32> = (n / 2..n + n / 2).collect();
+
+        let u = a.clone().union(b.clone());
+        assert_eq!(u.len() as i32, n + n / 2);
+
+        let i = a.clone().intersection(b.clone());
+        assert_eq!(i.len() as i32, n / 2);
+
+        let rc = a.clone().relative_complement(b.clone());
+        assert_eq!(rc.len() as i32, n / 2);
+
+        let sd = a.symmetric_difference(b);
+        assert_eq!(sd.len() as i32, n);
+    }
+
+    #[test]
+    fn from_ordset() {
+        use crate::OrdSet;
+        let os = ordset! {3, 1, 2};
+        let hs: HashSet<i32> = HashSet::from(os);
+        assert_eq!(hs.len(), 3);
+        assert!(hs.contains(&1));
+        assert!(hs.contains(&2));
+        assert!(hs.contains(&3));
+    }
 }

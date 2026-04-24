@@ -328,9 +328,8 @@ indexing.
 - The CHAMP iteration advantage (36-44%) motivates investigating whether
   the SIMD HAMT's iteration can be improved independently (the current
   3-tier node hierarchy fragments iteration across node types).
-- Future work: explore a hybrid SIMD-CHAMP that uses CHAMP's two-bitmap
-  layout for memory density and iteration but adds SIMD control groups
-  for lookup acceleration.
+- Future work: the hybrid SIMD-CHAMP idea was prototyped and failed its
+  PoC gate (DEC-015). CHAMP integration is fully abandoned (DEC-020).
 
 ---
 
@@ -655,25 +654,22 @@ Better investments for OrdMap: tuning `ORD_CHUNK_SIZE` (experiment with
 24 or 32), branch-free intra-node binary search, and bulk operations
 exploiting sorted structure.
 
-### 6.2 HAMT inline storage — **validated, deferred to hybrid CHAMP**
+### 6.2 HAMT inline storage — **validated, but CHAMP path is closed**
 
 Steindorfer's GPCE 2014 paper measured 55% median memory reduction for
 maps, 78% for sets. Implemented in Capsule (Java), Scala 2.13, Kotlin,
 and Swift Collections 1.1 (PR #31 by Steindorfer). However, these all
-use CHAMP as the base structure. imbl's current three-tier architecture
+use CHAMP as the base structure, which was evaluated and rejected for
+imbl (DEC-007, DEC-015, DEC-020). imbl's current three-tier architecture
 (SmallSimdNode → LargeSimdNode → HamtNode) already captures the spirit
-of inline specialisation. The key finding is that **inline storage is
-best pursued as part of a CHAMP-based redesign**, not bolted onto the
-current HAMT.
+of inline specialisation. Any future memory optimisation would need to
+work within the existing SIMD HAMT architecture.
 
-### 6.3 ThinArc — **recommended, moderate priority**
+### 6.3 ThinArc — **KILLED (DEC-018)**
 
-`triomphe::ThinArc` saves 8 bytes per child pointer throughout the tree.
-For a HamtNode with up to 32 children, worst case saves 256 bytes per
-full node. Average HAMT node (2–4 children) saves 16–32 bytes. Compounds
-across the tree. Also: `tagged-pointer` crate enables pointer tagging
-using alignment bits — could eliminate the 8-byte Entry enum discriminant
-entirely (high complexity, requires unsafe).
+`triomphe::ThinArc` was evaluated to save 8 bytes per child pointer.
+However, `SharedPointer<T>` is already 8 bytes (single pointer, no
+vtable) — there is nothing to save. See DEC-018 for full analysis.
 
 ### 6.4 Dupe trait — **low priority, trivial if wanted**
 

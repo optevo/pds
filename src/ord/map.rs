@@ -4098,4 +4098,603 @@ mod test {
         assert_eq!(acc, 42);
         assert!(result.is_empty());
     }
+
+    // --- Coverage gap tests ---
+
+    #[test]
+    fn new_unit_is_empty_len() {
+        let empty: OrdMap<i32, i32> = OrdMap::new();
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let single = OrdMap::unit(1, 10);
+        assert!(!single.is_empty());
+        assert_eq!(single.len(), 1);
+    }
+
+    #[test]
+    fn ptr_eq_and_clear() {
+        let map = ordmap! {1 => 10, 2 => 20};
+        let clone = map.clone();
+        assert!(map.ptr_eq(&clone));
+
+        let different = ordmap! {1 => 10, 2 => 20};
+        assert!(!map.ptr_eq(&different));
+
+        let mut m = map.clone();
+        m.clear();
+        assert!(m.is_empty());
+        assert_eq!(m.len(), 0);
+    }
+
+    #[test]
+    fn get_min_max() {
+        let map = ordmap! {3 => 30, 1 => 10, 5 => 50};
+        assert_eq!(map.get_min(), Some(&(1, 10)));
+        assert_eq!(map.get_max(), Some(&(5, 50)));
+
+        let empty: OrdMap<i32, i32> = OrdMap::new();
+        assert_eq!(empty.get_min(), None);
+        assert_eq!(empty.get_max(), None);
+    }
+
+    #[test]
+    fn get_prev_get_next() {
+        let map = ordmap! {2 => 20, 4 => 40, 6 => 60};
+        // get_prev: closest <= key
+        assert_eq!(map.get_prev(&3), Some((&2, &20)));
+        assert_eq!(map.get_prev(&4), Some((&4, &40)));
+        assert_eq!(map.get_prev(&1), None);
+
+        // get_next: closest >= key
+        assert_eq!(map.get_next(&3), Some((&4, &40)));
+        assert_eq!(map.get_next(&4), Some((&4, &40)));
+        assert_eq!(map.get_next(&7), None);
+    }
+
+    #[test]
+    fn is_submap_is_proper_submap() {
+        let small = ordmap! {1 => 10, 2 => 20};
+        let big = ordmap! {1 => 10, 2 => 20, 3 => 30};
+
+        assert!(small.is_submap(&big));
+        assert!(small.is_proper_submap(&big));
+
+        assert!(!big.is_submap(&small));
+        assert!(!big.is_proper_submap(&small));
+
+        // Equal maps: submap but not proper submap
+        assert!(small.is_submap(&small));
+        assert!(!small.is_proper_submap(&small));
+    }
+
+    #[test]
+    fn is_submap_by_checks_values() {
+        let a = ordmap! {1 => 10, 2 => 20};
+        let b = ordmap! {1 => 100, 2 => 200, 3 => 300};
+
+        // Values must satisfy predicate
+        assert!(a.is_submap_by(&b, |av, bv| *bv == *av * 10));
+        assert!(!a.is_submap_by(&b, |av, bv| av == bv));
+    }
+
+    #[test]
+    fn update_with_and_update_with_key() {
+        let map = ordmap! {1 => 10, 2 => 20};
+
+        // update_with: existing key — call merge fn
+        let m = map.clone().update_with(1, 100, |old, new| old + new);
+        assert_eq!(m.get(&1), Some(&110));
+
+        // update_with: new key — just insert
+        let m = map.clone().update_with(3, 30, |old, new| old + new);
+        assert_eq!(m.get(&3), Some(&30));
+
+        // update_with_key: merge fn receives key
+        let m = map.clone().update_with_key(1, 100, |k, old, new| k + old + new);
+        assert_eq!(m.get(&1), Some(&111));
+    }
+
+    #[test]
+    fn update_lookup_with_key() {
+        let map = ordmap! {1 => 10, 2 => 20};
+
+        // Existing key: returns old value
+        let (old, m) = map.clone().update_lookup_with_key(1, 100, |_, old, new| old + new);
+        assert_eq!(old, Some(10));
+        assert_eq!(m.get(&1), Some(&110));
+
+        // New key: returns None
+        let (old, m) = map.clone().update_lookup_with_key(3, 30, |_, old, new| old + new);
+        assert_eq!(old, None);
+        assert_eq!(m.get(&3), Some(&30));
+    }
+
+    #[test]
+    fn alter_method() {
+        let map = ordmap! {1 => 10, 2 => 20};
+
+        // Modify existing
+        let m = map.alter(|v| v.map(|x| x * 2), 1);
+        assert_eq!(m.get(&1), Some(&20));
+
+        // Delete existing (return None)
+        let m = map.alter(|_| None, 1);
+        assert!(!m.contains_key(&1));
+
+        // Insert new
+        let m = map.alter(|_| Some(30), 3);
+        assert_eq!(m.get(&3), Some(&30));
+    }
+
+    #[test]
+    fn extract_and_extract_with_key() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+
+        let (v, rest) = map.extract(&2).unwrap();
+        assert_eq!(v, 20);
+        assert_eq!(rest.len(), 2);
+        assert!(!rest.contains_key(&2));
+
+        let (k, v, rest) = map.extract_with_key(&2).unwrap();
+        assert_eq!(k, 2);
+        assert_eq!(v, 20);
+        assert_eq!(rest.len(), 2);
+
+        // Missing key returns None
+        assert!(map.extract(&99).is_none());
+        assert!(map.extract_with_key(&99).is_none());
+    }
+
+    #[test]
+    fn without_min_without_max() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+
+        let (v, rest) = map.without_min();
+        assert_eq!(v, Some(10));
+        assert_eq!(rest.len(), 2);
+        assert!(!rest.contains_key(&1));
+
+        let (v, rest) = map.without_max();
+        assert_eq!(v, Some(30));
+        assert_eq!(rest.len(), 2);
+        assert!(!rest.contains_key(&3));
+
+        let empty: OrdMap<i32, i32> = OrdMap::new();
+        let (v, rest) = empty.without_min();
+        assert_eq!(v, None);
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn without_min_with_key_without_max_with_key() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+
+        let (kv, rest) = map.without_min_with_key();
+        assert_eq!(kv, Some((1, 10)));
+        assert_eq!(rest.len(), 2);
+
+        let (kv, rest) = map.without_max_with_key();
+        assert_eq!(kv, Some((3, 30)));
+        assert_eq!(rest.len(), 2);
+    }
+
+    #[test]
+    fn take_and_skip() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30, 4 => 40, 5 => 50};
+
+        let first3 = map.take(3);
+        assert_eq!(first3, ordmap! {1 => 10, 2 => 20, 3 => 30});
+
+        let last2 = map.skip(3);
+        assert_eq!(last2, ordmap! {4 => 40, 5 => 50});
+
+        // Edge cases
+        assert_eq!(map.take(0), OrdMap::new());
+        assert_eq!(map.take(100), map);
+        assert_eq!(map.skip(0), map);
+        assert_eq!(map.skip(100), OrdMap::new());
+    }
+
+    #[test]
+    fn split_and_split_lookup() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30, 4 => 40, 5 => 50};
+
+        let (left, right) = map.split(&3);
+        assert_eq!(left, ordmap! {1 => 10, 2 => 20});
+        assert_eq!(right, ordmap! {4 => 40, 5 => 50});
+
+        let (left, mid, right) = map.split_lookup(&3);
+        assert_eq!(left, ordmap! {1 => 10, 2 => 20});
+        assert_eq!(mid, Some(30));
+        assert_eq!(right, ordmap! {4 => 40, 5 => 50});
+
+        // Missing split key
+        let (left, mid, right) = map.split_lookup(&6);
+        assert_eq!(mid, None);
+        assert_eq!(left, map);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn union_with_and_union_with_key() {
+        let a = ordmap! {1 => 10, 2 => 20};
+        let b = ordmap! {2 => 200, 3 => 300};
+
+        let m = a.clone().union_with(b.clone(), |l, r| l + r);
+        assert_eq!(m, ordmap! {1 => 10, 2 => 220, 3 => 300});
+
+        let m = a.clone().union_with_key(b.clone(), |k, l, r| k + l + r);
+        assert_eq!(m, ordmap! {1 => 10, 2 => 222, 3 => 300});
+    }
+
+    #[test]
+    fn unions_and_unions_with() {
+        let maps = vec![
+            ordmap! {1 => 10},
+            ordmap! {2 => 20},
+            ordmap! {1 => 100, 3 => 30},
+        ];
+
+        // unions: last value wins
+        let u = OrdMap::unions(maps.clone());
+        assert_eq!(u.len(), 3);
+        assert!(u.contains_key(&1));
+        assert!(u.contains_key(&2));
+        assert!(u.contains_key(&3));
+
+        // unions_with: merge fn
+        let u = OrdMap::unions_with(maps.clone(), |l, r| l + r);
+        assert_eq!(u.get(&1), Some(&110));
+        assert_eq!(u.get(&2), Some(&20));
+        assert_eq!(u.get(&3), Some(&30));
+
+        // Empty input
+        let empty: Vec<OrdMap<i32, i32>> = vec![];
+        assert_eq!(OrdMap::unions(empty), OrdMap::new());
+    }
+
+    #[test]
+    fn symmetric_difference_basic() {
+        let a = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let b = ordmap! {2 => 200, 3 => 300, 4 => 400};
+
+        let sd = a.clone().symmetric_difference(b.clone());
+        assert_eq!(sd, ordmap! {1 => 10, 4 => 400});
+
+        // symmetric_difference_with: merge fn decides fate of shared keys
+        let sd = a.clone().symmetric_difference_with(b.clone(), |l, r| Some(l + r));
+        assert_eq!(sd, ordmap! {1 => 10, 2 => 220, 3 => 330, 4 => 400});
+    }
+
+    #[test]
+    fn relative_complement_basic() {
+        let a = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let b = ordmap! {2 => 200, 3 => 300, 4 => 400};
+
+        let rc = a.relative_complement(b);
+        assert_eq!(rc, ordmap! {1 => 10});
+    }
+
+    #[test]
+    fn intersection_basic() {
+        let a = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let b = ordmap! {2 => 200, 3 => 300, 4 => 400};
+
+        let inter = a.clone().intersection(b.clone());
+        assert_eq!(inter, ordmap! {2 => 20, 3 => 30});
+
+        let inter = a.intersection_with(b, |l, r| l + r);
+        assert_eq!(inter, ordmap! {2 => 220, 3 => 330});
+    }
+
+    #[test]
+    fn keys_and_values_iterators() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+
+        let keys: Vec<&i32> = map.keys().collect();
+        assert_eq!(keys, vec![&1, &2, &3]);
+
+        let values: Vec<&i32> = map.values().collect();
+        assert_eq!(values, vec![&10, &20, &30]);
+    }
+
+    #[test]
+    fn get_key_value_and_get_key_value_mut() {
+        let mut map = ordmap! {1 => 10, 2 => 20};
+        assert_eq!(map.get_key_value(&1), Some((&1, &10)));
+        assert_eq!(map.get_key_value(&99), None);
+
+        let (k, v) = map.get_key_value_mut(&1).unwrap();
+        assert_eq!(*k, 1);
+        *v = 100;
+        assert_eq!(map.get(&1), Some(&100));
+    }
+
+    #[test]
+    fn remove_with_key() {
+        let mut map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let removed = map.remove_with_key(&2);
+        assert_eq!(removed, Some((2, 20)));
+        assert_eq!(map.len(), 2);
+
+        assert_eq!(map.remove_with_key(&99), None);
+    }
+
+    #[test]
+    fn from_conversions() {
+        // From Vec
+        let v: OrdMap<i32, i32> = OrdMap::from(vec![(1, 10), (2, 20)]);
+        assert_eq!(v.len(), 2);
+
+        // From slice
+        let s: OrdMap<i32, i32> = OrdMap::from(&[(1, 10), (2, 20)][..]);
+        assert_eq!(s.len(), 2);
+
+        // From BTreeMap
+        let mut bt = BTreeMap::new();
+        bt.insert(1, 10);
+        bt.insert(2, 20);
+        let m: OrdMap<i32, i32> = OrdMap::from(bt);
+        assert_eq!(m.len(), 2);
+
+        // From std::HashMap
+        let mut hm = std::collections::HashMap::new();
+        hm.insert(1, 10);
+        hm.insert(2, 20);
+        let m: OrdMap<i32, i32> = OrdMap::from(hm);
+        assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn partial_ord_ord_traits() {
+        let a = ordmap! {1 => 10, 2 => 20};
+        let b = ordmap! {1 => 10, 2 => 30};
+        let c = ordmap! {1 => 10, 2 => 20};
+
+        assert!(a < b);
+        assert!(b > a);
+        assert_eq!(a.cmp(&c), core::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn hash_trait() {
+        use core::hash::Hasher;
+
+        let a = ordmap! {1 => 10, 2 => 20};
+        let b = ordmap! {1 => 10, 2 => 20};
+        let c = ordmap! {1 => 10, 2 => 30};
+
+        let hash_of = |m: &OrdMap<i32, i32>| {
+            let mut h = crate::test::MetroHashBuilder::new(0).build_hasher();
+            m.hash(&mut h);
+            h.finish()
+        };
+
+        assert_eq!(hash_of(&a), hash_of(&b));
+        assert_ne!(hash_of(&a), hash_of(&c));
+    }
+
+    #[test]
+    fn sum_trait() {
+        let maps = vec![ordmap! {1 => 10}, ordmap! {2 => 20}, ordmap! {3 => 30}];
+        let combined: OrdMap<i32, i32> = maps.into_iter().sum();
+        assert_eq!(combined.len(), 3);
+    }
+
+    #[test]
+    fn add_trait() {
+        let a = ordmap! {1 => 10};
+        let b = ordmap! {2 => 20};
+        let c = a + b;
+        assert_eq!(c, ordmap! {1 => 10, 2 => 20});
+
+        // &Add
+        let a = ordmap! {1 => 10};
+        let b = ordmap! {2 => 20};
+        let c = &a + &b;
+        assert_eq!(c, ordmap! {1 => 10, 2 => 20});
+    }
+
+    #[test]
+    fn extend_trait() {
+        let mut map = ordmap! {1 => 10};
+        map.extend(vec![(2, 20), (3, 30)]);
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.get(&2), Some(&20));
+    }
+
+    #[test]
+    fn entry_vacant_insert() {
+        let mut map: OrdMap<i32, i32> = OrdMap::new();
+
+        // VacantEntry: insert
+        match map.entry(1) {
+            crate::ordmap::Entry::Vacant(e) => {
+                assert_eq!(*e.key(), 1);
+                e.insert(10);
+            }
+            _ => panic!("expected vacant"),
+        }
+        assert_eq!(map.get(&1), Some(&10));
+    }
+
+    #[test]
+    fn entry_occupied_get_modify_remove() {
+        let mut map = ordmap! {1 => 10, 2 => 20};
+
+        // OccupiedEntry: get, get_mut, remove
+        match map.entry(1) {
+            crate::ordmap::Entry::Occupied(mut e) => {
+                assert_eq!(*e.key(), 1);
+                assert_eq!(*e.get(), 10);
+                *e.get_mut() = 100;
+            }
+            _ => panic!("expected occupied"),
+        }
+        assert_eq!(map.get(&1), Some(&100));
+
+        // remove_entry
+        match map.entry(2) {
+            crate::ordmap::Entry::Occupied(e) => {
+                let (k, v) = e.remove_entry();
+                assert_eq!(k, 2);
+                assert_eq!(v, 20);
+            }
+            _ => panic!("expected occupied"),
+        }
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn entry_or_default_or_insert() {
+        let mut map: OrdMap<i32, i32> = OrdMap::new();
+
+        *map.entry(1).or_default() += 5;
+        assert_eq!(map.get(&1), Some(&5));
+
+        *map.entry(1).or_insert(100) += 5;
+        assert_eq!(map.get(&1), Some(&10));
+
+        *map.entry(2).or_insert_with(|| 42) += 1;
+        assert_eq!(map.get(&2), Some(&43));
+    }
+
+    #[test]
+    fn entry_and_modify() {
+        let mut map = ordmap! {1 => 10};
+
+        map.entry(1).and_modify(|v| *v += 5).or_insert(0);
+        assert_eq!(map.get(&1), Some(&15));
+
+        map.entry(2).and_modify(|v| *v += 5).or_insert(0);
+        assert_eq!(map.get(&2), Some(&0));
+    }
+
+    #[test]
+    fn large_map_operations() {
+        let n = 1000;
+        let mut map = OrdMap::new();
+        for i in 0..n {
+            map.insert(i, i * 10);
+        }
+        assert_eq!(map.len(), n);
+
+        // Verify ordering
+        let keys: Vec<_> = map.keys().cloned().collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+
+        // Union with itself
+        let u = map.clone().union(map.clone());
+        assert_eq!(u.len(), n);
+
+        // Intersection with itself
+        let i = map.clone().intersection(map.clone());
+        assert_eq!(i.len(), n);
+    }
+
+    #[test]
+    fn get_prev_mut_get_next_mut() {
+        let mut map = ordmap! {2 => 20, 4 => 40, 6 => 60};
+
+        if let Some((k, v)) = map.get_prev_mut(&3) {
+            assert_eq!(*k, 2);
+            *v = 200;
+        }
+        assert_eq!(map.get(&2), Some(&200));
+
+        if let Some((k, v)) = map.get_next_mut(&3) {
+            assert_eq!(*k, 4);
+            *v = 400;
+        }
+        assert_eq!(map.get(&4), Some(&400));
+    }
+
+    #[test]
+    fn insert_returns_old_value() {
+        let mut map = ordmap! {1 => 10};
+        let old = map.insert(1, 100);
+        assert_eq!(old, Some(10));
+        assert_eq!(map.get(&1), Some(&100));
+
+        let old = map.insert(2, 20);
+        assert_eq!(old, None);
+    }
+
+    #[test]
+    fn remove_returns_value() {
+        let mut map = ordmap! {1 => 10, 2 => 20};
+        let v = map.remove(&1);
+        assert_eq!(v, Some(10));
+        assert_eq!(map.len(), 1);
+
+        let v = map.remove(&99);
+        assert_eq!(v, None);
+    }
+
+    #[test]
+    fn index_operator_and_index_mut() {
+        let mut map = ordmap! {1 => 10, 2 => 20};
+        assert_eq!(map[&1], 10);
+
+        map[&1] = 100;
+        assert_eq!(map[&1], 100);
+    }
+
+    #[test]
+    fn into_iterator_owned() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let items: Vec<(i32, i32)> = map.into_iter().collect();
+        assert_eq!(items, vec![(1, 10), (2, 20), (3, 30)]);
+    }
+
+    #[test]
+    fn intersection_with_key() {
+        let a = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let b = ordmap! {2 => 200, 3 => 300, 4 => 400};
+
+        let inter = a.intersection_with_key(b, |k, l, r| k + l + r);
+        assert_eq!(inter, ordmap! {2 => 222, 3 => 333});
+    }
+
+    #[test]
+    fn symmetric_difference_with_key() {
+        let a = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let b = ordmap! {2 => 200, 3 => 300, 4 => 400};
+
+        let sd = a.symmetric_difference_with_key(b, |k, l, r| Some(k * 1000 + l + r));
+        assert_eq!(sd, ordmap! {1 => 10, 2 => 2220, 3 => 3330, 4 => 400});
+    }
+
+    #[test]
+    fn unions_with_key() {
+        let maps = vec![
+            ordmap! {1 => 10},
+            ordmap! {1 => 20, 2 => 20},
+        ];
+        let u = OrdMap::unions_with_key(maps, |k, l, r| k * 100 + l + r);
+        assert_eq!(u.get(&1), Some(&130));
+        assert_eq!(u.get(&2), Some(&20));
+    }
+
+    #[test]
+    fn update_persistent() {
+        let map = ordmap! {1 => 10, 2 => 20};
+        let updated = map.update(1, 100);
+        // Original unchanged
+        assert_eq!(map.get(&1), Some(&10));
+        assert_eq!(updated.get(&1), Some(&100));
+    }
+
+    #[test]
+    fn without_persistent() {
+        let map = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let smaller = map.without(&2);
+        // Original unchanged
+        assert_eq!(map.len(), 3);
+        assert_eq!(smaller.len(), 2);
+        assert!(!smaller.contains_key(&2));
+    }
 }

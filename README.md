@@ -19,6 +19,9 @@ as independent, upstreamable PRs (see [DEC-001](docs/decisions.md)).
 | `HashSet<A>` | SIMD HAMT | O(log n) insert, lookup, set operations |
 | `OrdMap<K, V>` | B+ tree | O(log n) insert, lookup, range queries |
 | `OrdSet<A>` | B+ tree | O(log n) insert, lookup, range queries |
+| `PBag<A>` | SIMD HAMT | Persistent multiset (bag) with element counts |
+| `HashMultiMap<K, V>` | SIMD HAMT | Key → set of values multimap |
+| `InsertionOrderMap<K, V>` | SIMD HAMT + B+ tree | Map iterating in insertion order |
 
 All collections use structural sharing for efficient cloning — cloning a
 collection is O(1), and modified versions share unchanged subtrees with the
@@ -39,10 +42,12 @@ original.
 |---------|-------------|
 | `proptest` | Proptest strategies for all collection types |
 | `quickcheck` | `Arbitrary` implementations for all collection types |
-| `rayon` | Parallel iterators for `Vector` |
+| `rayon` | Parallel iterators for all collection types |
 | `serde` | `Serialize` / `Deserialize` for all collection types |
 | `triomphe` | Use `triomphe::Arc` (no weak count, 8 bytes smaller per node) |
+| `foldhash` | Enables `HashMap`/`HashSet`/etc. type aliases in `no_std` via `foldhash::fast::RandomState` |
 | `arbitrary` | `Arbitrary` implementations for fuzzing |
+| `atom` | Thread-safe atomic state holder via `arc-swap` (requires `std`) |
 | `bincode` | **Deprecated** — will be removed in v8.0.0. Use serde instead. |
 
 ## Building

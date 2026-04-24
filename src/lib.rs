@@ -125,7 +125,7 @@
 //! values are going to be very cheap to clone, as would be the case for short
 //! [`String`] or small [`Vec`]s, you're probably better off storing them directly
 //! without wrapping them in an [`Rc`][std::rc::Rc], because, like the [`Rc`][std::rc::Rc],
-// they're just pointers to some data on the heap, and that data isn't expensive to clone -
+//! they're just pointers to some data on the heap, and that data isn't expensive to clone -
 //! you might actually lose more performance from the extra redirection of
 //! wrapping them in an [`Rc`][std::rc::Rc] than you would from occasionally
 //! cloning them.
@@ -135,7 +135,8 @@
 //! So when will your values actually be cloned? The easy answer is only if you
 //! [`clone`][Clone::clone] the data structure itself, and then only
 //! lazily as you change it. Values are stored in tree nodes inside the data
-//! structure, each node of which contains up to 64 values. When you
+//! structure, each node of which contains up to 32 or 64 values
+//! (depending on the collection type). When you
 //! [`clone`][Clone::clone] a data structure, nothing is actually
 //! copied - it's just the reference count on the root node that's incremented,
 //! to indicate that it's shared between two data structures. It's only when you
@@ -184,9 +185,10 @@
 //! the operation will take one step longer to complete; if you
 //! quadruple the size, it will need two steps more; and so on.
 //! However, the data structures in this library generally run in
-//! *log<sub>64</sub>* time, meaning you have to make your data
-//! structure 64 times bigger to need one extra step, and 4096 times
-//! bigger to need two steps. This means that, while they still count
+//! *log<sub>32</sub>* or *log<sub>64</sub>* time (branching factor
+//! 32 for maps and sets, 64 for vectors), meaning you have to make
+//! your data structure 32–64 times bigger to need one extra step.
+//! This means that, while they still count
 //! as O(log n), operations on all but really large data sets will run
 //! at near enough to O(1) that you won't usually notice.
 //!
@@ -330,6 +332,7 @@
 //! | [`rayon`](https://crates.io/crates/rayon) | No | Parallel iterator implementations for all collection types |
 //! | [`serde`](https://crates.io/crates/serde) | No | [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html) and [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html) implementations for all `imbl` datatypes |
 //! | [`arbitrary`](https://crates.io/crates/arbitrary/) | No | [`arbitrary::Arbitrary`](https://docs.rs/arbitrary/latest/arbitrary/trait.Arbitrary.html) implementations for all `imbl` datatypes |
+//! | [`foldhash`](https://crates.io/crates/foldhash/) | No | Enables `HashMap`, `HashSet`, etc. type aliases in `no_std` environments using `foldhash::fast::RandomState` as the default hasher. |
 //! | [`atom`](https://crates.io/crates/arc-swap/) | No | Thread-safe shared values via `arc-swap` (requires `std`) |
 //!
 //! [rrb-tree]: https://infoscience.epfl.ch/record/213452/files/rrbvector.pdf

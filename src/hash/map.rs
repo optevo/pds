@@ -1746,7 +1746,7 @@ where
     /// receives the key as well as both values.
     ///
     /// This is an alias for the
-    /// [`symmetric_difference_with`_key][symmetric_difference_with_key]
+    /// [`symmetric_difference_with_key`][symmetric_difference_with_key]
     /// method.
     ///
     /// Time: O(n log n)
@@ -3987,5 +3987,315 @@ mod test {
         let (acc, result) = map.map_accum(42, |a, _, v| (a + v, *v));
         assert_eq!(acc, 42);
         assert!(result.is_empty());
+    }
+
+    // --- HAMT node demotion/upgrade edge case regression tests ---
+    //
+    // These target the node hierarchy transitions in nodes/hamt.rs:
+    // - SmallSimdNode → LargeSimdNode (upgrade_to_large)
+    // - LargeSimdNode → HamtNode (upgrade_to_hamt)
+    // - HamtNode → Value demotion (remove, single Value child)
+    // - SmallSimdNode → Value demotion (pop_value)
+    // - LargeSimdNode → Value demotion (pop_value)
+    // - CollisionNode → Value demotion (pop_value)
+    //
+    // Root cause context: demoting non-Value entries (SmallSimdNode,
+    // LargeSimdNode, CollisionNode) from a child HamtNode to a parent
+    // corrupts tree structure because those entries have shift-dependent
+    // upgrade paths. Only Value entries can be safely demoted.
+
+    type LolMap<K, V> =
+        GenericHashMap<K, V, BuildHasherDefault<LolHasher>, DefaultSharedPtr>;
+
+    // Bits per HAMT level — keys separated by (1 << SHIFT) land in the same level-0 slot.
+    const SHIFT: usize = crate::config::HASH_LEVEL_SIZE;
+
+    #[test]
+    fn upgrade_small_to_large_simd() {
+        // With LolHasher, i32 keys hash to their value. HAMT uses 5-bit
+        // chunks (SHIFT=5 default, 3 for small-chunks).
+        // Keys 0, 32, 64, ... all land in level-0 slot 0, forcing a single
+        // SmallSimdNode to grow. When it exceeds SMALL_NODE_WIDTH (16 default,
+        // 4 small-chunks), it upgrades to LargeSimdNode.
+        let mut map = LolMap::default();
+        // Insert enough same-slot keys to overflow a SmallSimdNode.
+        // SMALL_NODE_WIDTH is HASH_WIDTH/2 (16 default, 4 small-chunks).
+        // Use 20 keys to ensure overflow even with default config.
+        let step = 1 << SHIFT; // keys with identical level-0 slot
+        for i in 0..20 {
+            map.insert(i * step, i);
+        }
+        assert_eq!(map.len(), 20);
+        // Verify all keys retrievable
+        for i in 0..20 {
+            assert_eq!(map.get(&(i * step)), Some(&i));
+        }
+    }
+
+    #[test]
+    fn upgrade_large_to_hamt_node() {
+        // Push beyond LargeSimdNode capacity (HASH_WIDTH = 32 default,
+        // 8 small-chunks) to force upgrade_to_hamt.
+        let mut map = LolMap::default();
+        let step = 1 << SHIFT;
+        for i in 0..40 {
+            map.insert(i * step, i);
+        }
+        assert_eq!(map.len(), 40);
+        for i in 0..40 {
+            assert_eq!(map.get(&(i * step)), Some(&i));
+        }
+    }
+
+    #[test]
+    fn demote_small_simd_to_value() {
+        // Build a SmallSimdNode with 2 entries, remove one → demotion to Value.
+        let mut map = LolMap::default();
+        let step = 1 << SHIFT;
+        map.insert(0, 100);
+        map.insert(step, 200); // same level-0 slot → SmallSimdNode
+        assert_eq!(map.len(), 2);
+
+        map.remove(&0);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&step), Some(&200));
+        assert_eq!(map.get(&0), None);
+
+        // Verify the map still works correctly after demotion
+        map.insert(step * 2, 300);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get(&step), Some(&200));
+        assert_eq!(map.get(&(step * 2)), Some(&300));
+    }
+
+    #[test]
+    fn demote_large_simd_to_value() {
+        // Build a LargeSimdNode (needs > SMALL_NODE_WIDTH entries in one slot),
+        // then remove all but one → should demote through to Value.
+        let mut map = LolMap::default();
+        let step = 1 << SHIFT;
+        let count = 20; // exceeds SMALL_NODE_WIDTH for both default and small-chunks
+        for i in 0..count {
+            map.insert(i * step, i);
+        }
+        assert_eq!(map.len(), count);
+
+        // Remove all but the last
+        for i in 0..(count - 1) {
+            map.remove(&(i * step));
+        }
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&((count - 1) * step)), Some(&(count - 1)));
+
+        // Verify structural integrity by inserting more
+        map.insert(0, 999);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get(&0), Some(&999));
+    }
+
+    #[test]
+    fn demote_hamt_node_to_value() {
+        // Build deep enough to create HamtNode children, then remove to
+        // trigger HamtNode → Value demotion (the guarded path at line 678
+        // that checks is_value() before demoting).
+        let mut map = LolMap::default();
+        let step = 1 << SHIFT;
+        let count = 40; // forces upgrade_to_hamt
+        for i in 0..count {
+            map.insert(i * step, i);
+        }
+
+        // Remove down to 1 entry — must trigger demotion at each level
+        for i in 1..count {
+            map.remove(&(i * step));
+        }
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&0), Some(&0));
+
+        // Rebuild from the demoted state
+        for i in 1..count {
+            map.insert(i * step, i * 10);
+        }
+        assert_eq!(map.len(), count);
+        for i in 0..count {
+            let expected = if i == 0 { 0 } else { i * 10 };
+            assert_eq!(map.get(&(i * step)), Some(&expected));
+        }
+    }
+
+    #[test]
+    fn demote_hamt_node_single_non_value_child() {
+        // The critical edge case: after removal, a HamtNode has exactly 1
+        // child that is itself a SmallSimdNode (not a Value). The demotion
+        // guard (is_value() check) must prevent demoting it, because
+        // SmallSimdNode entries are shift-dependent.
+        let mut map = LolMap::default();
+        let step = 1 << SHIFT;
+
+        // Insert keys that will create a HamtNode at level 0 with multiple
+        // children at different level-0 slots, AND entries that share a
+        // level-1 slot within one of those children (creating a SmallSimdNode
+        // at level 1).
+        //
+        // Keys 0 and step share level-0 slot 0 → SmallSimdNode at slot 0
+        // Key 1 is in level-0 slot 1 → Value at slot 1
+        map.insert(0, 100);
+        map.insert(step, 200);
+        map.insert(1, 300);
+        assert_eq!(map.len(), 3);
+
+        // Remove key 1 → HamtNode at level 0 has 1 child (slot 0) which is
+        // a SmallSimdNode with 2 entries. The demotion guard must NOT demote
+        // this SmallSimdNode to the parent level.
+        map.remove(&1);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get(&0), Some(&100));
+        assert_eq!(map.get(&step), Some(&200));
+        assert_eq!(map.get(&1), None);
+
+        // Verify tree integrity by reinserting and checking
+        map.insert(1, 400);
+        assert_eq!(map.len(), 3);
+        assert_eq!(map.get(&0), Some(&100));
+        assert_eq!(map.get(&step), Some(&200));
+        assert_eq!(map.get(&1), Some(&400));
+    }
+
+    #[test]
+    fn collision_node_creation_and_demotion() {
+        // Use LolHasher<5> which masks hashes to 5 bits — with SHIFT=5,
+        // all hash bits are consumed at level 0. Keys with different values
+        // but same 5-bit hash will create CollisionNode entries.
+        type NarrowMap<K, V> =
+            GenericHashMap<K, V, BuildHasherDefault<LolHasher<5>>, DefaultSharedPtr>;
+
+        let mut map = NarrowMap::default();
+        // Keys 0 and 32 both hash to 0 with LolHasher<5> (0 & 0x1F = 0,
+        // 32 & 0x1F = 0). They have identical 5-bit hashes → collision.
+        map.insert(0i32, 100);
+        map.insert(32i32, 200);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get(&0), Some(&100));
+        assert_eq!(map.get(&32), Some(&200));
+
+        // Remove one → CollisionNode demotes to Value
+        map.remove(&0);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get(&32), Some(&200));
+        assert_eq!(map.get(&0), None);
+
+        // Verify the demoted structure still works
+        map.insert(64i32, 300); // also hashes to 0 with LolHasher<5>
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get(&32), Some(&200));
+        assert_eq!(map.get(&64), Some(&300));
+    }
+
+    #[test]
+    fn collision_node_multiple_entries() {
+        // Build a collision node with several entries, remove incrementally
+        type NarrowMap<K, V> =
+            GenericHashMap<K, V, BuildHasherDefault<LolHasher<5>>, DefaultSharedPtr>;
+
+        let mut map = NarrowMap::default();
+        // All these keys hash to the same 5-bit value (0)
+        let keys: Vec<i32> = (0..5).map(|i| i * 32).collect();
+        for (i, &k) in keys.iter().enumerate() {
+            map.insert(k, i as i32);
+        }
+        assert_eq!(map.len(), 5);
+
+        // Remove one at a time, verifying at each step
+        for (removed, &k) in keys.iter().enumerate() {
+            map.remove(&k);
+            assert_eq!(map.len(), 5 - removed - 1);
+            assert_eq!(map.get(&k), None);
+            // Remaining keys still accessible
+            for &remaining in &keys[(removed + 1)..] {
+                assert!(map.get(&remaining).is_some());
+            }
+        }
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn delete_reinsert_all_node_types() {
+        // Comprehensive: build a large map, delete every key, reinsert,
+        // verify equality. Exercises all demotion paths during deletion
+        // and all upgrade paths during reinsertion.
+        let mut map = LolMap::default();
+        let n = 200;
+        for i in 0..n {
+            map.insert(i, i * 3);
+        }
+        let original = map.clone();
+
+        // Delete all
+        for i in 0..n {
+            map.remove(&i);
+        }
+        assert!(map.is_empty());
+
+        // Reinsert all
+        for i in 0..n {
+            map.insert(i, i * 3);
+        }
+        assert_eq!(map, original);
+    }
+
+    #[test]
+    fn delete_reinsert_reverse_order() {
+        // Same as above but delete in reverse order — exercises different
+        // demotion sequences since the tree structure is sensitive to
+        // deletion order.
+        let mut map = LolMap::default();
+        let n = 200;
+        for i in 0..n {
+            map.insert(i, i * 3);
+        }
+        let original = map.clone();
+
+        for i in (0..n).rev() {
+            map.remove(&i);
+        }
+        assert!(map.is_empty());
+
+        for i in 0..n {
+            map.insert(i, i * 3);
+        }
+        assert_eq!(map, original);
+    }
+
+    #[test]
+    fn persistent_remove_preserves_original() {
+        // Persistent (non-mut) remove should not affect the original map.
+        // Tests that demotion paths correctly clone before modifying.
+        let step = 1 << SHIFT;
+        let map: LolMap<i32, i32> = (0..20).map(|i| (i * step, i)).collect();
+        let map2 = map.without(&0);
+        assert_eq!(map.len(), 20);
+        assert_eq!(map2.len(), 19);
+        assert_eq!(map.get(&0), Some(&0));
+        assert_eq!(map2.get(&0), None);
+    }
+
+    #[test]
+    fn merkle_hash_consistency_across_demotions() {
+        // Two maps built differently but containing the same entries
+        // should be equal (Merkle hash check must agree).
+        let mut map1 = LolMap::default();
+        let step = 1 << SHIFT;
+        // Build with extra keys, then remove them
+        for i in 0..40 {
+            map1.insert(i * step, i);
+        }
+        for i in 10..40 {
+            map1.remove(&(i * step));
+        }
+
+        // Build directly with only the final keys
+        let map2: LolMap<i32, i32> = (0..10).map(|i| (i * step, i)).collect();
+
+        assert_eq!(map1, map2);
     }
 }

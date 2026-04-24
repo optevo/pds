@@ -11,8 +11,9 @@ comments, and documentation — do not substitute synonyms.
 
 **CHAMP** — Compressed Hash-Array Mapped Prefix-tree. A HAMT optimisation
   from Steindorfer & Vinju (OOPSLA 2015) using two-bitmap encoding for
-  canonical deletion and better cache locality. Candidate to replace the
-  current HAMT internals (Phase 4).
+  canonical deletion and better cache locality. Evaluated as a potential
+  replacement for the current HAMT internals but rejected after three
+  independent PoC failures (DEC-007, DEC-015, DEC-019, DEC-020).
 
 **RRB tree** — Relaxed Radix Balanced tree. The data structure backing
   `Vector`. Supports efficient concatenation, splitting, and indexed access.
