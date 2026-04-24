@@ -17,7 +17,7 @@
 /// # #[macro_use] extern crate imbl;
 /// # use imbl::iter::unfold;
 /// # use imbl::vector::Vector;
-/// # use std::iter::FromIterator;
+/// # use core::iter::FromIterator;
 /// // Create an infinite stream of numbers, starting at 0.
 /// let mut it = unfold(0, |i| Some((i, i + 1)));
 ///
@@ -33,7 +33,7 @@ where
     F: Fn(S) -> Option<(A, S)>,
 {
     let mut value = Some(value);
-    std::iter::from_fn(move || {
+    core::iter::from_fn(move || {
         f(value.take().unwrap()).map(|(next, state)| {
             value = Some(state);
             next

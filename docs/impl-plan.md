@@ -64,6 +64,13 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 5.4: no_std support.**
+  `#![cfg_attr(not(feature = "std"), no_std)]` with `extern crate alloc`.
+  Replaced `std::` imports with `core::`/`alloc::` across ~30 files. Gated
+  `RandomState`-dependent type aliases behind `#[cfg(feature = "std")]`.
+  Generic variants always available. SpinMutex fallback for FocusMut.
+  See DEC-012.
+
 - **[2026-04-24] 5.1: Default to triomphe::Arc.**
   Added `triomphe` to default features. All collections now use
   `triomphe::Arc` (no weak reference count) internally — saves 8 bytes
@@ -352,16 +359,17 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phases 0–4 complete. Phase 5 in progress — 5.1 done (triomphe default,
-DEC-010), 5.2 done (Clone bounds). Remaining Phase 5: 5.3 (const generic
-branching), 5.4 (no_std). Both unblocked since 4.3 (CHAMP) was deferred.
+Phases 0–4 complete. Phase 5 complete — 5.1 done (triomphe default,
+DEC-010), 5.2 done (Clone bounds), 5.3 deferred (DEC-011, stable Rust
+blocker), 5.4 done (no_std, DEC-012).
 
 Phase 3 status: All resolved. 3.4 partially complete (par_iter done for
 all types; par_iter_mut for HashMap; par_sort for Vector; parallel bulk
 ops deferred to Phase 6).
 Phase 4: All resolved. SIMD HAMT retained (DEC-007). Merkle caching
 accepted (DEC-009). SharedPointer-wrapped hasher done.
-Phase 5: 5.1 done (DEC-010). 5.2 done.
+Phase 5: All resolved. 5.1 done (DEC-010). 5.2 done. 5.3 deferred
+(DEC-011). 5.4 done (DEC-012).
 
 ---
 
@@ -1483,31 +1491,19 @@ feature flag.
 
 ---
 
-### 5.4 `no_std` support (PR [#149](https://github.com/jneem/imbl/pull/149))
+### 5.4 `no_std` support — DONE (DEC-012)
 
 **What:** Make imbl usable in `no_std + alloc` environments.
 
-**Breaking because:** `RandomState` (the default hasher for HashMap/HashSet)
-comes from `std`. A `no_std` build needs a different default hasher or a
-mandatory type parameter. Either changes the public API.
+**Implemented:** `#![cfg_attr(not(feature = "std"), no_std)]` with
+`extern crate alloc`. Replaced `std::` imports with `core::`/`alloc::`
+equivalents across ~30 source files. Gated `RandomState`-dependent
+convenience type aliases and methods behind `#[cfg(feature = "std")]`.
+Generic variants (`GenericHashMap` etc.) available in no_std — users
+supply their own `BuildHasher`. Wrote `SpinMutex` fallback for
+`FocusMut` interior mutability in no_std. Feature `std` is default-on.
 
-**Design:** Follow `hashbrown`'s approach: default hasher is a no_std-
-compatible hasher (e.g. `ahash`) when `std` feature is disabled, and
-`RandomState` when `std` is enabled. The `std` feature is on by default.
-
-**Ordering rationale:** Must land AFTER 4.3 (CHAMP integration) if CHAMP
-proceeds. The CHAMP implementation should be designed with `no_std` in mind
-from the start rather than retrofitted.
-
-**Complexity:** Moderate. Core data structures are pure; the blocker is
-the hasher default.
-
-**Affects:** All five collection types (HashMap/HashSet most directly).
-
-**Prerequisites:** 4.3 (CHAMP integration, if proceeding — otherwise
-independent).
-
-**References:** imbl PR #149; hashbrown crate; rpds `no_std` support.
+**References:** imbl PR #149; hashbrown crate; DEC-012.
 
 ---
 
@@ -1728,7 +1724,7 @@ Phase 5 (breaking — v8.0.0)        │                                      �
   5.1 triomphe default ◄── 0.3, 0.4  ✓ DONE (DEC-010)                     │
   5.2 remove Clone bounds ◄── 3.1  ✓ DONE                                │
   5.3 const generic branching ◄── 4.3  ✗ DEFERRED (DEC-011: stable Rust blocker) │
-  5.4 no_std ◄── 4.3 (if proceeding)                                      │
+  5.4 no_std ◄── 4.3 (if proceeding)  ✓ DONE (DEC-012)                    │
                                    │                                      │
 Phase 6 (research)                 │                                      │
   6.1 ART for OrdMap ◄── 0.2, 0.3                                         │

@@ -45,14 +45,16 @@
 
 #![allow(unsafe_code)]
 
-use std::borrow::Borrow;
-use std::cmp::Ordering;
-use std::fmt::{Debug, Error, Formatter};
-use std::hash::{Hash, Hasher};
-use std::iter::Sum;
-use std::iter::{FromIterator, FusedIterator};
-use std::mem::{replace, swap};
-use std::ops::{Add, Index, IndexMut, RangeBounds};
+use alloc::borrow::ToOwned;
+use alloc::vec::Vec;
+use core::borrow::Borrow;
+use core::cmp::Ordering;
+use core::fmt::{Debug, Error, Formatter};
+use core::hash::{Hash, Hasher};
+use core::iter::Sum;
+use core::iter::{FromIterator, FusedIterator};
+use core::mem::{replace, swap};
+use core::ops::{Add, Index, IndexMut, RangeBounds};
 
 use archery::{SharedPointer, SharedPointerKind};
 use imbl_sized_chunks::InlineArray;
@@ -341,7 +343,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
             (left.is_empty() && right.is_empty()) || SharedPointer::ptr_eq(left, right)
         }
 
-        if std::ptr::eq(self, other) {
+        if core::ptr::eq(self, other) {
             return true;
         }
 
@@ -1452,7 +1454,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
                         middle_level: tree.middle_level,
                         outer_f: SharedPointer::new(of2),
                         inner_f: replace_shared_pointer(&mut tree.inner_f),
-                        middle: std::mem::take(&mut tree.middle),
+                        middle: core::mem::take(&mut tree.middle),
                         inner_b: replace_shared_pointer(&mut tree.inner_b),
                         outer_b: replace_shared_pointer(&mut tree.outer_b),
                     };
@@ -1472,7 +1474,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
                         middle_level: tree.middle_level,
                         outer_f: SharedPointer::new(if2),
                         inner_f: SharedPointer::default(),
-                        middle: std::mem::take(&mut tree.middle),
+                        middle: core::mem::take(&mut tree.middle),
                         inner_b: replace_shared_pointer(&mut tree.inner_b),
                         outer_b: replace_shared_pointer(&mut tree.outer_b),
                     };
@@ -1912,7 +1914,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         if self.len() <= 1 {
             return;
         }
-        let mut vec: Vec<A> = std::mem::take(self).into_iter().collect();
+        let mut vec: Vec<A> = core::mem::take(self).into_iter().collect();
         vec.par_sort_unstable_by(|a, b| cmp(a, b));
         *self = vec.into_iter().collect();
     }
@@ -2078,7 +2080,7 @@ impl<A: Clone, P: SharedPointerKind> RRB<A, P> {
 fn replace_shared_pointer<A: Default, P: SharedPointerKind>(
     dest: &mut SharedPointer<A, P>,
 ) -> SharedPointer<A, P> {
-    std::mem::take(dest)
+    core::mem::take(dest)
 }
 
 // Core traits
@@ -2742,7 +2744,7 @@ impl<'a, 'b, A: PartialEq, P: SharedPointerKind + 'a + 'b> Iterator
 
             // Pointer-equal chunks share the same Arc-managed leaf data —
             // the entire chunk is identical, so skip it.
-            if std::ptr::eq(old_chunk, new_chunk) {
+            if core::ptr::eq(old_chunk, new_chunk) {
                 self.index = old_range.end.min(new_range.end);
                 continue;
             }

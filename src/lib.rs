@@ -315,10 +315,13 @@
 //! [b+tree]: https://en.wikipedia.org/wiki/B%2B_tree
 //! [cons-list]: https://en.wikipedia.org/wiki/Cons#Lists
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(rust_2018_idioms)]
 #![deny(nonstandard_style)]
 #![warn(unreachable_pub, missing_docs)]
 #![deny(unsafe_code)]
+
+extern crate alloc;
 
 #[cfg(test)]
 #[macro_use]
@@ -381,16 +384,28 @@ pub mod pbag;
 
 // CHAMP prototype — standalone benchmark against the current SIMD HAMT.
 // Hidden from docs; exists only for the go/no-go benchmark (plan item 4.2).
+// Requires std for RandomState.
+#[cfg(feature = "std")]
 #[doc(hidden)]
 pub mod champ;
 
-pub use crate::hash_multimap::{GenericHashMultiMap, HashMultiMap};
-pub use crate::hashmap::{GenericHashMap, HashMap};
-pub use crate::insertion_order_map::{GenericInsertionOrderMap, InsertionOrderMap};
-pub use crate::hashset::{GenericHashSet, HashSet};
+pub use crate::hash_multimap::GenericHashMultiMap;
+#[cfg(feature = "std")]
+pub use crate::hash_multimap::HashMultiMap;
+pub use crate::hashmap::GenericHashMap;
+#[cfg(feature = "std")]
+pub use crate::hashmap::HashMap;
+pub use crate::insertion_order_map::GenericInsertionOrderMap;
+#[cfg(feature = "std")]
+pub use crate::insertion_order_map::InsertionOrderMap;
+pub use crate::hashset::GenericHashSet;
+#[cfg(feature = "std")]
+pub use crate::hashset::HashSet;
 pub use crate::ordmap::{GenericOrdMap, OrdMap};
 pub use crate::ordset::{GenericOrdSet, OrdSet};
-pub use crate::pbag::{GenericPBag, PBag};
+pub use crate::pbag::GenericPBag;
+#[cfg(feature = "std")]
+pub use crate::pbag::PBag;
 #[doc(inline)]
 pub use crate::vector::{GenericVector, Vector};
 

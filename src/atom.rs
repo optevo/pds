@@ -33,8 +33,8 @@
 //! assert_eq!(snapshot.get("key"), Some(&42));
 //! ```
 
-use std::fmt::{self, Debug};
-use std::sync::Arc;
+use core::fmt::{self, Debug};
+use alloc::sync::Arc;
 
 use arc_swap::ArcSwap;
 
@@ -188,7 +188,7 @@ mod test {
 
     #[test]
     fn concurrent_updates() {
-        use std::sync::Arc as StdArc;
+        use alloc::sync::Arc as StdArc;
         use std::thread;
 
         let atom = StdArc::new(Atom::new(0i64));

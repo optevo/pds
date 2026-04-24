@@ -1,7 +1,7 @@
 #![allow(clippy::unit_arg)]
 
-use std::fmt::{Debug, Error, Formatter, Write};
-use std::iter::FromIterator;
+use core::fmt::{Debug, Error, Formatter, Write};
+use core::iter::FromIterator;
 
 use crate::{GenericVector, Vector};
 

@@ -1,8 +1,8 @@
 #![allow(clippy::unit_arg)]
 
 use std::collections::HashSet as NatSet;
-use std::fmt::{Debug, Error, Formatter, Write};
-use std::hash::Hash;
+use core::fmt::{Debug, Error, Formatter, Write};
+use core::hash::Hash;
 
 use crate::HashSet;
 

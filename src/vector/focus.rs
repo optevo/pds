@@ -2,10 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use std::mem::{replace, swap};
-use std::ops::{Range, RangeBounds};
-use std::ptr::null;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use core::mem::{replace, swap};
+use core::ops::{Range, RangeBounds};
+use core::ptr::null;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use archery::{SharedPointer, SharedPointerKind};
 
@@ -70,7 +70,7 @@ fn check_indices<const N: usize>(len: usize, indices: &[usize; N]) -> Option<()>
 /// ```rust
 /// # #[macro_use] extern crate imbl;
 /// # use imbl::vector::Vector;
-/// # use std::iter::FromIterator;
+/// # use core::iter::FromIterator;
 /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
 ///
 /// // Summing a vector, the slow way:
@@ -180,7 +180,7 @@ where
     /// ```rust
     /// # #[macro_use] extern crate imbl;
     /// # use imbl::vector::Vector;
-    /// # use std::iter::FromIterator;
+    /// # use core::iter::FromIterator;
     /// let vec: Vector<i64> = Vector::from_iter(0..1000);
     /// let narrowed = vec.focus().narrow(100..200);
     /// let narrowed_vec: Vector<i64> = narrowed.into_iter().cloned().collect();
@@ -221,7 +221,7 @@ where
     /// ```rust
     /// # #[macro_use] extern crate imbl;
     /// # use imbl::vector::Vector;
-    /// # use std::iter::FromIterator;
+    /// # use core::iter::FromIterator;
     /// let vec: Vector<i64> = Vector::from_iter(0..1000);
     /// let (left, right) = vec.focus().split_at(500);
     /// let left_vec: Vector<i64> = left.into_iter().cloned().collect();
@@ -453,7 +453,7 @@ impl<A, P: SharedPointerKind> TreeFocus<A, P> {
 /// ```rust,compile_fail
 /// # #[macro_use] extern crate imbl;
 /// # use imbl::vector::Vector;
-/// # use std::iter::FromIterator;
+/// # use core::iter::FromIterator;
 /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
 /// let focus1 = vec.focus_mut();
 /// // Fails here in 2015 edition because you're creating
@@ -470,7 +470,7 @@ impl<A, P: SharedPointerKind> TreeFocus<A, P> {
 /// ```rust
 /// # #[macro_use] extern crate imbl;
 /// # use imbl::vector::Vector;
-/// # use std::iter::FromIterator;
+/// # use core::iter::FromIterator;
 /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
 /// let focus = vec.focus_mut();
 /// let (mut left, mut right) = focus.split_at(500);
@@ -484,7 +484,7 @@ impl<A, P: SharedPointerKind> TreeFocus<A, P> {
 /// ```rust,compile_fail
 /// # #[macro_use] extern crate imbl;
 /// # use imbl::vector::Vector;
-/// # use std::iter::FromIterator;
+/// # use core::iter::FromIterator;
 /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
 /// let (left, right) = {
 ///     let focus = vec.focus_mut();
@@ -535,7 +535,7 @@ where
     /// ```rust
     /// # #[macro_use] extern crate imbl;
     /// # use imbl::vector::Vector;
-    /// # use std::iter::FromIterator;
+    /// # use core::iter::FromIterator;
     /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
     /// let narrowed = vec.focus_mut().narrow(100..200);
     /// let narrowed_vec: Vector<i64> = narrowed.unmut().into_iter().cloned().collect();
@@ -576,7 +576,7 @@ where
     /// ```rust
     /// # #[macro_use] extern crate imbl;
     /// # use imbl::vector::Vector;
-    /// # use std::iter::FromIterator;
+    /// # use core::iter::FromIterator;
     /// let mut vec: Vector<i64> = Vector::from_iter(0..1000);
     /// {
     ///     let (left, right) = vec.focus_mut().split_at(500);
@@ -728,7 +728,7 @@ where
     /// ```rust
     /// # #[macro_use] extern crate imbl;
     /// # use imbl::vector::Vector;
-    /// # use std::iter::FromIterator;
+    /// # use core::iter::FromIterator;
     /// let mut vec: Vector<i64> = vector![1, 2, 3, 4, 5];
     /// vec.focus_mut().pair(1, 3, |a, b| *a += *b);
     /// assert_eq!(vector![1, 6, 3, 4, 5], vec);
@@ -756,7 +756,7 @@ where
     /// ```rust
     /// # #[macro_use] extern crate imbl;
     /// # use imbl::vector::Vector;
-    /// # use std::iter::FromIterator;
+    /// # use core::iter::FromIterator;
     /// let mut vec: Vector<i64> = vector![1, 2, 3, 4, 5];
     /// vec.focus_mut().triplet(0, 2, 4, |a, b, c| *a += *b + *c);
     /// assert_eq!(vector![9, 2, 3, 4, 5], vec);

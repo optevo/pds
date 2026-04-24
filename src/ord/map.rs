@@ -17,14 +17,16 @@
 //! [hashmap::HashMap]: ../hashmap/type.HashMap.html
 //! [std::cmp::Ord]: https://doc.rust-lang.org/std/cmp/trait.Ord.html
 
-use std::borrow::Borrow;
-use std::cmp::Ordering;
-use std::collections;
-use std::fmt::{Debug, Error, Formatter};
-use std::hash::{BuildHasher, Hash, Hasher};
-use std::iter::{FromIterator, FusedIterator, Sum};
-use std::mem;
-use std::ops::{Add, Bound, Index, IndexMut, RangeBounds};
+use alloc::borrow::ToOwned;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+use core::borrow::Borrow;
+use core::cmp::Ordering;
+use core::fmt::{Debug, Error, Formatter};
+use core::hash::{BuildHasher, Hash, Hasher};
+use core::iter::{FromIterator, FusedIterator, Sum};
+use core::mem;
+use core::ops::{Add, Bound, Index, IndexMut, RangeBounds};
 
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Comparable;
@@ -580,8 +582,8 @@ where
     #[allow(unreachable_pub)]
     pub fn check_sane(&self)
     where
-        K: std::fmt::Debug,
-        V: std::fmt::Debug,
+        K: core::fmt::Debug,
+        V: core::fmt::Debug,
     {
         let size = self
             .root
@@ -2956,19 +2958,21 @@ where
     }
 }
 
-impl<K, V, RK, RV, P> From<collections::HashMap<RK, RV>> for GenericOrdMap<K, V, P>
+#[cfg(feature = "std")]
+impl<K, V, RK, RV, P> From<std::collections::HashMap<RK, RV>> for GenericOrdMap<K, V, P>
 where
     K: Ord + Clone + From<RK>,
     V: Clone + From<RV>,
     P: SharedPointerKind,
     RK: Eq + Hash,
 {
-    fn from(m: collections::HashMap<RK, RV>) -> GenericOrdMap<K, V, P> {
+    fn from(m: std::collections::HashMap<RK, RV>) -> GenericOrdMap<K, V, P> {
         m.into_iter().collect()
     }
 }
 
-impl<'a, K, V, OK, OV, RK, RV, P> From<&'a collections::HashMap<RK, RV>> for GenericOrdMap<K, V, P>
+#[cfg(feature = "std")]
+impl<'a, K, V, OK, OV, RK, RV, P> From<&'a std::collections::HashMap<RK, RV>> for GenericOrdMap<K, V, P>
 where
     K: Ord + Clone + From<OK>,
     V: Clone + From<OV>,
@@ -2977,25 +2981,25 @@ where
     RV: ToOwned<Owned = OV>,
     P: SharedPointerKind,
 {
-    fn from(m: &'a collections::HashMap<RK, RV>) -> GenericOrdMap<K, V, P> {
+    fn from(m: &'a std::collections::HashMap<RK, RV>) -> GenericOrdMap<K, V, P> {
         m.iter()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect()
     }
 }
 
-impl<K, V, RK, RV, P> From<collections::BTreeMap<RK, RV>> for GenericOrdMap<K, V, P>
+impl<K, V, RK, RV, P> From<BTreeMap<RK, RV>> for GenericOrdMap<K, V, P>
 where
     K: Ord + Clone + From<RK>,
     V: Clone + From<RV>,
     P: SharedPointerKind,
 {
-    fn from(m: collections::BTreeMap<RK, RV>) -> GenericOrdMap<K, V, P> {
+    fn from(m: BTreeMap<RK, RV>) -> GenericOrdMap<K, V, P> {
         m.into_iter().collect()
     }
 }
 
-impl<'a, K, V, RK, RV, OK, OV, P> From<&'a collections::BTreeMap<RK, RV>> for GenericOrdMap<K, V, P>
+impl<'a, K, V, RK, RV, OK, OV, P> From<&'a BTreeMap<RK, RV>> for GenericOrdMap<K, V, P>
 where
     K: Ord + Clone + From<OK>,
     V: Clone + From<OV>,
@@ -3004,7 +3008,7 @@ where
     RV: ToOwned<Owned = OV>,
     P: SharedPointerKind,
 {
-    fn from(m: &'a collections::BTreeMap<RK, RV>) -> GenericOrdMap<K, V, P> {
+    fn from(m: &'a BTreeMap<RK, RV>) -> GenericOrdMap<K, V, P> {
         m.iter()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect()
@@ -3052,7 +3056,7 @@ pub mod proptest {
 
 #[cfg(test)]
 mod test {
-    use std::collections::BTreeMap;
+    use alloc::collections::BTreeMap;
 
     use super::*;
     use crate::proptest::*;
@@ -3313,13 +3317,13 @@ mod test {
     #[test]
     fn range_iter_big() {
         use crate::nodes::btree::NODE_SIZE;
-        use std::ops::Bound::Included;
+        use core::ops::Bound::Included;
         const N: usize = NODE_SIZE * NODE_SIZE * NODE_SIZE / 2; // enough for a sizeable 3 level tree
 
         let data = (1usize..N).filter(|i| i % 2 == 0).map(|i| (i, ()));
         let bmap = data
             .clone()
-            .collect::<std::collections::BTreeMap<usize, ()>>();
+            .collect::<BTreeMap<usize, ()>>();
         let omap = data.collect::<OrdMap<usize, ()>>();
         assert_eq!(bmap.len(), omap.len());
 
@@ -3446,7 +3450,7 @@ mod test {
             ref ops in collection::vec((bool::ANY, usize::ANY, usize::ANY), 1..1000)
         ) {
             let mut map = input.clone();
-            let mut tree: collections::BTreeMap<usize, usize> = input.iter().map(|(k, v)| (*k, *v)).collect();
+            let mut tree: BTreeMap<usize, usize> = input.iter().map(|(k, v)| (*k, *v)).collect();
             for (ins, key, val) in ops {
                 if *ins {
                     tree.insert(*key, *val);

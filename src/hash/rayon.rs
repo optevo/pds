@@ -6,7 +6,7 @@
 //!
 //! These are only available when using the `rayon` feature flag.
 
-use std::hash::{BuildHasher, Hash};
+use core::hash::{BuildHasher, Hash};
 
 use ::rayon::iter::plumbing::{bridge_unindexed, Folder, UnindexedConsumer, UnindexedProducer};
 use ::rayon::iter::{
@@ -138,7 +138,7 @@ enum MapIterFrame<'a, K, V, P: SharedPointerKind> {
         >,
     ),
     /// Iterating kv-pairs in a CollisionNode
-    Collision(std::slice::Iter<'a, (K, V)>),
+    Collision(core::slice::Iter<'a, (K, V)>),
 }
 
 impl<'a, K, V, P: SharedPointerKind> MapEntryIter<'a, K, V, P> {
@@ -345,7 +345,7 @@ enum MapMutIterFrame<'a, K, V, P: SharedPointerKind> {
             HASH_WIDTH,
         >,
     ),
-    Collision(std::slice::IterMut<'a, (K, V)>),
+    Collision(core::slice::IterMut<'a, (K, V)>),
 }
 
 impl<'a, K, V, P: SharedPointerKind> Iterator for MapEntryIterMut<'a, K, V, P>
@@ -443,7 +443,7 @@ where
         I: IntoParallelIterator<Item = (K, V)>,
     {
         let collected: Self = par_iter.into_par_iter().collect();
-        *self = std::mem::take(self).union(collected);
+        *self = core::mem::take(self).union(collected);
     }
 }
 
@@ -554,7 +554,7 @@ enum SetIterFrame<'a, A, P: SharedPointerKind> {
             HASH_WIDTH,
         >,
     ),
-    Collision(std::slice::Iter<'a, Value<A>>),
+    Collision(core::slice::Iter<'a, Value<A>>),
 }
 
 impl<'a, A, P: SharedPointerKind> SetEntryIter<'a, A, P> {
@@ -650,7 +650,7 @@ where
         I: IntoParallelIterator<Item = A>,
     {
         let collected: Self = par_iter.into_par_iter().collect();
-        *self = std::mem::take(self).union(collected);
+        *self = core::mem::take(self).union(collected);
     }
 }
 

@@ -131,7 +131,7 @@ where
         I: IntoParallelIterator<Item = (K, V)>,
     {
         let collected: Self = par_iter.into_par_iter().collect();
-        *self = std::mem::take(self).union(collected);
+        *self = core::mem::take(self).union(collected);
     }
 }
 
@@ -245,7 +245,7 @@ where
         I: IntoParallelIterator<Item = A>,
     {
         let collected: Self = par_iter.into_par_iter().collect();
-        *self = std::mem::take(self).union(collected);
+        *self = core::mem::take(self).union(collected);
     }
 }
 

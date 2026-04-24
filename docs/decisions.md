@@ -550,3 +550,39 @@ Defer indefinitely. The cost is disproportionate to the benefit.
 The `small-chunks` feature flag remains the mechanism for testing with
 small node sizes. Revisit when `generic_const_exprs` stabilises (tracking
 issue rust-lang/rust#76560).
+
+## DEC-012: 5.4 no_std support — accepted
+
+**Date:** 2026-04-24
+
+**Context:** imbl depended on `std` for `fmt`, `hash`, `mem`, `ops`, `collections`,
+`sync::Mutex`, and `collections::hash_map::RandomState`. Most of these have
+`core` or `alloc` equivalents. Embedded and WASM users cannot link `std`.
+
+**Decision:** Add `#![cfg_attr(not(feature = "std"), no_std)]` with `extern crate alloc`.
+Replace `std::fmt/hash/mem/ops/iter/cmp/borrow/marker/ptr` with `core::` equivalents.
+Replace `std::collections::{BTreeMap,BTreeSet,VecDeque}` with `alloc::collections::`.
+Add explicit `use alloc::{vec, vec::Vec, borrow::ToOwned}` imports where needed (these
+are in the std prelude but not the core prelude). Gate `RandomState`-dependent type
+aliases (`HashMap`, `HashSet`, `PBag`, `HashMultiMap`, `InsertionOrderMap`),
+convenience `new()` methods, `Default` impls, and `From<std::collections::*>` impls
+behind `#[cfg(feature = "std")]`. Generic variants (`GenericHashMap` etc.) remain
+available in no_std. Write a spin-lock fallback (`SpinMutex`) for `FocusMut`'s
+interior mutability since `std::sync::Mutex` is unavailable in no_std.
+Feature `std` is on by default.
+
+**Alternatives considered:**
+- `core`-only (no `alloc`) — impossible, imbl fundamentally requires heap allocation
+  for its tree nodes (Arc, Vec, Box).
+- Conditional compilation with `cfg` on every `std` use site — fragile and hard to
+  maintain; the module-level import replacement is cleaner.
+- Third-party no_std mutex (e.g. `spin` crate) — unnecessary dependency for a single
+  internal use site; the SpinMutex is ~30 lines.
+
+**Consequences:**
+- `default-features = false` gives no_std + alloc support.
+- Users must provide their own `BuildHasher` in no_std (no `RandomState`).
+- The `atom` feature requires `std` (depends on `arc-swap` which needs `std`).
+- The `champ` module is gated behind `std` (uses `RandomState` internally).
+- SpinMutex is only used by `FocusMut` which needs interior mutability for its
+  tree reference; the lock is very short-held so spin is acceptable.

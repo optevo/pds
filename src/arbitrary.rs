@@ -3,7 +3,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 use arbitrary::{size_hint, Arbitrary, MaxRecursionReached, Result, Unstructured};
-use std::hash::{BuildHasher, Hash};
+use core::hash::{BuildHasher, Hash};
 
 use crate::{
     shared_ptr::SharedPointerKind, GenericHashMap, GenericHashSet, GenericOrdMap, GenericOrdSet,
@@ -23,7 +23,7 @@ impl<'a, A: Arbitrary<'a> + Clone, P: SharedPointerKind + 'static> Arbitrary<'a>
 
     fn try_size_hint(
         depth: usize,
-    ) -> std::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
         size_hint::try_recursion_guard(depth, |depth| {
             Ok(size_hint::and(
                 <usize as Arbitrary>::try_size_hint(depth)?,
@@ -50,7 +50,7 @@ impl<
 
     fn try_size_hint(
         depth: usize,
-    ) -> std::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
         size_hint::try_recursion_guard(depth, |depth| {
             Ok(size_hint::and(
                 <usize as Arbitrary>::try_size_hint(depth)?,
@@ -73,7 +73,7 @@ impl<'a, A: Arbitrary<'a> + Ord + Clone, P: SharedPointerKind + 'static> Arbitra
 
     fn try_size_hint(
         depth: usize,
-    ) -> std::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
         size_hint::try_recursion_guard(depth, |depth| {
             Ok(size_hint::and(
                 <usize as Arbitrary>::try_size_hint(depth)?,
@@ -100,7 +100,7 @@ where
 
     fn try_size_hint(
         depth: usize,
-    ) -> std::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
         size_hint::try_recursion_guard(depth, |depth| {
             Ok(size_hint::and(
                 <usize as Arbitrary>::try_size_hint(depth)?,
@@ -126,7 +126,7 @@ where
 
     fn try_size_hint(
         depth: usize,
-    ) -> std::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
         size_hint::try_recursion_guard(depth, |depth| {
             Ok(size_hint::and(
                 <usize as Arbitrary>::try_size_hint(depth)?,

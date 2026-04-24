@@ -24,10 +24,11 @@
 //! assert_eq!(bag.total_count(), 3);
 //! ```
 
+#[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
-use std::fmt::{Debug, Error, Formatter};
-use std::hash::{BuildHasher, Hash};
-use std::iter::FromIterator;
+use core::fmt::{Debug, Error, Formatter};
+use core::hash::{BuildHasher, Hash};
+use core::iter::FromIterator;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -36,13 +37,14 @@ use crate::hashmap::GenericHashMap;
 use crate::shared_ptr::DefaultSharedPtr;
 
 /// Type alias for [`GenericPBag`] with default hasher and pointer type.
+#[cfg(feature = "std")]
 pub type PBag<A> = GenericPBag<A, RandomState, DefaultSharedPtr>;
 
 /// A persistent multiset (bag) backed by [`GenericHashMap`].
 ///
 /// Tracks the count of each distinct element. Clone is O(1) via
 /// structural sharing.
-pub struct GenericPBag<A, S = RandomState, P: SharedPointerKind = DefaultSharedPtr> {
+pub struct GenericPBag<A, S, P: SharedPointerKind = DefaultSharedPtr> {
     map: GenericHashMap<A, usize, S, P>,
     total: usize,
 }
@@ -57,6 +59,7 @@ impl<A: Clone, S: Clone, P: SharedPointerKind> Clone for GenericPBag<A, S, P> {
     }
 }
 
+#[cfg(feature = "std")]
 impl<A, P> GenericPBag<A, RandomState, P>
 where
     P: SharedPointerKind,
@@ -265,6 +268,7 @@ where
     }
 }
 
+#[cfg(feature = "std")]
 impl<A, P> Default for GenericPBag<A, RandomState, P>
 where
     P: SharedPointerKind,

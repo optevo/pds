@@ -21,14 +21,17 @@
 //! [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html
 //! [std::collections::hash_map::RandomState]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
 
-use std::borrow::Borrow;
-use std::collections;
+use alloc::borrow::ToOwned;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+use core::borrow::Borrow;
+#[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
-use std::fmt::{Debug, Error, Formatter};
-use std::hash::{BuildHasher, Hash};
-use std::iter::{FromIterator, FusedIterator, Sum};
-use std::mem;
-use std::ops::{Add, Index, IndexMut};
+use core::fmt::{Debug, Error, Formatter};
+use core::hash::{BuildHasher, Hash};
+use core::iter::{FromIterator, FusedIterator, Sum};
+use core::mem;
+use core::ops::{Add, Index, IndexMut};
 
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
@@ -38,6 +41,7 @@ use crate::nodes::hamt::{
     hash_key, Drain as NodeDrain, Entry as NodeEntry, HashBits, HashValue, Iter as NodeIter,
     IterMut as NodeIterMut, Node, HASH_WIDTH,
 };
+#[cfg(feature = "std")]
 use crate::shared_ptr::DefaultSharedPtr;
 
 /// Construct a hash map from a sequence of key/value pairs.
@@ -84,6 +88,7 @@ macro_rules! hashmap {
 /// [GenericHashMap]: ./struct.GenericHashMap.html
 /// [`std::hash::RandomState`]: https://doc.rust-lang.org/stable/std/collections/hash_map/struct.RandomState.html
 /// [DefaultSharedPtr]: ../shared_ptr/type.DefaultSharedPtr.html
+#[cfg(feature = "std")]
 pub type HashMap<K, V> = GenericHashMap<K, V, RandomState, DefaultSharedPtr>;
 
 /// An unordered map.
@@ -135,6 +140,7 @@ where
     }
 }
 
+#[cfg(feature = "std")]
 impl<K, V, P> GenericHashMap<K, V, RandomState, P>
 where
     K: Hash + Eq + Clone,
@@ -338,7 +344,7 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     #[cfg(test)]
     pub fn print_structure_summary(&self) {
         use crate::nodes::hamt::Entry as NodeEntry;
-        use std::collections::VecDeque;
+        use alloc::collections::VecDeque;
 
         println!("HashMap Structure Summary:");
 
@@ -524,15 +530,8 @@ where
             }
             _ => {}
         }
-        let mut seen = collections::HashSet::new();
         for (key, value) in self.iter() {
             if Some(value) != other.get(key) {
-                return false;
-            }
-            seen.insert(key);
-        }
-        for key in other.keys() {
-            if !seen.contains(&key) {
                 return false;
             }
         }
@@ -765,7 +764,7 @@ where
         DiffIter {
             diffs,
             index: 0,
-            _phantom: std::marker::PhantomData,
+            _phantom: core::marker::PhantomData,
         }
     }
 }
@@ -2738,7 +2737,8 @@ where
     }
 }
 
-impl<K, V, S1, S2, P> From<collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P>
+#[cfg(feature = "std")]
+impl<K, V, S1, S2, P> From<std::collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -2746,12 +2746,13 @@ where
     S2: BuildHasher,
     P: SharedPointerKind,
 {
-    fn from(m: collections::HashMap<K, V, S2>) -> Self {
+    fn from(m: std::collections::HashMap<K, V, S2>) -> Self {
         m.into_iter().collect()
     }
 }
 
-impl<'a, K, V, S1, S2, P> From<&'a collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P>
+#[cfg(feature = "std")]
+impl<'a, K, V, S1, S2, P> From<&'a std::collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -2759,31 +2760,31 @@ where
     S2: BuildHasher,
     P: SharedPointerKind,
 {
-    fn from(m: &'a collections::HashMap<K, V, S2>) -> Self {
+    fn from(m: &'a std::collections::HashMap<K, V, S2>) -> Self {
         m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 }
 
-impl<K, V, S, P> From<collections::BTreeMap<K, V>> for GenericHashMap<K, V, S, P>
+impl<K, V, S, P> From<BTreeMap<K, V>> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
     V: Clone,
     S: BuildHasher + Default,
     P: SharedPointerKind,
 {
-    fn from(m: collections::BTreeMap<K, V>) -> Self {
+    fn from(m: BTreeMap<K, V>) -> Self {
         m.into_iter().collect()
     }
 }
 
-impl<'a, K, V, S, P> From<&'a collections::BTreeMap<K, V>> for GenericHashMap<K, V, S, P>
+impl<'a, K, V, S, P> From<&'a BTreeMap<K, V>> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
     V: Clone,
     S: BuildHasher + Default,
     P: SharedPointerKind,
 {
-    fn from(m: &'a collections::BTreeMap<K, V>) -> Self {
+    fn from(m: &'a BTreeMap<K, V>) -> Self {
         m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 }
@@ -2843,7 +2844,7 @@ impl<K, V> Copy for DiffItem<'_, '_, K, V> {}
 /// different `RandomState` seeds. The tree-walk diff requires identical
 /// hash function output — this probe detects incompatible hashers in O(1).
 fn hashers_compatible<S: BuildHasher>(a: &S, b: &S) -> bool {
-    use std::hash::Hasher;
+    use core::hash::Hasher;
     let mut ha = a.build_hasher();
     ha.write_u64(0x517c_c1b7_2722_0a95);
     let mut hb = b.build_hasher();
@@ -2899,7 +2900,7 @@ fn diff_iterate_and_lookup<'a, 'b, K, V, S, P>(
 pub struct DiffIter<'a, 'b, K, V, S, P: SharedPointerKind> {
     diffs: Vec<DiffItem<'a, 'b, K, V>>,
     index: usize,
-    _phantom: std::marker::PhantomData<fn(&S, &P)>,
+    _phantom: core::marker::PhantomData<fn(&S, &P)>,
 }
 
 /// Walk two HAMT nodes simultaneously, collecting diffs.
@@ -3089,7 +3090,7 @@ mod test {
     #[rustfmt::skip]
     use ::proptest::{collection, num::{i16, usize}, proptest};
     use static_assertions::{assert_impl_all, assert_not_impl_any};
-    use std::hash::BuildHasherDefault;
+    use core::hash::BuildHasherDefault;
 
     assert_impl_all!(HashMap<i32, i32>: Send, Sync);
     assert_not_impl_any!(HashMap<i32, *const i32>: Send, Sync);
@@ -3126,8 +3127,8 @@ mod test {
     #[test]
     fn remove_failing() {
         let pairs = [(1469, 0), (-67, 0)];
-        let mut m: collections::HashMap<i16, i16, _> =
-            collections::HashMap::with_hasher(BuildHasherDefault::<LolHasher>::default());
+        let mut m: std::collections::HashMap<i16, i16, _> =
+            std::collections::HashMap::with_hasher(BuildHasherDefault::<LolHasher>::default());
         for (k, v) in &pairs {
             m.insert(*k, *v);
         }
@@ -3298,8 +3299,8 @@ mod test {
 
         #[test]
         fn without(ref pairs in collection::vec((i16::ANY, i16::ANY), 0..100)) {
-            let mut m: collections::HashMap<i16, i16, _> =
-                collections::HashMap::with_hasher(BuildHasherDefault::<LolHasher>::default());
+            let mut m: std::collections::HashMap<i16, i16, _> =
+                std::collections::HashMap::with_hasher(BuildHasherDefault::<LolHasher>::default());
             for (k, v) in pairs {
                 m.insert(*k, *v);
             }
@@ -3335,8 +3336,8 @@ mod test {
 
         #[test]
         fn remove(ref pairs in collection::vec((i16::ANY, i16::ANY), 0..100)) {
-            let mut m: collections::HashMap<i16, i16, _> =
-                collections::HashMap::with_hasher(BuildHasherDefault::<LolHasher>::default());
+            let mut m: std::collections::HashMap<i16, i16, _> =
+                std::collections::HashMap::with_hasher(BuildHasherDefault::<LolHasher>::default());
             for (k, v) in pairs {
                 m.insert(*k, *v);
             }

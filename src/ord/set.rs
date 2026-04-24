@@ -15,13 +15,15 @@
 //!
 //! [1]: https://en.wikipedia.org/wiki/B%2B_tree
 
-use std::borrow::Borrow;
-use std::cmp::Ordering;
-use std::collections;
-use std::fmt::{Debug, Error, Formatter};
-use std::hash::{BuildHasher, Hash, Hasher};
-use std::iter::{FromIterator, FusedIterator, Sum};
-use std::ops::{Add, Mul, RangeBounds};
+use alloc::collections::BTreeSet;
+use core::borrow::Borrow;
+use alloc::borrow::ToOwned;
+use alloc::vec::Vec;
+use core::cmp::Ordering;
+use core::fmt::{Debug, Error, Formatter};
+use core::hash::{BuildHasher, Hash, Hasher};
+use core::iter::{FromIterator, FusedIterator, Sum};
+use core::ops::{Add, Mul, RangeBounds};
 
 use archery::SharedPointerKind;
 use equivalent::Comparable;
@@ -277,8 +279,8 @@ where
     ///
     /// ```
     /// # #[macro_use] extern crate imbl;
-    /// # use std::borrow::Borrow;
-    /// # use std::cmp::Ordering;
+    /// # use core::borrow::Borrow;
+    /// # use core::cmp::Ordering;
     /// # use imbl::ordset::OrdSet;
     /// # #[derive(Clone)]
     /// // Implements Eq and ord by delegating to id
@@ -451,7 +453,7 @@ where
     #[allow(unreachable_pub)]
     pub fn check_sane(&self)
     where
-        A: std::fmt::Debug,
+        A: core::fmt::Debug,
     {
         self.map.check_sane();
     }
@@ -1273,30 +1275,32 @@ impl<A: Ord + Clone, P: SharedPointerKind> From<&Vec<A>> for GenericOrdSet<A, P>
     }
 }
 
-impl<A: Eq + Hash + Ord + Clone, P: SharedPointerKind> From<collections::HashSet<A>>
+#[cfg(feature = "std")]
+impl<A: Eq + Hash + Ord + Clone, P: SharedPointerKind> From<std::collections::HashSet<A>>
     for GenericOrdSet<A, P>
 {
-    fn from(hash_set: collections::HashSet<A>) -> Self {
+    fn from(hash_set: std::collections::HashSet<A>) -> Self {
         hash_set.into_iter().collect()
     }
 }
 
-impl<A: Eq + Hash + Ord + Clone, P: SharedPointerKind> From<&collections::HashSet<A>>
+#[cfg(feature = "std")]
+impl<A: Eq + Hash + Ord + Clone, P: SharedPointerKind> From<&std::collections::HashSet<A>>
     for GenericOrdSet<A, P>
 {
-    fn from(hash_set: &collections::HashSet<A>) -> Self {
+    fn from(hash_set: &std::collections::HashSet<A>) -> Self {
         hash_set.iter().cloned().collect()
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> From<collections::BTreeSet<A>> for GenericOrdSet<A, P> {
-    fn from(btree_set: collections::BTreeSet<A>) -> Self {
+impl<A: Ord + Clone, P: SharedPointerKind> From<BTreeSet<A>> for GenericOrdSet<A, P> {
+    fn from(btree_set: BTreeSet<A>) -> Self {
         btree_set.into_iter().collect()
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> From<&collections::BTreeSet<A>> for GenericOrdSet<A, P> {
-    fn from(btree_set: &collections::BTreeSet<A>) -> Self {
+impl<A: Ord + Clone, P: SharedPointerKind> From<&BTreeSet<A>> for GenericOrdSet<A, P> {
+    fn from(btree_set: &BTreeSet<A>) -> Self {
         btree_set.iter().cloned().collect()
     }
 }

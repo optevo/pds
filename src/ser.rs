@@ -5,9 +5,9 @@
 use archery::SharedPointerKind;
 use serde_core::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_core::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
-use std::fmt;
-use std::hash::{BuildHasher, Hash};
-use std::marker::PhantomData;
+use core::fmt;
+use core::hash::{BuildHasher, Hash};
+use core::marker::PhantomData;
 
 use crate::hashmap::GenericHashMap;
 use crate::hashset::GenericHashSet;

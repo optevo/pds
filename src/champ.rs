@@ -14,10 +14,12 @@
 // This module is #[doc(hidden)] — it exists only for the go/no-go benchmark
 // in plan item 4.2.  See DEC-007 in docs/decisions.md for results.
 
-use std::borrow::Borrow;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::borrow::Borrow;
+use core::hash::{BuildHasher, Hash};
+#[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hash};
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Constants

@@ -21,13 +21,16 @@
 //! [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html
 //! [std::collections::hash_map::RandomState]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
 
-use std::borrow::Borrow;
+use alloc::borrow::ToOwned;
+use alloc::collections::BTreeSet;
+use alloc::vec::Vec;
+use core::borrow::Borrow;
+#[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
-use std::collections::{self, BTreeSet};
-use std::fmt::{Debug, Error, Formatter};
-use std::hash::{BuildHasher, Hash};
-use std::iter::{FromIterator, FusedIterator, Sum};
-use std::ops::{Add, Deref, Mul};
+use core::fmt::{Debug, Error, Formatter};
+use core::hash::{BuildHasher, Hash};
+use core::iter::{FromIterator, FusedIterator, Sum};
+use core::ops::{Add, Deref, Mul};
 
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
@@ -37,6 +40,7 @@ use crate::nodes::hamt::{
     HASH_WIDTH,
 };
 use crate::ordset::GenericOrdSet;
+#[cfg(feature = "std")]
 use crate::shared_ptr::DefaultSharedPtr;
 use crate::GenericVector;
 
@@ -80,6 +84,7 @@ macro_rules! hashset {
 /// [GenericHashSet]: ./struct.GenericHashSet.html
 /// [`std::hash::RandomState`]: https://doc.rust-lang.org/stable/std/collections/hash_map/struct.RandomState.html
 /// [DefaultSharedPtr]: ../shared_ptr/type.DefaultSharedPtr.html
+#[cfg(feature = "std")]
 pub type HashSet<A> = GenericHashSet<A, RandomState, DefaultSharedPtr>;
 
 /// An unordered set.
@@ -328,15 +333,10 @@ where
             }
             _ => {}
         }
-        let mut seen = collections::HashSet::new();
+        // Lengths are equal and sets have no duplicates, so if every element
+        // of self is in other, the sets must be identical.
         for value in self.iter() {
             if !other.contains(value) {
-                return false;
-            }
-            seen.insert(value);
-        }
-        for value in other.iter() {
-            if !seen.contains(&value) {
                 return false;
             }
         }
@@ -430,7 +430,7 @@ where
         DiffIter {
             diffs,
             index: 0,
-            _phantom: std::marker::PhantomData,
+            _phantom: core::marker::PhantomData,
         }
     }
 }
@@ -1177,24 +1177,26 @@ where
     }
 }
 
-impl<A, S, P> From<collections::HashSet<A>> for GenericHashSet<A, S, P>
+#[cfg(feature = "std")]
+impl<A, S, P> From<std::collections::HashSet<A>> for GenericHashSet<A, S, P>
 where
     A: Eq + Hash + Clone,
     S: BuildHasher + Default,
     P: SharedPointerKind,
 {
-    fn from(hash_set: collections::HashSet<A>) -> Self {
+    fn from(hash_set: std::collections::HashSet<A>) -> Self {
         hash_set.into_iter().collect()
     }
 }
 
-impl<A, S, P> From<&collections::HashSet<A>> for GenericHashSet<A, S, P>
+#[cfg(feature = "std")]
+impl<A, S, P> From<&std::collections::HashSet<A>> for GenericHashSet<A, S, P>
 where
     A: Eq + Hash + Clone,
     S: BuildHasher + Default,
     P: SharedPointerKind,
 {
-    fn from(hash_set: &collections::HashSet<A>) -> Self {
+    fn from(hash_set: &std::collections::HashSet<A>) -> Self {
         hash_set.iter().cloned().collect()
     }
 }
@@ -1257,7 +1259,7 @@ impl<A> Copy for DiffItem<'_, '_, A> {}
 
 /// Check whether two BuildHasher instances produce the same hash output.
 fn set_hashers_compatible<S: BuildHasher>(a: &S, b: &S) -> bool {
-    use std::hash::Hasher;
+    use core::hash::Hasher;
     let mut ha = a.build_hasher();
     ha.write_u64(0x517c_c1b7_2722_0a95);
     let mut hb = b.build_hasher();
@@ -1370,7 +1372,7 @@ fn set_diff_iterate_and_lookup<'a, 'b, A, S, P>(
 pub struct DiffIter<'a, 'b, A, S, P: SharedPointerKind> {
     diffs: Vec<DiffItem<'a, 'b, A>>,
     index: usize,
-    _phantom: std::marker::PhantomData<fn(&S, &P)>,
+    _phantom: core::marker::PhantomData<fn(&S, &P)>,
 }
 
 impl<'a, 'b, A, S, P> Iterator for DiffIter<'a, 'b, A, S, P>
@@ -1432,7 +1434,7 @@ mod test {
     use ::proptest::num::i16;
     use ::proptest::proptest;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
-    use std::hash::BuildHasherDefault;
+    use core::hash::BuildHasherDefault;
 
     assert_impl_all!(HashSet<i32>: Send, Sync);
     assert_not_impl_any!(HashSet<*const i32>: Send, Sync);

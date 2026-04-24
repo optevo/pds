@@ -24,10 +24,11 @@
 //! assert_eq!(keys, vec![&"c", &"a", &"b"]);
 //! ```
 
+#[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
-use std::fmt::{Debug, Error, Formatter};
-use std::hash::{BuildHasher, Hash};
-use std::iter::FromIterator;
+use core::fmt::{Debug, Error, Formatter};
+use core::hash::{BuildHasher, Hash};
+use core::iter::FromIterator;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -37,6 +38,7 @@ use crate::ordmap::GenericOrdMap;
 use crate::shared_ptr::DefaultSharedPtr;
 
 /// Type alias for [`GenericInsertionOrderMap`] with default hasher and pointer type.
+#[cfg(feature = "std")]
 pub type InsertionOrderMap<K, V> =
     GenericInsertionOrderMap<K, V, RandomState, DefaultSharedPtr>;
 
@@ -48,7 +50,7 @@ pub type InsertionOrderMap<K, V> =
 pub struct GenericInsertionOrderMap<
     K,
     V,
-    S = RandomState,
+    S,
     P: SharedPointerKind = DefaultSharedPtr,
 > {
     /// Key → insertion index.
@@ -72,6 +74,7 @@ impl<K: Clone, V: Clone, S: Clone, P: SharedPointerKind> Clone
     }
 }
 
+#[cfg(feature = "std")]
 impl<K, V, P> GenericInsertionOrderMap<K, V, RandomState, P>
 where
     P: SharedPointerKind,
@@ -177,6 +180,7 @@ where
     }
 }
 
+#[cfg(feature = "std")]
 impl<K, V, P> Default for GenericInsertionOrderMap<K, V, RandomState, P>
 where
     P: SharedPointerKind,

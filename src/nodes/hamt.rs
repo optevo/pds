@@ -2,12 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-use std::cell::UnsafeCell;
-use std::hash::{BuildHasher, Hash};
-use std::iter::FusedIterator;
-use std::mem::{ManuallyDrop, MaybeUninit};
-use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
-use std::{fmt, mem};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::hash::{BuildHasher, Hash};
+use core::iter::FusedIterator;
+use core::mem::{ManuallyDrop, MaybeUninit};
+use core::slice::{Iter as SliceIter, IterMut as SliceIterMut};
+use core::{fmt, mem};
 
 use archery::{SharedPointer, SharedPointerKind};
 use bitmaps::{Bits, BitsImpl};

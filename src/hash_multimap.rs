@@ -23,10 +23,11 @@
 //! assert!(!mm.contains("fruit", &"pear"));
 //! ```
 
+#[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
-use std::fmt::{Debug, Error, Formatter};
-use std::hash::{BuildHasher, Hash};
-use std::iter::FromIterator;
+use core::fmt::{Debug, Error, Formatter};
+use core::hash::{BuildHasher, Hash};
+use core::iter::FromIterator;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -36,6 +37,7 @@ use crate::hashset::GenericHashSet;
 use crate::shared_ptr::DefaultSharedPtr;
 
 /// Type alias for [`GenericHashMultiMap`] with default hasher and pointer type.
+#[cfg(feature = "std")]
 pub type HashMultiMap<K, V> = GenericHashMultiMap<K, V, RandomState, DefaultSharedPtr>;
 
 /// A persistent multimap backed by [`GenericHashMap`] and [`GenericHashSet`].
@@ -44,7 +46,7 @@ pub type HashMultiMap<K, V> = GenericHashMultiMap<K, V, RandomState, DefaultShar
 pub struct GenericHashMultiMap<
     K,
     V,
-    S = RandomState,
+    S,
     P: SharedPointerKind = DefaultSharedPtr,
 > {
     map: GenericHashMap<K, GenericHashSet<V, S, P>, S, P>,
@@ -63,6 +65,7 @@ impl<K: Clone, V: Clone, S: Clone, P: SharedPointerKind> Clone
     }
 }
 
+#[cfg(feature = "std")]
 impl<K, V, P> GenericHashMultiMap<K, V, RandomState, P>
 where
     P: SharedPointerKind,
@@ -228,6 +231,7 @@ where
     }
 }
 
+#[cfg(feature = "std")]
 impl<K, V, P> Default for GenericHashMultiMap<K, V, RandomState, P>
 where
     P: SharedPointerKind,
