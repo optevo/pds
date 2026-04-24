@@ -335,14 +335,20 @@ where
                 if a_ptr == b_ptr {
                     return true;
                 }
-                // Merkle negative check: if both sets share the same hasher
-                // instance (common ancestor via clone), their key hashes are
-                // computed identically. If the root Merkle hashes differ, the
-                // key sets differ and the sets are definitely not equal.
+                // Merkle check: when both sets share the same hasher instance
+                // (common ancestor via clone), their key hashes are computed
+                // identically and Merkle hashes are directly comparable.
+                //
+                // Negative: different Merkle → definitely not equal.
+                // Positive: same Merkle + same size → equal with probability
+                // 1 - 2^-64 (≈5.4e-20). This false positive rate is far below
+                // hardware error rates (~1e-15 per bit-hour for unprotected
+                // DRAM), so we treat Merkle match as equality — same reasoning
+                // as treating GUIDs as unique despite collision possibility.
                 let a_hasher = &*self.hasher as *const S as *const ();
                 let b_hasher = &*other.hasher as *const S2 as *const ();
-                if a_hasher == b_hasher && a.merkle_hash != b.merkle_hash {
-                    return false;
+                if a_hasher == b_hasher {
+                    return a.merkle_hash == b.merkle_hash;
                 }
             }
             _ => {}
