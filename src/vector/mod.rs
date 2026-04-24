@@ -1785,7 +1785,7 @@ impl<A: Debug, P: SharedPointerKind> Debug for GenericVector<A, P> {
 
 impl<A: PartialEq, P: SharedPointerKind> PartialEq for GenericVector<A, P> {
     fn eq(&self, other: &Self) -> bool {
-        self.len() == other.len() && self.iter().eq(other.iter())
+        self.ptr_eq(other) || (self.len() == other.len() && self.iter().eq(other.iter()))
     }
 }
 
@@ -2657,6 +2657,27 @@ mod test {
             assert_ne!(inp2.get(len - 1), input.get(len - 1));
             assert!(!input.ptr_eq(&inp2));
         }
+    }
+
+    #[test]
+    fn partial_eq_ptr_eq_fast_path() {
+        // Cloned vectors with shared structure are equal in O(1).
+        let v: Vector<i32> = (0..100).collect();
+        let v2 = v.clone();
+        assert_eq!(v, v2);
+
+        // After mutation, ptr_eq is false but element-wise equality still works.
+        let mut v3 = v.clone();
+        v3.set(50, 999);
+        assert_ne!(v, v3);
+
+        // Empty vectors.
+        let empty: Vector<i32> = Vector::new();
+        let empty2: Vector<i32> = Vector::new();
+        assert_eq!(empty, empty2);
+
+        // Self-comparison.
+        assert_eq!(v, v);
     }
 
     #[test]

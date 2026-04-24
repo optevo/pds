@@ -490,6 +490,21 @@ where
         if self.len() != other.len() {
             return false;
         }
+        // Fast path: if both roots point to the same allocation, the maps
+        // are identical. Compares type-erased data pointers so it works
+        // across different SharedPointerKind type parameters (which can
+        // never share an allocation, so this correctly returns false).
+        match (&self.root, &other.root) {
+            (None, None) => return true,
+            (Some(a), Some(b)) => {
+                let a_ptr = &**a as *const _ as *const ();
+                let b_ptr = &**b as *const _ as *const ();
+                if a_ptr == b_ptr {
+                    return true;
+                }
+            }
+            _ => {}
+        }
         let mut seen = collections::HashSet::new();
         for (key, value) in self.iter() {
             if Some(value) != other.get(key) {
@@ -2581,5 +2596,29 @@ mod test {
             // Print structure summary
             map.print_structure_summary();
         }
+    }
+
+    #[test]
+    fn partial_eq_ptr_eq_fast_path() {
+        // Cloned maps with shared structure are equal in O(1).
+        let mut map = HashMap::new();
+        for i in 0..100 {
+            map.insert(i, i * 2);
+        }
+        let map2 = map.clone();
+        assert_eq!(map, map2);
+
+        // After mutation, ptr_eq is false but element-wise equality still works.
+        let mut map3 = map.clone();
+        map3.insert(50, 999);
+        assert_ne!(map, map3);
+
+        // Empty maps.
+        let empty: HashMap<i32, i32> = HashMap::new();
+        let empty2: HashMap<i32, i32> = HashMap::new();
+        assert_eq!(empty, empty2);
+
+        // Self-comparison.
+        assert_eq!(map, map);
     }
 }

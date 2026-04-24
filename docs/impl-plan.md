@@ -64,6 +64,15 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 3.5: PartialEq ptr_eq fast paths.** Added O(1) early-exit
+  to `PartialEq` for HashMap, HashSet, and Vector when two collections share
+  the same root pointer. Vector uses its existing `ptr_eq()`. HashMap and
+  HashSet use type-erased data pointer comparison in `test_eq()` — works
+  across different `SharedPointerKind` type parameters (different pointer
+  kinds can never share an allocation, so comparison correctly returns false).
+  Also short-circuits on `(None, None)` roots to avoid `HashSet` allocation
+  for empty collections. OrdMap and OrdSet already had this via `diff()`.
+
 - **[2026-04-24] 2.3: OrdMap iter_mut.** Added `iter_mut()` to OrdMap,
   yielding `(&K, &mut V)` pairs in key order. Implementation uses a
   stack-based depth-first traversal with `SharedPointer::make_mut` at
@@ -139,8 +148,9 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — items 2.2 and 2.3 complete. Item 2.1 (RRB concat fix) is the
-remaining Phase 2 item. Phase 3 items 3.1-3.4 are now unblocked.
+Phase 2 — items 2.2 and 2.3 complete. Remaining Phase 2 items: 2.1 (RRB
+concat fix), 2.4 (HashMap/HashSet diff), 2.5 (Vector diff), 2.6
+(patch/apply). Phase 3 item 3.5 complete. Items 3.1–3.4 and 3.6 unblocked.
 
 ---
 
@@ -486,11 +496,98 @@ position across nodes, yielding references) needs to be written.
 
 ---
 
+### 2.4 HashMap/HashSet diff
+
+**What:** Add `diff()` to HashMap and HashSet, producing a `DiffIter` that
+yields `DiffItem::{Add, Update, Remove}` — matching the existing
+OrdMap/OrdSet diff API.
+
+**Why:** HashMap is the most widely used collection type in the library.
+Any system that uses persistent HashMaps for version control, change
+tracking, or incremental computation needs efficient differencing to
+detect what changed between two versions. OrdMap and OrdSet already provide
+`diff()`, but HashMap and HashSet — despite being more commonly used — do
+not. This is the most significant API gap in the library.
+
+**Design:** Walk both HAMT tries simultaneously, descending into subtrees
+that differ. At leaf level, emit Add/Update/Remove items. The HAMT's
+hash-prefix structure provides a natural alignment for parallel tree
+traversal (analogous to how OrdMap's sorted keys provide alignment for
+its cursor-based diff).
+
+**Complexity:** Moderate. The HAMT's 3-tier node hierarchy
+(SmallSimdNode/LargeSimdNode/HamtNode) adds implementation complexity
+compared to a standard bitmap HAMT diff.
+
+**Affects:** `HashMap<K, V>`, `HashSet<A>`.
+
+**Prerequisites:** 0.1 (CI), 0.3 (benchmarks for performance validation).
+
+**References:** Steindorfer and Vinju, OOPSLA 2015 (includes diff algorithm
+for bitmap tries); Clojure `clojure.data/diff`.
+
+---
+
+### 2.5 Vector diff
+
+**What:** Add `diff()` to Vector, producing a `DiffIter` that yields
+positional `DiffItem::{Add(index, value), Update{index, old, new},
+Remove(index, value)}` items.
+
+**Why:** Version-controlled Vector data needs differencing for the same
+reasons as Map data. Without it, consumers must fall back to O(n)
+element-by-element comparison with no way to leverage structural sharing.
+
+**Design:** Positional diff — compare elements at each index. If lengths
+differ, excess elements are Add (longer) or Remove (shorter). This is
+the right abstraction for indexed collections where position is the key
+(unlike content-based diff algorithms like Myers, which suit
+text/sequences where content identity matters more than position).
+
+**Complexity:** Low-moderate. Simpler than HashMap diff since Vector
+indices provide trivial alignment.
+
+**Affects:** `Vector<A>`.
+
+**Prerequisites:** 0.1 (CI).
+
+---
+
+### 2.6 Patch/apply from diff
+
+**What:** Add an `apply_diff()` method that takes a DiffIter (or any
+iterator of `DiffItem`) and produces a new collection with the diff
+applied. Completes the diff-merge-patch cycle.
+
+**Why:** Diff alone is only half the story. A version-controlled system
+needs: diff(base, version_a), diff(base, version_b), resolve conflicts,
+then apply the resolved diff to produce the merged result. Without apply,
+consumers must manually reconstruct the merged collection entry by entry.
+
+**Design:** For each DiffItem, apply the corresponding mutation.
+`Add(k, v)` → insert, `Remove(k, _)` → remove, `Update{key, new, ..}`
+→ update. The method should accept any `IntoIterator<Item = DiffItem>`,
+not just the library's own `DiffIter` — this allows consumers to filter,
+transform, or merge diff streams before applying.
+
+**Complexity:** Low. Uses existing insert/remove/update operations
+internally.
+
+**Affects:** All collection types that have diff: HashMap, HashSet,
+OrdMap, OrdSet, Vector.
+
+**Prerequisites:** 2.4 (HashMap diff), 2.5 (Vector diff). The
+OrdMap/OrdSet implementations can land earlier since those diffs already
+exist.
+
+---
+
 ## Phase 3 — Mutation & parallel performance {#phase-3}
 
 The core performance track. 3.1 is the foundation, 3.2 validates safety,
-3.3 builds the user-facing API on top, and 3.4 extends parallelism across
-all collection types.
+3.3 builds the user-facing API on top, 3.4 extends parallelism across
+all collection types, and 3.5–3.6 optimise equality and diff operations
+for structurally-shared collections.
 
 ### 3.1 `Arc::get_mut` in-place mutation
 
@@ -673,6 +770,75 @@ Items 3.4.3–3.4.5 benefit from but do not require 3.1 (Arc::get_mut) and
 **References:** rayon crate (docs.rs/rayon); Vector's existing
 `src/vector/rayon.rs`; Scala parallel collections
 (docs.scala-lang.org/overviews/parallel-collections).
+
+---
+
+### 3.5 PartialEq ptr_eq fast paths
+
+**What:** Add a `ptr_eq` early-exit check to the `PartialEq`
+implementation for HashMap, HashSet, and Vector. If two collections share
+the same root pointer (one was cloned from the other and neither has been
+modified), return `true` immediately in O(1) without traversing elements.
+
+**Why:** Collections that share structure via cloning are the fundamental
+pattern in persistent data structure usage. When checking whether a value
+has changed (for incremental recomputation, cache invalidation, or
+change detection), the common case is that it *hasn't* — and the pointer
+check confirms this in O(1). Current state:
+- HashMap: O(n) always, plus allocates a `std::HashSet` for tracking
+- HashSet: O(n) always, same allocation
+- Vector: O(n) always (`iter().eq()`)
+- OrdMap: already O(1) for pointer-equal maps (via `diff()` which checks
+  `ptr_eq`) ✓
+- OrdSet: already O(1) (delegates to OrdMap) ✓
+
+**Complexity:** Trivial. Single `ptr_eq` check at the top of each `eq()`
+method.
+
+**Affects:** `HashMap<K, V>`, `HashSet<A>`, `Vector<A>`.
+
+**Prerequisites:** 0.1 (CI).
+
+---
+
+### 3.6 Pointer-aware subtree skipping in diff
+
+**What:** When diffing two collections that share structure, skip entire
+subtrees where `Arc::ptr_eq` confirms the subtree is physically
+identical. This reduces diff complexity from O(n) to O(changes) for
+collections derived from a common ancestor.
+
+**Why:** The primary use case for persistent collections is
+fork-modify-diff-merge. After forking, most of the tree is shared. A diff
+that walks the entire tree misses the core performance advantage of
+structural sharing. For large collections where only a few entries
+changed, the difference is orders of magnitude (e.g. O(10) vs O(10M) for
+a 10M-entry collection with 10 changes).
+
+**Current state:**
+- HashMap: `HashedValue::ptr_eq` returns `false` unconditionally
+  (`hash/map.rs:122-124`) — the plumbing exists in the trait but is
+  stubbed out. The HAMT's `HamtNode` entries could compare child pointers
+  but currently do not.
+- OrdMap: root-level `ptr_eq` check exists (`ord/map.rs:305`), but the
+  B+ tree cursor does not check `Node::ptr_eq` during traversal — it
+  visits every element even in shared subtrees. `Node::ptr_eq` already
+  exists (`btree.rs:91-96`) but is unused by diff.
+- Vector: depends on 2.5 (Vector diff) existing first.
+
+**Design:** At each internal node during diff traversal, check `ptr_eq`
+on child pointers. If equal, skip the entire subtree (emit no diff
+items). If unequal, descend. This is a tree-walk optimisation, not a new
+algorithm — it layers onto existing diff implementations.
+
+**Complexity:** Moderate. Requires modifying the diff traversal for each
+data structure type. The HAMT's 3-tier node hierarchy adds complexity for
+HashMap.
+
+**Affects:** HashMap (via 2.4), OrdMap (existing diff), Vector (via 2.5).
+
+**Prerequisites:** 2.4 (HashMap diff — must exist before it can be
+optimised), 0.5 (architecture docs for understanding node structure).
 
 ---
 
@@ -994,12 +1160,17 @@ Phase 2 (correctness + API)                                               │
   2.1 RRB concat fix ◄── 0.1, 0.3, 0.5                                   │
   2.2 get_next_exclusive ◄── 0.1                                          │
   2.3 OrdMap iter_mut ◄── 0.1, 0.5                                        │
+  2.4 HashMap/HashSet diff ◄── 0.1, 0.3                                   │
+  2.5 Vector diff ◄── 0.1                                                 │
+  2.6 patch/apply ◄── 2.4, 2.5                                            │
                                    │                                      │
 Phase 3 (mutation + parallel perf)  │                                      │
   3.1 Arc::get_mut ◄── 0.1, 0.3, 0.5                                     │
   3.2 unsafe audit ◄── 0.1, 0.2, 0.5                                     │
   3.3 transient/builder ◄── 3.1                                           │
   3.4 parallel iterators ◄── 0.1, 0.3                                     │
+  3.5 PartialEq ptr_eq fast paths ◄── 0.1                                 │
+  3.6 subtree-aware diff ◄── 2.4, 0.5                                     │
                                    │                                      │
 Phase 4 (internals)                │                                      │
   4.1 prefix buffer ◄── 2.1                                               │
@@ -1021,13 +1192,15 @@ Phase 6 (research)                 │                                      │
 
 ### Parallel tracks
 
-Once Phase 0 is complete, four independent tracks can proceed in parallel:
+Once Phase 0 is complete, five independent tracks can proceed in parallel:
 
 1. **Vector track:** 2.1 → 4.1
 2. **Hash track:** 4.2 → (4.3 if justified) → 5.3, 5.4
 3. **Mutation track:** 3.1 → 3.2, 3.3 → 5.2
 4. **Parallel track:** 3.4 (HashMap/HashSet par_iter first, then OrdMap/OrdSet,
    then bulk ops and parallel sort). Benefits from but does not block on 3.1/3.3.
+5. **Diff track:** 2.4, 2.5 (independent of each other) → 2.6 → 3.6. Item 3.5
+   (PartialEq fast paths) is independent and can land at any time after 0.1.
 
 Items 2.2, 2.3, 1.x, and 6.4 are independent and can be done at any time
 after their prerequisites.

@@ -75,6 +75,30 @@ focused, well-tested, with a clear commit message. Avoid coupling unrelated
 changes. Breaking changes are batched into v8.0.0 (Phase 5 of the
 implementation plan).
 
+### Compiler and clippy warnings
+
+All compiler warnings and clippy lints must be addressed — never ignored or left
+to accumulate. `test.sh` enforces this via `cargo clippy -- -D warnings`.
+
+- **Use the standard clippy lint set.** The default clippy lints plus `-D warnings`
+  are the baseline for all projects. Do not weaken, remove, or globally allow
+  standard lints without a project-specific justification.
+- **Fix the warning** whenever the fix is straightforward. Most warnings indicate
+  genuinely improvable code.
+- **Suppress with explanation** when the warning is a false positive or the
+  flagged pattern is intentional. Use `#[allow(clippy::lint_name)]` (or
+  `#[allow(unused_...)]` etc.) with an inline comment explaining why the
+  suppression is acceptable. Never use a bare `#[allow(...)]` without a comment.
+- **Add to the implementation plan** when fixing the warning requires non-trivial
+  refactoring. Add the item to `docs/impl-plan.md` under Future with a reference
+  to the specific warning, and suppress the warning in the interim with a comment
+  noting the plan item.
+- **Project-level lint deviations** — if a project needs to deviate from the
+  standard clippy lint set (e.g. `#![allow(clippy::some_lint)]` at the crate
+  root), the suppression must include a comment explaining why this project
+  specifically needs the deviation. Lint deviations are project-specific decisions
+  and do not propagate to other projects.
+
 ### AI-specific pitfalls
 
 These are failure modes that survive `cargo check` and `clippy` and must be

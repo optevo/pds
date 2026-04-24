@@ -303,6 +303,19 @@ where
         if self.len() != other.len() {
             return false;
         }
+        // Fast path: if both roots point to the same allocation, the sets
+        // are identical. See HashMap::test_eq for rationale.
+        match (&self.root, &other.root) {
+            (None, None) => return true,
+            (Some(a), Some(b)) => {
+                let a_ptr = &**a as *const _ as *const ();
+                let b_ptr = &**b as *const _ as *const ();
+                if a_ptr == b_ptr {
+                    return true;
+                }
+            }
+            _ => {}
+        }
         let mut seen = collections::HashSet::new();
         for value in self.iter() {
             if !other.contains(value) {
@@ -1103,6 +1116,27 @@ mod test {
                 panic!();
             }
         }
+    }
+
+    #[test]
+    fn partial_eq_ptr_eq_fast_path() {
+        // Cloned sets with shared structure are equal in O(1).
+        let set: HashSet<i32> = (0..100).collect();
+        let set2 = set.clone();
+        assert_eq!(set, set2);
+
+        // After mutation, ptr_eq is false but element-wise equality still works.
+        let mut set3 = set.clone();
+        set3.insert(999);
+        assert_ne!(set, set3);
+
+        // Empty sets.
+        let empty: HashSet<i32> = HashSet::new();
+        let empty2: HashSet<i32> = HashSet::new();
+        assert_eq!(empty, empty2);
+
+        // Self-comparison.
+        assert_eq!(set, set);
     }
 
     proptest! {
