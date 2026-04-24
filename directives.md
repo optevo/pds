@@ -72,7 +72,7 @@ Two devShells are available:
 
 Every change should be structured as an independent, upstreamable PR: small,
 focused, well-tested, with a clear commit message. Avoid coupling unrelated
-changes. Breaking changes are batched into v8.0.0 (Phase 5 of the
+changes. Breaking changes are batched into v2.0.0 (Phase 5 of the
 implementation plan).
 
 ### Compiler and clippy warnings

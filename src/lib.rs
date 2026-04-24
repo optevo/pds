@@ -392,7 +392,7 @@ pub mod ser;
 #[doc(hidden)]
 #[deprecated(
     since = "7.0.1",
-    note = "The `bincode` feature will be removed in v8.0.0. Use serde for serialisation instead."
+    note = "The `bincode` feature is deprecated and will be removed. Use serde for serialisation instead."
 )]
 pub mod bincode;
 

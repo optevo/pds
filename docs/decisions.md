@@ -54,7 +54,7 @@ not driving a roadmap. This fork has an extensive improvement plan
 
 **Decision:**
 Structure every change as an independent, upstreamable PR: small, focused,
-well-tested. Batch breaking changes into a single major version bump (v8.0.0).
+well-tested. Batch breaking changes into a single major version bump (v2.0.0).
 Maintain the fork as a parallel track, contributing fixes upstream where possible.
 
 **Alternatives considered:**
@@ -64,7 +64,7 @@ Maintain the fork as a parallel track, contributing fixes upstream where possibl
 
 **Consequences:**
 Each change must be self-contained and tested in isolation. Breaking changes
-must be held until v8.0.0 batch. Some experimental items (Phase 6) may
+must be held until v2.0.0 batch. Some experimental items (Phase 6) may
 diverge from upstream if they involve fundamental structural changes.
 
 ## DEC-002: Nix devShell with stable + nightly toolchains
@@ -111,7 +111,7 @@ versions — harmless, resolves with rand update).
 
 **Decision:**
 - Do not update breaking dependencies now. All are non-urgent.
-- **bincode**: deprecation tracked in item 1.3 — remove in v8.0.0, not update.
+- **bincode**: deprecation tracked in item 1.3 — remove in v2.0.0, not update.
 - **wide 0.7 → 1.3**: CHAMP evaluation complete (DEC-007, DEC-015) —
   HAMT retained, `wide` stays. Update to 1.3 can proceed when convenient.
 - **rand ecosystem 0.9 → 0.10**: defer until the ecosystem stabilises.
@@ -128,7 +128,7 @@ versions — harmless, resolves with rand update).
   simultaneously with no functional benefit.
 
 **Consequences:**
-Breaking updates are deferred to natural integration points (v8.0.0
+Breaking updates are deferred to natural integration points (v2.0.0
 for bincode removal). The semver-compatible deps are all current and
 audit-clean except the known bincode advisory.
 
@@ -502,7 +502,7 @@ at 100K. No significant regressions.
 
 **Consequences:**
 Breaking change: the concrete pointer type changes for all users not
-already enabling the `triomphe` feature. Batched into v8.0.0. Users who
+already enabling the `triomphe` feature. Batched into v2.0.0. Users who
 extract or inspect internal pointer types, or who rely on `Arc::downgrade`,
 must opt out of the default feature. The `triomphe` crate becomes a
 required dependency (previously optional).
@@ -970,7 +970,7 @@ Kill the item. The premise is wrong — `SharedPointer<T, ArcTK>` is already
 **Alternatives considered:**
 - **Remove P parameter from HashMap/HashSet** — still valid as an API
   simplification, but provides no performance benefit. Can be done as part
-  of the v8.0.0 API cleanup (Phase 5) rather than as a performance item.
+  of the v2.0.0 API cleanup (Phase 5) rather than as a performance item.
 - **Use triomphe::Arc directly** — archery already delegates to triomphe::Arc
   when the `triomphe` feature is enabled (which is the default). The ManuallyDrop
   transmute in archery is zero-cost.

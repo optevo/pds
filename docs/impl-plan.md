@@ -19,7 +19,7 @@ This is a fork of jneem/imbl. Every change should be structured as an
 independent, upstreamable PR: small, focused, well-tested, with a clear
 commit message. Avoid coupling unrelated changes. Breaking changes need
 strong justification. Batch breaking changes into a single major version
-bump (v8.0.0) to avoid churn for downstream users.
+bump (v2.0.0) to avoid churn for downstream users.
 
 ### Document as you go
 
@@ -39,7 +39,7 @@ structural change lands without fuzz/miri validation. Preparation steps
 
 Items are grouped by semver impact. Non-breaking changes can ship as v7.x
 point releases. Breaking changes (5.1, 5.2, 5.3, 5.4) are batched into a
-single v8.0.0 release in Phase 5.
+single v2.0.0 release in Phase 5.
 
 ---
 
@@ -53,7 +53,7 @@ single v8.0.0 release in Phase 5.
   - [Phase 2 — Correctness fixes & quick API wins](#phase-2)
   - [Phase 3 — Mutation & parallel performance](#phase-3)
   - [Phase 4 — Data structure internals](#phase-4)
-  - [Phase 5 — Breaking API changes (v8.0.0)](#phase-5)
+  - [Phase 5 — Breaking API changes (v2.0.0)](#phase-5)
   - [Phase 6 — Research & speculative](#phase-6)
 - [Dependency map](#dependency-map)
 - [References](#references)
@@ -384,7 +384,7 @@ single v8.0.0 release in Phase 5.
 - **[2026-04-24] 1.3: Deprecate bincode feature.** Added `#[deprecated]`
   attribute on the `bincode` module in `lib.rs` with deprecation notice
   pointing to serde. Updated feature table in lib.rs doc comment. Feature
-  will be removed entirely in v8.0.0.
+  will be removed entirely in v2.0.0.
 
 - **[2026-04-24] 1.2: Remove dead pool code.** Deleted `src/fakepool.rs`
   (no-op stub, orphaned — no `mod` declaration) and `src/vector/pool.rs`
@@ -691,7 +691,7 @@ previously noted — the imports use `bincode::{Decode, Encode}` which is the
 well-maintained.
 
 **Approach:** Deprecate the feature with a `#[deprecated]` attribute on the
-bincode-specific impls. Remove entirely in v8.0.0. Users can implement
+bincode-specific impls. Remove entirely in v2.0.0. Users can implement
 bincode serialisation externally via serde.
 
 **Complexity:** Low.
@@ -1678,7 +1678,7 @@ earlier and more often than the branching factor suggests.
    benchmark the per-entry storage increase vs collision reduction at
    large collection sizes (100K+).
 
-2. **Abstract hash width (breaking — v8.0.0).** Replace the concrete
+2. **Abstract hash width (breaking — v2.0.0).** Replace the concrete
    `HashBits` type with an associated type on a `HashWidth` trait:
    ```rust
    trait HashWidth {
@@ -1708,7 +1708,7 @@ overhead.
 
 **Scope:** Stage 1 (widen to u64) is a self-contained, non-breaking
 change that can ship as v7.x. Stage 2 (trait abstraction) is breaking
-and belongs in v8.0.0. Stage 3 (identity hasher) is a convenience
+and belongs in v2.0.0. Stage 3 (identity hasher) is a convenience
 addition that can land with either stage.
 
 #### Stage 1 implementation plan (widen to u64)
@@ -1776,7 +1776,7 @@ itself via collision reduction at large collection sizes?
   storage increase?
 - **Files:** `benches/hashmap.rs`
 
-#### Stage 2 design notes (breaking — v8.0.0)
+#### Stage 2 design notes (breaking — v2.0.0)
 
 Abstract hash width behind a trait so users can choose u32/u64/u128:
 
@@ -1833,11 +1833,11 @@ full hash); Steindorfer/Vinju OOPSLA 2015 (CHAMP uses full 32-bit hash,
 
 ---
 
-## Phase 5 — Breaking API changes (v8.0.0) {#phase-5}
+## Phase 5 — Breaking API changes (v2.0.0) {#phase-5}
 
 All items in this phase are breaking changes. They must be batched into a
 single major version bump to minimise disruption for downstream users.
-Ship as v8.0.0 when all are ready.
+Ship as v2.0.0 when all are ready.
 
 ### 5.1 Default to triomphe::Arc — DONE
 
@@ -2222,9 +2222,9 @@ Phase 4 (internals)                │                                      │
   4.4 Merkle hash caching ◄── 0.3, 0.5  ✓ DONE                           │
   4.5 SharedPointer hasher PoC ◄── 5.2  ✓ DONE                            │
   4.6 Vector Merkle hash ◄── 0.3 ✓, 0.5 ✓ (benefits from 4.4 ✓ pattern)  │
-  4.7 Pluggable hash width ◄── 0.3 ✓, 0.5 ✓ (stage 2 → v8.0.0)          │
+  4.7 Pluggable hash width ◄── 0.3 ✓, 0.5 ✓ (stage 2 → v2.0.0)          │
                                    │                                      │
-Phase 5 (breaking — v8.0.0)        │                                      │
+Phase 5 (breaking — v2.0.0)        │                                      │
   5.1 triomphe default ◄── 0.3, 0.4  ✓ DONE (DEC-010)                     │
   5.2 remove Clone bounds ◄── 3.1  ✓ DONE                                │
   5.3 const generic branching ◄── 4.3  ✗ DEFERRED (DEC-011: stable Rust blocker) │
@@ -2251,7 +2251,7 @@ parallel:
    of 4.1, needs only Phase 0 ✓).
 2. **Hash track:** 4.2 ✓ → 4.3 ✗ → 6.7 ✗ → 6.8 ✗. HAMT retained.
    Remaining: 4.7 (pluggable hash width — stage 1 non-breaking, stage
-   2 → v8.0.0).
+   2 → v2.0.0).
 3. **Mutation track:** 3.1 ✓ → 3.2 ✓, 3.3 ✓ → 5.2 ✓ → 4.5 ✓ **COMPLETE**
 4. **Parallel track:** 3.4 (HashMap/HashSet par_iter first, then
    OrdMap/OrdSet, then bulk ops and parallel sort). Benefits from but
