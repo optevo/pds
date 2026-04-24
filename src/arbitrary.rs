@@ -86,7 +86,7 @@ impl<'a, A: Arbitrary<'a> + Ord + Clone, P: SharedPointerKind + 'static> Arbitra
 impl<'a, K, V, S, P> Arbitrary<'a> for GenericHashMap<K, V, S, P>
 where
     K: Arbitrary<'a> + Hash + Eq + Clone,
-    V: Arbitrary<'a> + Clone,
+    V: Arbitrary<'a> + Clone + Hash,
     S: BuildHasher + Clone + Default + 'static,
     P: SharedPointerKind + 'static,
 {

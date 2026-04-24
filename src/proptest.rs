@@ -122,7 +122,7 @@ pub fn hash_map<K: Strategy + 'static, V: Strategy + 'static>(
 ) -> BoxedStrategy<HashMap<<K::Tree as ValueTree>::Value, <V::Tree as ValueTree>::Value>>
 where
     <K::Tree as ValueTree>::Value: Hash + Eq + Clone,
-    <V::Tree as ValueTree>::Value: Clone,
+    <V::Tree as ValueTree>::Value: Clone + Hash,
 {
     ::proptest::collection::vec((key, value), size.clone())
         .prop_map(HashMap::from)

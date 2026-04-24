@@ -413,7 +413,7 @@ where
 impl<K, V, S, P> FromParallelIterator<(K, V)> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone + Send + Sync,
-    V: Clone + Send + Sync,
+    V: Clone + Hash + Send + Sync,
     S: BuildHasher + Clone + Default + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {
@@ -434,7 +434,7 @@ where
 impl<K, V, S, P> ParallelExtend<(K, V)> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone + Send + Sync,
-    V: Clone + Send + Sync,
+    V: Clone + Hash + Send + Sync,
     S: BuildHasher + Clone + Default + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {

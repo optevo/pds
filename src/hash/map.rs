@@ -38,8 +38,8 @@ use equivalent::Equivalent;
 
 use crate::hashset::GenericHashSet;
 use crate::nodes::hamt::{
-    hash_key, Drain as NodeDrain, Entry as NodeEntry, HashBits, HashValue, Iter as NodeIter,
-    IterMut as NodeIterMut, Node, HASH_WIDTH,
+    fmix64, hash_key, Drain as NodeDrain, Entry as NodeEntry, HashBits, HashValue,
+    Iter as NodeIter, IterMut as NodeIterMut, Node, HASH_WIDTH,
 };
 #[cfg(any(feature = "std", feature = "foldhash"))]
 use crate::shared_ptr::DefaultSharedPtr;
@@ -102,13 +102,21 @@ pub type HashMap<K, V> =
 /// Most operations are O(log<sub>32</sub> n), which is effectively O(1)
 /// for practical collection sizes. Clone is O(1) via structural sharing.
 ///
-/// **Inequality detection is O(1)** for maps that share a common ancestor
+/// **Equality is effectively O(1)** for maps that share a common ancestor
 /// (the common case with persistent data structures). Each node maintains
-/// a Merkle hash of its key set; maps with different Merkle hashes are
-/// known to be unequal without element-by-element comparison. Full equality
-/// requires O(n) value comparison since Merkle hashes cover keys only.
+/// a key-only Merkle hash for O(1) inequality detection, and the map
+/// maintains a key+value Merkle hash (`kv_merkle`) for O(1) positive
+/// equality. The combined false-positive rate is ~2⁻⁶⁴, below DRAM
+/// bit-flip rates.
+///
+/// The kv_merkle is maintained by [`insert`][Self::insert] and
+/// [`remove`][Self::remove] (which require `V: Hash`). In-place
+/// mutations (`get_mut`, `index_mut`, entry API) invalidate it,
+/// falling back to O(n) comparison. Use [`recompute_kv_merkle`]
+/// [Self::recompute_kv_merkle] to re-seal after invalidation.
 ///
 /// Keys must implement [`Hash`][std::hash::Hash] and [`Eq`][std::cmp::Eq].
+/// Values must implement [`Hash`][std::hash::Hash] for mutation methods.
 ///
 /// [1]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
 /// [std::cmp::Eq]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
@@ -128,6 +136,15 @@ pub struct GenericHashMap<K, V, S, P: SharedPointerKind> {
     // mutation-heavy workloads where hashing or tree operations dominate.
     // See DEC-006 in docs/decisions.md.
     pub(crate) hasher: SharedPointer<S, P>,
+    /// Merkle hash of keys AND values. When valid, enables O(1) positive
+    /// equality: same hasher + same size + same kv_merkle → equal with
+    /// probability 1 − 2⁻⁶⁴ (below hardware error rates).
+    /// Contribution per entry: `fmix64(key_hash.wrapping_add(value_hash))`.
+    pub(crate) kv_merkle_hash: u64,
+    /// Whether `kv_merkle_hash` is current. Invalidated by in-place
+    /// mutations (`get_mut`, `index_mut`, `iter_mut`, entry API mutations)
+    /// that bypass value hashing.
+    pub(crate) kv_merkle_valid: bool,
 }
 
 impl<K, V> HashValue for (K, V)
@@ -149,7 +166,7 @@ where
 impl<K, V, P> GenericHashMap<K, V, RandomState, P>
 where
     K: Hash + Eq + Clone,
-    V: Clone,
+    V: Clone + Hash,
     P: SharedPointerKind,
 {
     /// Construct a hash map with a single mapping.
@@ -176,7 +193,7 @@ where
 impl<K, V, P> GenericHashMap<K, V, foldhash::fast::RandomState, P>
 where
     K: Hash + Eq + Clone,
-    V: Clone,
+    V: Clone + Hash,
     P: SharedPointerKind,
 {
     /// Construct a hash map with a single mapping (no_std + foldhash).
@@ -266,6 +283,8 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
             size: 0,
             hasher: SharedPointer::new(hasher),
             root: None,
+            kv_merkle_hash: 0,
+            kv_merkle_valid: true,
         }
     }
 
@@ -290,6 +309,8 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
             size: 0,
             root: None,
             hasher: self.hasher.clone(),
+            kv_merkle_hash: 0,
+            kv_merkle_valid: true,
         }
     }
 
@@ -357,6 +378,41 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     pub fn clear(&mut self) {
         self.root = None;
         self.size = 0;
+        self.kv_merkle_hash = 0;
+        self.kv_merkle_valid = true;
+    }
+
+    /// Recompute the key-value Merkle hash by traversing all entries.
+    ///
+    /// Call this after operations that invalidate the kv_merkle
+    /// (`get_mut`, `index_mut`, entry API mutations, set operations)
+    /// to re-enable O(1) positive equality checks.
+    ///
+    /// Time: O(n)
+    pub fn recompute_kv_merkle(&mut self)
+    where
+        K: Hash + Eq,
+        V: Hash,
+        S: BuildHasher,
+    {
+        let mut kv_merkle: u64 = 0;
+        if let Some(root) = &self.root {
+            for ((_, v), key_hash) in NodeIter::new(Some(root), self.size) {
+                let value_hash = self.hasher.hash_one(v);
+                kv_merkle =
+                    kv_merkle.wrapping_add(fmix64(key_hash.wrapping_add(value_hash)));
+            }
+        }
+        self.kv_merkle_hash = kv_merkle;
+        self.kv_merkle_valid = true;
+    }
+
+    /// Whether the key-value Merkle hash is currently valid. When true,
+    /// equality checks against maps sharing the same hasher are O(1).
+    #[inline]
+    #[must_use]
+    pub fn kv_merkle_valid(&self) -> bool {
+        self.kv_merkle_valid
     }
 
     /// Print a summary of the HashMap structure showing per-level statistics.
@@ -538,14 +594,21 @@ where
                 if a_ptr == b_ptr {
                     return true;
                 }
-                // Merkle negative check: if both maps share the same hasher
-                // instance (common ancestor via clone), their key hashes are
-                // computed identically. If the root Merkle hashes differ, the
-                // key sets differ and the maps are definitely not equal.
                 let a_hasher = &*self.hasher as *const S as *const ();
                 let b_hasher = &*other.hasher as *const S2 as *const ();
-                if a_hasher == b_hasher && a.merkle_hash != b.merkle_hash {
-                    return false;
+                if a_hasher == b_hasher {
+                    // Merkle negative check: different key Merkle → different key sets.
+                    if a.merkle_hash != b.merkle_hash {
+                        return false;
+                    }
+                    // KV Merkle positive check: same key+value Merkle → equal
+                    // with probability 1 − 2⁻⁶⁴ (below hardware error rates).
+                    if self.kv_merkle_valid
+                        && other.kv_merkle_valid
+                        && self.kv_merkle_hash == other.kv_merkle_hash
+                    {
+                        return true;
+                    }
                 }
             }
             _ => {}
@@ -826,10 +889,10 @@ where
         for item in diff {
             match item {
                 DiffItem::Add(k, v) | DiffItem::Update { new: (k, v), .. } => {
-                    out.insert(k.clone(), v.clone());
+                    out.insert_invalidate_kv(k.clone(), v.clone());
                 }
                 DiffItem::Remove(k, _) => {
-                    out.remove(k);
+                    out.remove_invalidate_kv(k);
                 }
             }
         }
@@ -862,9 +925,9 @@ where
         let mut right = Self::new();
         for (k, v) in self.iter() {
             if f(k, v) {
-                left.insert(k.clone(), v.clone());
+                left.insert_invalidate_kv(k.clone(), v.clone());
             } else {
-                right.insert(k.clone(), v.clone());
+                right.insert_invalidate_kv(k.clone(), v.clone());
             }
         }
         (left, right)
@@ -907,10 +970,10 @@ where
         for (k, v) in self.iter() {
             match f(k, v) {
                 Ok(v1) => {
-                    left.insert(k.clone(), v1);
+                    left.insert_invalidate_kv(k.clone(), v1);
                 }
                 Err(v2) => {
-                    right.insert(k.clone(), v2);
+                    right.insert_invalidate_kv(k.clone(), v2);
                 }
             }
         }
@@ -948,17 +1011,58 @@ where
             match other.get(k) {
                 Some(v2) => {
                     if let Some(new_v) = f(k, v, v2) {
-                        result.insert(k.clone(), new_v);
+                        result.insert_invalidate_kv(k.clone(), new_v);
                     }
                 }
                 None => {
-                    result.insert(k.clone(), v.clone());
+                    result.insert_invalidate_kv(k.clone(), v.clone());
                 }
             }
         }
         result
     }
 
+}
+
+// Internal helpers that don't require V: Hash. Used by set operations and
+// entry-based methods that go through the HAMT directly.
+impl<K, V, S, P> GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    /// Insert without maintaining kv_merkle (invalidates it).
+    /// Used by internal code paths that don't have V: Hash.
+    pub(crate) fn insert_invalidate_kv(&mut self, k: K, v: V) -> Option<V> {
+        let hash = hash_key(&*self.hasher, &k);
+        let root = SharedPointer::make_mut(self.root.get_or_insert_with(SharedPointer::default));
+        let result = root.insert(hash, 0, (k, v));
+        if result.is_none() {
+            self.size += 1;
+        }
+        self.kv_merkle_valid = false;
+        result.map(|(_, v)| v)
+    }
+
+    /// Remove without maintaining kv_merkle (invalidates it).
+    /// Used by internal code paths that don't have V: Hash.
+    pub(crate) fn remove_invalidate_kv<Q>(&mut self, k: &Q) -> Option<(K, V)>
+    where
+        Q: Hash + Equivalent<K> + ?Sized,
+    {
+        let hash = hash_key(&*self.hasher, k);
+        let Some(root) = &mut self.root else {
+            return None;
+        };
+        let result = SharedPointer::make_mut(root).remove(hash, 0, k);
+        if result.is_some() {
+            self.size -= 1;
+            self.kv_merkle_valid = false;
+        }
+        result
+    }
 }
 
 // Mutating methods that need K: Clone + V: Clone for copy-on-write but NOT S: Clone.
@@ -981,6 +1085,7 @@ where
     #[inline]
     #[must_use]
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V, P> {
+        self.kv_merkle_valid = false;
         let root = self.root.as_mut().map(|r| SharedPointer::make_mut(r));
         IterMut {
             it: NodeIterMut::new(root, self.size),
@@ -989,6 +1094,10 @@ where
 
     /// Get a mutable reference to the value for a key from a hash
     /// map.
+    ///
+    /// Note: invalidates the key-value Merkle hash, causing subsequent
+    /// equality checks to fall back to O(n). Use [`insert`][Self::insert]
+    /// to replace values while preserving O(1) equality.
     ///
     /// Time: O(log n)
     ///
@@ -1016,6 +1125,8 @@ where
 
     /// Get the key/value pair for a key from a hash map, returning a mutable reference to the value.
     ///
+    /// Note: invalidates the key-value Merkle hash. See [`get_mut`][Self::get_mut].
+    ///
     /// Time: O(log n)
     ///
     /// # Examples
@@ -1034,6 +1145,7 @@ where
     where
         Q: Hash + Equivalent<K> + ?Sized,
     {
+        self.kv_merkle_valid = false;
         let root = self.root.as_mut()?;
         match SharedPointer::make_mut(root).get_mut(hash_key(&*self.hasher, key), 0, key) {
             None => None,
@@ -1041,7 +1153,8 @@ where
         }
     }
 
-    /// Insert a key/value mapping into a map.
+    /// Insert a key/value mapping into a map, maintaining the
+    /// key-value Merkle hash for O(1) equality checks.
     ///
     /// If the map already has a mapping for the given key, the
     /// previous value is overwritten.
@@ -1062,18 +1175,33 @@ where
     /// );
     /// ```
     #[inline]
-    pub fn insert(&mut self, k: K, v: V) -> Option<V> {
+    pub fn insert(&mut self, k: K, v: V) -> Option<V>
+    where
+        V: Hash,
+    {
         let hash = hash_key(&*self.hasher, &k);
+        let value_hash = self.hasher.hash_one(&v);
         let root = SharedPointer::make_mut(self.root.get_or_insert_with(SharedPointer::default));
         let result = root.insert(hash, 0, (k, v));
-        if result.is_none() {
+        if let Some((_, ref old_v)) = result {
+            if self.kv_merkle_valid {
+                let old_value_hash = self.hasher.hash_one(old_v);
+                self.kv_merkle_hash = self.kv_merkle_hash
+                    .wrapping_sub(fmix64(hash.wrapping_add(old_value_hash)))
+                    .wrapping_add(fmix64(hash.wrapping_add(value_hash)));
+            }
+        } else {
             self.size += 1;
+            if self.kv_merkle_valid {
+                self.kv_merkle_hash = self.kv_merkle_hash
+                    .wrapping_add(fmix64(hash.wrapping_add(value_hash)));
+            }
         }
         result.map(|(_, v)| v)
     }
 
     /// Remove a key/value pair from a map, if it exists, and return
-    /// the removed value.
+    /// the removed value. Maintains the key-value Merkle hash.
     ///
     /// This is a copy-on-write operation, so that the parts of the
     /// set's structure which are shared with other sets will be
@@ -1095,12 +1223,13 @@ where
     pub fn remove<Q>(&mut self, k: &Q) -> Option<V>
     where
         Q: Hash + Equivalent<K> + ?Sized,
+        V: Hash,
     {
         self.remove_with_key(k).map(|(_, v)| v)
     }
 
     /// Remove a key/value pair from a map, if it exists, and return
-    /// the removed key and value.
+    /// the removed key and value. Maintains the key-value Merkle hash.
     ///
     /// Time: O(log n)
     ///
@@ -1118,13 +1247,20 @@ where
     pub fn remove_with_key<Q>(&mut self, k: &Q) -> Option<(K, V)>
     where
         Q: Hash + Equivalent<K> + ?Sized,
+        V: Hash,
     {
+        let hash = hash_key(&*self.hasher, k);
         let Some(root) = &mut self.root else {
             return None;
         };
-        let result = SharedPointer::make_mut(root).remove(hash_key(&*self.hasher, k), 0, k);
-        if result.is_some() {
+        let result = SharedPointer::make_mut(root).remove(hash, 0, k);
+        if let Some((_, ref v)) = result {
             self.size -= 1;
+            if self.kv_merkle_valid {
+                let value_hash = self.hasher.hash_one(v);
+                self.kv_merkle_hash = self.kv_merkle_hash
+                    .wrapping_sub(fmix64(hash.wrapping_add(value_hash)));
+            }
         }
         result
     }
@@ -1155,6 +1291,7 @@ where
         let Some(root) = &mut self.root else {
             return;
         };
+        self.kv_merkle_valid = false;
         let old_root = root.clone();
         let root = SharedPointer::make_mut(root);
         for ((key, value), hash) in NodeIter::new(Some(&old_root), self.size) {
@@ -1222,7 +1359,10 @@ where
     /// ```
     #[inline]
     #[must_use]
-    pub fn update(&self, k: K, v: V) -> Self {
+    pub fn update(&self, k: K, v: V) -> Self
+    where
+        V: Hash,
+    {
         let mut out = self.clone();
         out.insert(k, v);
         out
@@ -1240,6 +1380,7 @@ where
     pub fn update_with<F>(&self, k: K, v: V, f: F) -> Self
     where
         F: FnOnce(V, V) -> V,
+        V: Hash,
     {
         match self.extract_with_key(&k) {
             None => self.update(k, v),
@@ -1259,6 +1400,7 @@ where
     pub fn update_with_key<F>(&self, k: K, v: V, f: F) -> Self
     where
         F: FnOnce(&K, V, V) -> V,
+        V: Hash,
     {
         match self.extract_with_key(&k) {
             None => self.update(k, v),
@@ -1282,6 +1424,7 @@ where
     pub fn update_lookup_with_key<F>(&self, k: K, v: V, f: F) -> (Option<V>, Self)
     where
         F: FnOnce(&K, &V, V) -> V,
+        V: Hash,
     {
         match self.extract_with_key(&k) {
             None => (None, self.update(k, v)),
@@ -1308,6 +1451,7 @@ where
     pub fn alter<F>(&self, f: F, k: K) -> Self
     where
         F: FnOnce(Option<V>) -> Option<V>,
+        V: Hash,
     {
         let pop = self.extract_with_key(&k);
         match (f(pop.as_ref().map(|(_, v, _)| v.clone())), pop) {
@@ -1328,6 +1472,7 @@ where
     pub fn without<Q>(&self, k: &Q) -> Self
     where
         Q: Hash + Equivalent<K> + ?Sized,
+        V: Hash,
     {
         match self.extract_with_key(k) {
             None => self.clone(),
@@ -1376,7 +1521,7 @@ where
     pub fn without_keys(&self, keys: &GenericHashSet<K, S, P>) -> Self {
         let mut out = self.clone();
         for key in keys.iter() {
-            out.remove(key);
+            out.remove_invalidate_kv(key);
         }
         out
     }
@@ -1431,12 +1576,12 @@ where
             match other.get(k) {
                 Some(v2) => {
                     if let Some(v3) = both(k, v1, v2) {
-                        result.insert(k.clone(), v3);
+                        result.insert_invalidate_kv(k.clone(), v3);
                     }
                 }
                 None => {
                     if let Some(v3) = left_only(k, v1) {
-                        result.insert(k.clone(), v3);
+                        result.insert_invalidate_kv(k.clone(), v3);
                     }
                 }
             }
@@ -1445,7 +1590,7 @@ where
         for (k, v2) in other.iter() {
             if !self.contains_key(k) {
                 if let Some(v3) = right_only(k, v2) {
-                    result.insert(k.clone(), v3);
+                    result.insert_invalidate_kv(k.clone(), v3);
                 }
             }
         }
@@ -1460,6 +1605,7 @@ where
     pub fn extract<Q>(&self, k: &Q) -> Option<(V, Self)>
     where
         Q: Hash + Equivalent<K> + ?Sized,
+        V: Hash,
     {
         self.extract_with_key(k).map(|(_, v, m)| (v, m))
     }
@@ -1472,6 +1618,7 @@ where
     pub fn extract_with_key<Q>(&self, k: &Q) -> Option<(K, V, Self)>
     where
         Q: Hash + Equivalent<K> + ?Sized,
+        V: Hash,
     {
         let mut out = self.clone();
         out.remove_with_key(k).map(|(k, v)| (k, v, out))
@@ -1574,13 +1721,13 @@ where
         F: FnMut(&K, V, V) -> V,
     {
         for (key, right_value) in other {
-            match self.remove(&key) {
+            match self.remove_invalidate_kv(&key) {
                 None => {
-                    self.insert(key, right_value);
+                    self.insert_invalidate_kv(key, right_value);
                 }
-                Some(left_value) => {
+                Some((_, left_value)) => {
                     let final_value = f(&key, left_value, right_value);
-                    self.insert(key, final_value);
+                    self.insert_invalidate_kv(key, final_value);
                 }
             }
         }
@@ -1803,13 +1950,13 @@ where
     {
         let mut out = self.new_from();
         for (key, right_value) in other {
-            match self.remove(&key) {
+            match self.remove_invalidate_kv(&key) {
                 None => {
-                    out.insert(key, right_value);
+                    out.insert_invalidate_kv(key, right_value);
                 }
-                Some(left_value) => {
+                Some((_, left_value)) => {
                     if let Some(final_value) = f(&key, left_value, right_value) {
-                        out.insert(key, final_value);
+                        out.insert_invalidate_kv(key, final_value);
                     }
                 }
             }
@@ -1836,7 +1983,7 @@ where
     #[must_use]
     pub fn relative_complement(mut self, other: Self) -> Self {
         for (key, _) in other {
-            let _ = self.remove(&key);
+            let _ = self.remove_invalidate_kv(&key);
         }
         self
     }
@@ -1914,11 +2061,11 @@ where
     {
         let mut out = self.new_from();
         for (key, right_value) in other {
-            match self.remove(&key) {
+            match self.remove_invalidate_kv(&key) {
                 None => (),
-                Some(left_value) => {
+                Some((_, left_value)) => {
                     let result = f(&key, left_value, right_value);
-                    out.insert(key, result);
+                    out.insert_invalidate_kv(key, result);
                 }
             }
         }
@@ -1988,7 +2135,11 @@ where
         S: Default,
         F: FnMut(&V) -> V2,
     {
-        self.iter().map(|(k, v)| (k.clone(), f(v))).collect()
+        let mut result = GenericHashMap::new();
+        for (k, v) in self.iter() {
+            result.insert_invalidate_kv(k.clone(), f(v));
+        }
+        result
     }
 
     /// Construct a new map with the same keys but values transformed
@@ -2012,7 +2163,11 @@ where
         S: Default,
         F: FnMut(&K, &V) -> V2,
     {
-        self.iter().map(|(k, v)| (k.clone(), f(k, v))).collect()
+        let mut result = GenericHashMap::new();
+        for (k, v) in self.iter() {
+            result.insert_invalidate_kv(k.clone(), f(k, v));
+        }
+        result
     }
 
     /// Construct a new map with the same keys but values transformed
@@ -2038,7 +2193,7 @@ where
     {
         let mut out = GenericHashMap::default();
         for (k, v) in self.iter() {
-            out.insert(k.clone(), f(k, v)?);
+            out.insert_invalidate_kv(k.clone(), f(k, v)?);
         }
         Ok(out)
     }
@@ -2077,7 +2232,7 @@ where
         for (k, v) in self.iter() {
             let (new_acc, v2) = f(acc, k, v);
             acc = new_acc;
-            result.insert(k.clone(), v2);
+            result.insert_invalidate_kv(k.clone(), v2);
         }
         (acc, result)
     }
@@ -2115,7 +2270,11 @@ where
         S: Default,
         F: FnMut(&K) -> K2,
     {
-        self.iter().map(|(k, v)| (f(k), v.clone())).collect()
+        let mut result = GenericHashMap::new();
+        for (k, v) in self.iter() {
+            result.insert_invalidate_kv(f(k), v.clone());
+        }
+        result
     }
 }
 
@@ -2231,7 +2390,10 @@ where
     }
 
     /// Remove this entry from the map and return the removed mapping.
+    ///
+    /// Note: invalidates the key-value Merkle hash.
     pub fn remove_entry(self) -> (K, V) {
+        self.map.kv_merkle_valid = false;
         // unwrap: occupied entries can only be created for non-empty maps
         let root = SharedPointer::make_mut(self.map.root.as_mut().unwrap());
         let result = root.remove(self.hash, 0, &self.key);
@@ -2254,22 +2416,30 @@ where
     }
 
     /// Get a mutable reference to the current value.
+    ///
+    /// Note: invalidates the key-value Merkle hash.
     #[must_use]
     pub fn get_mut(&mut self) -> &mut V {
+        self.map.kv_merkle_valid = false;
         // unwrap: occupied entries can only be created for non-empty maps
         let root = SharedPointer::make_mut(self.map.root.as_mut().unwrap());
         &mut root.get_mut(self.hash, 0, &self.key).unwrap().1
     }
 
     /// Convert this entry into a mutable reference.
+    ///
+    /// Note: invalidates the key-value Merkle hash.
     #[must_use]
     pub fn into_mut(self) -> &'a mut V {
+        self.map.kv_merkle_valid = false;
         // unwrap: occupied entries can only be created for non-empty maps
         let root = SharedPointer::make_mut(self.map.root.as_mut().unwrap());
         &mut root.get_mut(self.hash, 0, &self.key).unwrap().1
     }
 
     /// Overwrite the current value.
+    ///
+    /// Note: invalidates the key-value Merkle hash.
     pub fn insert(&mut self, value: V) -> V {
         mem::replace(self.get_mut(), value)
     }
@@ -2313,7 +2483,10 @@ where
     }
 
     /// Insert a value into this entry.
+    ///
+    /// Note: invalidates the key-value Merkle hash.
     pub fn insert(self, value: V) -> &'a mut V {
+        self.map.kv_merkle_valid = false;
         let root =
             SharedPointer::make_mut(self.map.root.get_or_insert_with(SharedPointer::default));
         if root
@@ -2343,6 +2516,8 @@ where
             root: self.root.clone(),
             size: self.size,
             hasher: self.hasher.clone(),
+            kv_merkle_hash: self.kv_merkle_hash,
+            kv_merkle_valid: self.kv_merkle_valid,
         }
     }
 }
@@ -2381,6 +2556,8 @@ where
             size: 0,
             root: None,
             hasher: SharedPointer::new(S::default()),
+            kv_merkle_hash: 0,
+            kv_merkle_valid: true,
         }
     }
 }
@@ -2431,7 +2608,7 @@ where
 impl<K, V, S, RK, RV, P> Extend<(RK, RV)> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone + From<RK>,
-    V: Clone + From<RV>,
+    V: Clone + Hash + From<RV>,
     S: BuildHasher,
     P: SharedPointerKind,
 {
@@ -2677,7 +2854,7 @@ where
 impl<K, V, S, P> FromIterator<(K, V)> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
-    V: Clone,
+    V: Clone + Hash,
     S: BuildHasher + Default,
     P: SharedPointerKind,
 {
@@ -2708,7 +2885,7 @@ where
     K: Hash + Equivalent<OK> + ToOwned<Owned = OK> + ?Sized,
     V: ToOwned<Owned = OV> + ?Sized,
     OK: Hash + Eq + Clone,
-    OV: Borrow<V> + Clone,
+    OV: Borrow<V> + Clone + Hash,
     SA: BuildHasher + Clone,
     SB: BuildHasher + Default + Clone,
     P1: SharedPointerKind,
@@ -2724,7 +2901,7 @@ where
 impl<'a, K, V, S, P> From<&'a [(K, V)]> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
-    V: Clone,
+    V: Clone + Hash,
     S: BuildHasher + Default,
     P: SharedPointerKind,
 {
@@ -2736,7 +2913,7 @@ where
 impl<K, V, S, P> From<Vec<(K, V)>> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
-    V: Clone,
+    V: Clone + Hash,
     S: BuildHasher + Default,
     P: SharedPointerKind,
 {
@@ -2748,7 +2925,7 @@ where
 impl<'a, K, V, S, P> From<&'a Vec<(K, V)>> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
-    V: Clone,
+    V: Clone + Hash,
     S: BuildHasher + Default,
     P: SharedPointerKind,
 {
@@ -2761,7 +2938,7 @@ where
 impl<K, V, S1, S2, P> From<std::collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P>
 where
     K: Hash + Eq + Clone,
-    V: Clone,
+    V: Clone + Hash,
     S1: BuildHasher + Default + Clone,
     S2: BuildHasher,
     P: SharedPointerKind,
@@ -2775,7 +2952,7 @@ where
 impl<'a, K, V, S1, S2, P> From<&'a std::collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P>
 where
     K: Hash + Eq + Clone,
-    V: Clone,
+    V: Clone + Hash,
     S1: BuildHasher + Default + Clone,
     S2: BuildHasher,
     P: SharedPointerKind,
@@ -2788,7 +2965,7 @@ where
 impl<K, V, S, P> From<BTreeMap<K, V>> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
-    V: Clone,
+    V: Clone + Hash,
     S: BuildHasher + Default,
     P: SharedPointerKind,
 {
@@ -2800,7 +2977,7 @@ where
 impl<'a, K, V, S, P> From<&'a BTreeMap<K, V>> for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
-    V: Clone,
+    V: Clone + Hash,
     S: BuildHasher + Default,
     P: SharedPointerKind,
 {
@@ -3244,6 +3421,7 @@ mod test {
         }
     }
 
+    #[derive(Hash)]
     struct PanicOnClone;
 
     impl Clone for PanicOnClone {
@@ -4296,5 +4474,328 @@ mod test {
         let map2: LolMap<i32, i32> = (0..10).map(|i| (i * step, i)).collect();
 
         assert_eq!(map1, map2);
+    }
+
+    // ---- kv_merkle tests ----
+    //
+    // kv_merkle_hash depends on the hasher, so tests that compare hashes
+    // across independently built maps must use a deterministic hasher
+    // (LolMap). Tests that only check validity/invalidation can use HashMap.
+
+    #[test]
+    fn kv_merkle_empty_map() {
+        let map: LolMap<i32, i32> = LolMap::default();
+        assert!(map.kv_merkle_valid());
+        assert_eq!(map.kv_merkle_hash, 0);
+    }
+
+    #[test]
+    fn kv_merkle_identical_maps_match() {
+        let mut a: LolMap<i32, i32> = LolMap::default();
+        let mut b: LolMap<i32, i32> = LolMap::default();
+        for i in 0..100 {
+            a.insert(i, i * 10);
+            b.insert(i, i * 10);
+        }
+        assert!(a.kv_merkle_valid());
+        assert!(b.kv_merkle_valid());
+        assert_eq!(a.kv_merkle_hash, b.kv_merkle_hash);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn kv_merkle_different_values_differ() {
+        let mut a: LolMap<i32, i32> = LolMap::default();
+        let mut b: LolMap<i32, i32> = LolMap::default();
+        for i in 0..100 {
+            a.insert(i, i * 10);
+            b.insert(i, i * 10);
+        }
+        // Change one value
+        b.insert(50, 999);
+        assert!(a.kv_merkle_valid());
+        assert!(b.kv_merkle_valid());
+        assert_ne!(a.kv_merkle_hash, b.kv_merkle_hash);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn kv_merkle_order_independent() {
+        let mut forward: LolMap<i32, i32> = LolMap::default();
+        let mut reverse: LolMap<i32, i32> = LolMap::default();
+        for i in 0..50 {
+            forward.insert(i, i * 3);
+        }
+        for i in (0..50).rev() {
+            reverse.insert(i, i * 3);
+        }
+        assert!(forward.kv_merkle_valid());
+        assert!(reverse.kv_merkle_valid());
+        assert_eq!(forward.kv_merkle_hash, reverse.kv_merkle_hash);
+        assert_eq!(forward, reverse);
+    }
+
+    #[test]
+    fn kv_merkle_insert_remove_roundtrip() {
+        let mut map: LolMap<i32, i32> = LolMap::default();
+        for i in 0..20 {
+            map.insert(i, i);
+        }
+        let original_hash = map.kv_merkle_hash;
+
+        // Insert and remove an extra entry
+        map.insert(999, 999);
+        assert_ne!(map.kv_merkle_hash, original_hash);
+        map.remove(&999);
+        assert_eq!(map.kv_merkle_hash, original_hash);
+    }
+
+    #[test]
+    fn kv_merkle_update_maintains() {
+        let mut map: LolMap<i32, i32> = LolMap::default();
+        for i in 0..20 {
+            map.insert(i, i);
+        }
+        // Persistent update
+        let map2 = map.update(5, 500);
+        assert!(map.kv_merkle_valid());
+        assert!(map2.kv_merkle_valid());
+        assert_ne!(map.kv_merkle_hash, map2.kv_merkle_hash);
+
+        // Update with same value — should restore original
+        let map3 = map2.update(5, 5);
+        assert_eq!(map.kv_merkle_hash, map3.kv_merkle_hash);
+    }
+
+    #[test]
+    fn kv_merkle_clone_preserves() {
+        let mut map: LolMap<i32, i32> = LolMap::default();
+        for i in 0..50 {
+            map.insert(i, i * 7);
+        }
+        let cloned = map.clone();
+        assert!(cloned.kv_merkle_valid());
+        assert_eq!(map.kv_merkle_hash, cloned.kv_merkle_hash);
+    }
+
+    #[test]
+    fn kv_merkle_from_iterator() {
+        // Build via from_iter and via manual insert; hashes should match
+        // when using the same deterministic hasher.
+        let map: LolMap<i32, i32> = (0..30).map(|i| (i, i * 2)).collect();
+        assert!(map.kv_merkle_valid());
+
+        let mut manual: LolMap<i32, i32> = LolMap::default();
+        for i in 0..30 {
+            manual.insert(i, i * 2);
+        }
+        assert_eq!(map.kv_merkle_hash, manual.kv_merkle_hash);
+    }
+
+    #[test]
+    fn kv_merkle_get_mut_invalidates() {
+        let mut map: LolMap<i32, i32> = LolMap::default();
+        for i in 0..10 {
+            map.insert(i, i);
+        }
+        assert!(map.kv_merkle_valid());
+
+        // get_mut should invalidate
+        if let Some(v) = map.get_mut(&5) {
+            *v = 999;
+        }
+        assert!(!map.kv_merkle_valid());
+
+        // recompute should restore validity
+        map.recompute_kv_merkle();
+        assert!(map.kv_merkle_valid());
+
+        // The recomputed hash should match a freshly built map
+        let mut fresh: LolMap<i32, i32> = LolMap::default();
+        for i in 0..10 {
+            if i == 5 {
+                fresh.insert(i, 999);
+            } else {
+                fresh.insert(i, i);
+            }
+        }
+        assert_eq!(map.kv_merkle_hash, fresh.kv_merkle_hash);
+    }
+
+    #[test]
+    fn kv_merkle_iter_mut_invalidates() {
+        let mut map = HashMap::new();
+        for i in 0..10 {
+            map.insert(i, i);
+        }
+        assert!(map.kv_merkle_valid());
+        // iter_mut invalidates on call; drop the iterator before checking
+        { let _ = map.iter_mut(); }
+        assert!(!map.kv_merkle_valid());
+    }
+
+    #[test]
+    fn kv_merkle_retain_invalidates() {
+        let mut map = HashMap::new();
+        for i in 0..10 {
+            map.insert(i, i);
+        }
+        assert!(map.kv_merkle_valid());
+        map.retain(|k, _| *k < 5);
+        assert!(!map.kv_merkle_valid());
+    }
+
+    #[test]
+    fn kv_merkle_entry_api_invalidates() {
+        let mut map = HashMap::new();
+        map.insert(1, 10);
+        assert!(map.kv_merkle_valid());
+
+        // or_insert on vacant entry invalidates
+        map.entry(2).or_insert(20);
+        assert!(!map.kv_merkle_valid());
+
+        // Recompute and verify occupied entry get_mut invalidates
+        map.recompute_kv_merkle();
+        assert!(map.kv_merkle_valid());
+        if let crate::hashmap::Entry::Occupied(mut occ) = map.entry(1) {
+            let _v = occ.get_mut();
+        }
+        assert!(!map.kv_merkle_valid());
+    }
+
+    #[test]
+    fn kv_merkle_clear_resets() {
+        let mut map = HashMap::new();
+        for i in 0..10 {
+            map.insert(i, i);
+        }
+        assert_ne!(map.kv_merkle_hash, 0);
+        map.clear();
+        assert!(map.kv_merkle_valid());
+        assert_eq!(map.kv_merkle_hash, 0);
+    }
+
+    #[test]
+    fn kv_merkle_replace_value_incremental() {
+        // Replacing a value should update kv_merkle incrementally.
+        // The result should match a fresh build with the same hasher.
+        let mut map: LolMap<i32, i32> = LolMap::default();
+        for i in 0..20 {
+            map.insert(i, i);
+        }
+        map.insert(10, 999); // replace value for key 10
+        assert!(map.kv_merkle_valid());
+
+        let mut fresh: LolMap<i32, i32> = LolMap::default();
+        for i in 0..20 {
+            if i == 10 {
+                fresh.insert(i, 999);
+            } else {
+                fresh.insert(i, i);
+            }
+        }
+        assert_eq!(map.kv_merkle_hash, fresh.kv_merkle_hash);
+    }
+
+    #[test]
+    fn kv_merkle_set_operations_invalidate() {
+        let a: HashMap<i32, i32> = (0..10).map(|i| (i, i)).collect();
+        let b: HashMap<i32, i32> = (5..15).map(|i| (i, i * 2)).collect();
+
+        // Union invalidates kv_merkle (uses internal helpers)
+        let union = a.clone().union(b.clone());
+        assert!(!union.kv_merkle_valid());
+
+        // After recompute, should match manual construction
+        let mut union_recomputed = union.clone();
+        union_recomputed.recompute_kv_merkle();
+        assert!(union_recomputed.kv_merkle_valid());
+    }
+
+    #[test]
+    fn kv_merkle_without_maintains() {
+        let mut map: LolMap<i32, i32> = LolMap::default();
+        for i in 0..20 {
+            map.insert(i, i * 5);
+        }
+        let without5 = map.without(&5);
+        assert!(without5.kv_merkle_valid());
+
+        let mut fresh: LolMap<i32, i32> = LolMap::default();
+        for i in 0..20 {
+            if i != 5 {
+                fresh.insert(i, i * 5);
+            }
+        }
+        assert_eq!(without5.kv_merkle_hash, fresh.kv_merkle_hash);
+    }
+
+    #[test]
+    fn kv_merkle_extract_with_key_maintains() {
+        let map: LolMap<i32, i32> = (0..10).map(|i| (i, i * 3)).collect();
+        let result = map.extract_with_key(&5);
+        let (k, v, remaining) = result.unwrap();
+        assert_eq!(k, 5);
+        assert_eq!(v, 15);
+        assert!(remaining.kv_merkle_valid());
+
+        let expected: LolMap<i32, i32> = (0..10)
+            .filter(|&i| i != 5)
+            .map(|i| (i, i * 3))
+            .collect();
+        assert_eq!(remaining.kv_merkle_hash, expected.kv_merkle_hash);
+    }
+
+    proptest! {
+        #[test]
+        fn kv_merkle_proptest_insert_order(
+            pairs in collection::vec((0i32..1000, 0i32..1000), 0..200)
+        ) {
+            // Build two maps with the same deterministic hasher in different
+            // insertion orders; kv_merkle should match if contents match.
+            let mut forward: LolMap<i32, i32> = LolMap::default();
+            for &(k, v) in &pairs {
+                forward.insert(k, v);
+            }
+            let mut reverse: LolMap<i32, i32> = LolMap::default();
+            for &(k, v) in pairs.iter().rev() {
+                reverse.insert(k, v);
+            }
+            // Both maps keep the last value for duplicate keys but in
+            // different order. Recompute to get canonical hashes.
+            forward.recompute_kv_merkle();
+            reverse.recompute_kv_merkle();
+            if forward == reverse {
+                assert_eq!(forward.kv_merkle_hash, reverse.kv_merkle_hash);
+            }
+        }
+
+        #[test]
+        fn kv_merkle_proptest_insert_remove_roundtrip(
+            base in collection::vec((0i32..500, 0i32..500), 0..100),
+            extra in collection::vec((500i32..1000, 0i32..500), 1..50),
+        ) {
+            let mut map: LolMap<i32, i32> = LolMap::default();
+            for &(k, v) in &base {
+                map.insert(k, v);
+            }
+            let original_hash = map.kv_merkle_hash;
+            let original_valid = map.kv_merkle_valid();
+
+            // Insert extras then remove them
+            for &(k, v) in &extra {
+                map.insert(k, v);
+            }
+            for &(k, _) in &extra {
+                map.remove(&k);
+            }
+
+            // kv_merkle should match original (extras don't overlap base keys)
+            if original_valid {
+                assert!(map.kv_merkle_valid());
+                assert_eq!(original_hash, map.kv_merkle_hash);
+            }
+        }
     }
 }

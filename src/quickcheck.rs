@@ -47,7 +47,7 @@ where
 impl<K, V, S, P> Arbitrary for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Arbitrary + Sync,
-    V: Arbitrary + Sync,
+    V: Arbitrary + Sync + Hash,
     S: BuildHasher + Clone + Default + Send + Sync + 'static,
     P: SharedPointerKind + 'static,
 {

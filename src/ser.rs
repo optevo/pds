@@ -159,7 +159,7 @@ impl<K: Serialize + Ord, V: Serialize, P: SharedPointerKind> Serialize for Gener
 impl<'de, K, V, S, P: SharedPointerKind> Deserialize<'de> for GenericHashMap<K, V, S, P>
 where
     K: Deserialize<'de> + Hash + Eq + Clone,
-    V: Deserialize<'de> + Clone,
+    V: Deserialize<'de> + Clone + Hash,
     S: BuildHasher + Default + Clone,
     P: SharedPointerKind,
 {

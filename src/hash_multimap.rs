@@ -170,7 +170,7 @@ where
         if removed {
             self.total -= 1;
             if should_remove_key {
-                self.map.remove(key);
+                self.map.remove_invalidate_kv(key);
             }
         }
         removed
@@ -181,7 +181,7 @@ where
     where
         Q: Hash + Equivalent<K> + ?Sized,
     {
-        match self.map.remove_with_key(key) {
+        match self.map.remove_invalidate_kv(key) {
             Some((_, set)) => {
                 self.total -= set.len();
                 set

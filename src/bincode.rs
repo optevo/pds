@@ -85,7 +85,7 @@ where
         for _ in 0..len {
             let (k, v): (K, V) = Decode::decode(decoder)?;
             // Duplicates are silently ignored
-            output.insert(k, v);
+            output.insert_invalidate_kv(k, v);
         }
         Ok(output)
     }
