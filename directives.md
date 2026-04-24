@@ -115,8 +115,12 @@ caught by review. They are listed because they recur in AI-assisted development.
   requested. Premature abstraction is harder to remove than to add.
 - **No new `unsafe`.** NEVER introduce an `unsafe` block without explicit
   instruction. If lifetimes are difficult, find the safe abstraction; do not
-  use `unsafe` to paper over borrow checker errors. Existing unsafe code should
-  be audited and documented (Phase 3.2), not expanded.
+  use `unsafe` to paper over borrow checker errors. Existing unsafe code
+  should be removed unless there is a measured performance reason to keep
+  it. When touching code near an unsafe block, check whether the safe
+  alternative is viable — if it is, replace the unsafe and verify with
+  tests. Unsafe blocks that must remain require a `// SAFETY:` comment
+  documenting the invariant. See also Phase 3.2 (unsafe audit).
 - **No undeclared dependencies.** NEVER add a crate to `Cargo.toml` that is
   not already present, without explicit approval. Consult `Cargo.toml` for
   the authoritative list of available crates and their pinned versions; do
