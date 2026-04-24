@@ -260,6 +260,7 @@
 //! | [`PBag<A>`][crate::PBag] | Persistent multiset (bag) — tracks element counts | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`HashMultiMap<K, V>`][crate::HashMultiMap] | Key → set of values multimap | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`InsertionOrderMap<K, V>`][crate::InsertionOrderMap] | Map that iterates in insertion order | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//! | [`Trie<K, V>`][crate::Trie] | Persistent prefix tree (trie) — paths to values | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //!
 //! ## In-place Mutation
 //!
@@ -411,6 +412,7 @@ pub mod atom;
 pub mod hash_multimap;
 pub mod insertion_order_map;
 pub mod pbag;
+pub mod trie;
 
 pub use crate::hash_multimap::GenericHashMultiMap;
 #[cfg(any(feature = "std", feature = "foldhash"))]
@@ -429,6 +431,9 @@ pub use crate::ordset::{GenericOrdSet, OrdSet};
 pub use crate::pbag::GenericPBag;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::pbag::PBag;
+pub use crate::trie::GenericTrie;
+#[cfg(any(feature = "std", feature = "foldhash"))]
+pub use crate::trie::Trie;
 #[doc(inline)]
 pub use crate::vector::{GenericVector, Vector};
 

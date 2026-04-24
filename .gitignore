@@ -19,3 +19,6 @@ result
 
 # Profiling artefacts
 *.json.gz
+
+# Local rustdoc output
+rustdocs/
