@@ -32,7 +32,10 @@ use std::ops::{Add, Deref, Mul};
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
 
-use crate::nodes::hamt::{hash_key, Drain as NodeDrain, HashValue, Iter as NodeIter, Node};
+use crate::nodes::hamt::{
+    hash_key, Drain as NodeDrain, Entry as NodeEntry, HashValue, Iter as NodeIter, Node,
+    HASH_WIDTH,
+};
 use crate::ordset::GenericOrdSet;
 use crate::shared_ptr::DefaultSharedPtr;
 use crate::GenericVector;
@@ -383,16 +386,42 @@ where
     /// [`ptr_eq`][GenericHashSet::ptr_eq] returns true), the iterator
     /// is empty without traversing any elements.
     ///
-    /// Time: O(n + m) where n = self.len(), m = other.len()
+    /// When the two sets share structure (one was derived from the other
+    /// via insert/remove), shared subtrees are detected via pointer
+    /// comparison and skipped in O(1), reducing complexity to
+    /// O(changes × tree_depth). For independently-constructed sets with
+    /// different hasher states, falls back to O(n + m).
     #[must_use]
     pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, A, S, P> {
-        let done = self.ptr_eq(other);
+        let mut diffs = Vec::new();
+        if !self.ptr_eq(other) {
+            match (&self.root, &other.root) {
+                (Some(old_root), Some(new_root)) => {
+                    if !SharedPointer::ptr_eq(old_root, new_root) {
+                        if set_hashers_compatible(&self.hasher, &other.hasher) {
+                            set_diff_hamt_nodes(old_root, new_root, &mut diffs);
+                        } else {
+                            set_diff_iterate_and_lookup(self, other, &mut diffs);
+                        }
+                    }
+                }
+                (Some(_), None) => {
+                    for v in self.iter() {
+                        diffs.push(DiffItem::Remove(v));
+                    }
+                }
+                (None, Some(_)) => {
+                    for v in other.iter() {
+                        diffs.push(DiffItem::Add(v));
+                    }
+                }
+                (None, None) => {}
+            }
+        }
         DiffIter {
-            old_iter: self.iter(),
-            new_iter: other.iter(),
-            old_set: self,
-            new_set: other,
-            phase: if done { 2 } else { 0 },
+            diffs,
+            index: 0,
+            _phantom: std::marker::PhantomData,
         }
     }
 }
@@ -1193,16 +1222,130 @@ pub enum DiffItem<'a, 'b, A> {
     Remove(&'a A),
 }
 
+impl<A> Clone for DiffItem<'_, '_, A> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<A> Copy for DiffItem<'_, '_, A> {}
+
+/// Check whether two BuildHasher instances produce the same hash output.
+fn set_hashers_compatible<S: BuildHasher>(a: &S, b: &S) -> bool {
+    use std::hash::Hasher;
+    let mut ha = a.build_hasher();
+    ha.write_u64(0x517c_c1b7_2722_0a95);
+    let mut hb = b.build_hasher();
+    hb.write_u64(0x517c_c1b7_2722_0a95);
+    ha.finish() == hb.finish()
+}
+
+/// Walk two HAMT nodes for sets, collecting diffs.
+fn set_diff_hamt_nodes<'a, 'b, A, P>(
+    old_node: &'a Node<Value<A>, P>,
+    new_node: &'b Node<Value<A>, P>,
+    diffs: &mut Vec<DiffItem<'a, 'b, A>>,
+) where
+    A: Eq,
+    P: SharedPointerKind,
+{
+    for i in 0..HASH_WIDTH {
+        match (old_node.data.get(i), new_node.data.get(i)) {
+            (None, None) => {}
+            (Some(old_entry), None) => {
+                let mut vals = Vec::new();
+                old_entry.collect_values(&mut vals);
+                for v in vals {
+                    diffs.push(DiffItem::Remove(&v.0));
+                }
+            }
+            (None, Some(new_entry)) => {
+                let mut vals = Vec::new();
+                new_entry.collect_values(&mut vals);
+                for v in vals {
+                    diffs.push(DiffItem::Add(&v.0));
+                }
+            }
+            (Some(old_entry), Some(new_entry)) => {
+                if old_entry.ptr_eq(new_entry) {
+                    continue;
+                }
+                set_diff_entries(old_entry, new_entry, diffs);
+            }
+        }
+    }
+}
+
+/// Compare two HAMT entries for sets.
+fn set_diff_entries<'a, 'b, A, P>(
+    old_entry: &'a NodeEntry<Value<A>, P>,
+    new_entry: &'b NodeEntry<Value<A>, P>,
+    diffs: &mut Vec<DiffItem<'a, 'b, A>>,
+) where
+    A: Eq,
+    P: SharedPointerKind,
+{
+    match (old_entry, new_entry) {
+        (NodeEntry::HamtNode(old_node), NodeEntry::HamtNode(new_node)) => {
+            set_diff_hamt_nodes(old_node, new_node, diffs);
+        }
+        (NodeEntry::Value(old_val, _), NodeEntry::Value(new_val, _)) => {
+            if old_val.0 != new_val.0 {
+                diffs.push(DiffItem::Remove(&old_val.0));
+                diffs.push(DiffItem::Add(&new_val.0));
+            }
+        }
+        _ => {
+            let mut old_vals: Vec<&'a Value<A>> = Vec::new();
+            let mut new_vals: Vec<&'b Value<A>> = Vec::new();
+            old_entry.collect_values(&mut old_vals);
+            new_entry.collect_values(&mut new_vals);
+            for old in &old_vals {
+                if !new_vals.iter().any(|new| old.0 == new.0) {
+                    diffs.push(DiffItem::Remove(&old.0));
+                }
+            }
+            for new in &new_vals {
+                if !old_vals.iter().any(|old| old.0 == new.0) {
+                    diffs.push(DiffItem::Add(&new.0));
+                }
+            }
+        }
+    }
+}
+
+/// Fallback diff using iterate-and-lookup for sets with incompatible hashers.
+fn set_diff_iterate_and_lookup<'a, 'b, A, S, P>(
+    old_set: &'a GenericHashSet<A, S, P>,
+    new_set: &'b GenericHashSet<A, S, P>,
+    diffs: &mut Vec<DiffItem<'a, 'b, A>>,
+) where
+    A: Hash + Eq,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    for v in old_set.iter() {
+        if !new_set.contains(v) {
+            diffs.push(DiffItem::Remove(v));
+        }
+    }
+    for v in new_set.iter() {
+        if !old_set.contains(v) {
+            diffs.push(DiffItem::Add(v));
+        }
+    }
+}
+
 /// An iterator over the differences between two hash sets.
 ///
 /// Created by [`GenericHashSet::diff`].
+///
+/// Uses a simultaneous HAMT tree walk with pointer-based subtree
+/// skipping, matching the [`HashMap`][crate::HashMap] diff strategy.
 pub struct DiffIter<'a, 'b, A, S, P: SharedPointerKind> {
-    old_iter: Iter<'a, A, P>,
-    new_iter: Iter<'b, A, P>,
-    old_set: &'a GenericHashSet<A, S, P>,
-    new_set: &'b GenericHashSet<A, S, P>,
-    // 0 = scanning old for Remove, 1 = scanning new for Add, 2 = done
-    phase: u8,
+    diffs: Vec<DiffItem<'a, 'b, A>>,
+    index: usize,
+    _phantom: std::marker::PhantomData<fn(&S, &P)>,
 }
 
 impl<'a, 'b, A, S, P> Iterator for DiffIter<'a, 'b, A, S, P>
@@ -1214,31 +1357,27 @@ where
     type Item = DiffItem<'a, 'b, A>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.phase {
-                0 => match self.old_iter.next() {
-                    Some(v) => {
-                        if !self.new_set.contains(v) {
-                            return Some(DiffItem::Remove(v));
-                        }
-                    }
-                    None => self.phase = 1,
-                },
-                1 => match self.new_iter.next() {
-                    Some(v) => {
-                        if !self.old_set.contains(v) {
-                            return Some(DiffItem::Add(v));
-                        }
-                    }
-                    None => {
-                        self.phase = 2;
-                        return None;
-                    }
-                },
-                _ => return None,
-            }
+        if self.index < self.diffs.len() {
+            let item = self.diffs[self.index];
+            self.index += 1;
+            Some(item)
+        } else {
+            None
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.diffs.len() - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+impl<A, S, P> ExactSizeIterator for DiffIter<'_, '_, A, S, P>
+where
+    A: Hash + Eq,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
 }
 
 impl<A, S, P> FusedIterator for DiffIter<'_, '_, A, S, P>

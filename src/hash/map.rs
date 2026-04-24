@@ -35,8 +35,8 @@ use equivalent::Equivalent;
 
 use crate::hashset::GenericHashSet;
 use crate::nodes::hamt::{
-    hash_key, Drain as NodeDrain, HashBits, HashValue, Iter as NodeIter, IterMut as NodeIterMut,
-    Node,
+    hash_key, Drain as NodeDrain, Entry as NodeEntry, HashBits, HashValue, Iter as NodeIter,
+    IterMut as NodeIterMut, Node, HASH_WIDTH,
 };
 use crate::shared_ptr::DefaultSharedPtr;
 
@@ -705,19 +705,49 @@ where
     /// [`ptr_eq`][GenericHashMap::ptr_eq] returns true), the iterator
     /// is empty without traversing any elements.
     ///
-    /// Time: O(n + m) where n = self.len(), m = other.len()
+    /// When the two maps share structure (one was derived from the other
+    /// via insert/remove), shared subtrees are detected via pointer
+    /// comparison and skipped in O(1), reducing complexity to
+    /// O(changes × tree_depth). For independently-constructed maps with
+    /// different hasher states, falls back to O(n + m).
     #[must_use]
     pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, K, V, S, P>
     where
         V: PartialEq,
     {
-        let done = self.ptr_eq(other);
+        let mut diffs = Vec::new();
+        if !self.ptr_eq(other) {
+            match (&self.root, &other.root) {
+                (Some(old_root), Some(new_root)) => {
+                    if !SharedPointer::ptr_eq(old_root, new_root) {
+                        // Tree walk requires compatible hashers (same hash
+                        // seeds). Maps derived from a common ancestor share
+                        // their hasher; independently-constructed maps may
+                        // not. Probe with a sentinel to detect.
+                        if hashers_compatible(&self.hasher, &other.hasher) {
+                            diff_hamt_nodes(old_root, new_root, &mut diffs);
+                        } else {
+                            diff_iterate_and_lookup(self, other, &mut diffs);
+                        }
+                    }
+                }
+                (Some(_), None) => {
+                    for (k, v) in self.iter() {
+                        diffs.push(DiffItem::Remove(k, v));
+                    }
+                }
+                (None, Some(_)) => {
+                    for (k, v) in other.iter() {
+                        diffs.push(DiffItem::Add(k, v));
+                    }
+                }
+                (None, None) => {}
+            }
+        }
         DiffIter {
-            old_iter: self.iter(),
-            new_iter: other.iter(),
-            old_map: self,
-            new_map: other,
-            phase: if done { 2 } else { 0 },
+            diffs,
+            index: 0,
+            _phantom: std::marker::PhantomData,
         }
     }
 }
@@ -2734,16 +2764,204 @@ pub enum DiffItem<'a, 'b, K, V> {
     Remove(&'a K, &'a V),
 }
 
+// Manual Clone/Copy — DiffItem contains only references, so it is always
+// Copy regardless of whether K and V are Clone.
+impl<K, V> Clone for DiffItem<'_, '_, K, V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<K, V> Copy for DiffItem<'_, '_, K, V> {}
+
+/// Check whether two BuildHasher instances produce the same hash output.
+///
+/// Maps derived from a common ancestor share their hasher state.
+/// Independently-constructed maps (e.g. two `HashMap::new()` calls) have
+/// different `RandomState` seeds. The tree-walk diff requires identical
+/// hash function output — this probe detects incompatible hashers in O(1).
+fn hashers_compatible<S: BuildHasher>(a: &S, b: &S) -> bool {
+    use std::hash::Hasher;
+    let mut ha = a.build_hasher();
+    ha.write_u64(0x517c_c1b7_2722_0a95);
+    let mut hb = b.build_hasher();
+    hb.write_u64(0x517c_c1b7_2722_0a95);
+    ha.finish() == hb.finish()
+}
+
+/// Fallback diff using iterate-and-lookup for maps with incompatible hashers.
+///
+/// O(n + m) — iterates both maps and probes the other map for each key.
+fn diff_iterate_and_lookup<'a, 'b, K, V, S, P>(
+    old_map: &'a GenericHashMap<K, V, S, P>,
+    new_map: &'b GenericHashMap<K, V, S, P>,
+    diffs: &mut Vec<DiffItem<'a, 'b, K, V>>,
+) where
+    K: Hash + Eq,
+    V: PartialEq,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    // Phase 0: iterate old map, find Remove/Update items.
+    for (k, v) in old_map.iter() {
+        match new_map.get_key_value(k) {
+            None => diffs.push(DiffItem::Remove(k, v)),
+            Some((k2, v2)) => {
+                if v != v2 {
+                    diffs.push(DiffItem::Update {
+                        old: (k, v),
+                        new: (k2, v2),
+                    });
+                }
+            }
+        }
+    }
+    // Phase 1: iterate new map, find Add items.
+    for (k, v) in new_map.iter() {
+        if !old_map.contains_key(k) {
+            diffs.push(DiffItem::Add(k, v));
+        }
+    }
+}
+
 /// An iterator over the differences between two hash maps.
 ///
 /// Created by [`GenericHashMap::diff`].
+///
+/// Uses a simultaneous HAMT tree walk with pointer-based subtree
+/// skipping. When two maps share structure (one was derived from the
+/// other via insert/remove), shared subtrees are detected via
+/// `SharedPointer::ptr_eq` and skipped in O(1) — reducing diff
+/// complexity from O(n + m) to O(changes × tree_depth) for the
+/// common case.
 pub struct DiffIter<'a, 'b, K, V, S, P: SharedPointerKind> {
-    old_iter: Iter<'a, K, V, P>,
-    new_iter: Iter<'b, K, V, P>,
-    old_map: &'a GenericHashMap<K, V, S, P>,
-    new_map: &'b GenericHashMap<K, V, S, P>,
-    // 0 = scanning old for Remove/Update, 1 = scanning new for Add, 2 = done
-    phase: u8,
+    diffs: Vec<DiffItem<'a, 'b, K, V>>,
+    index: usize,
+    _phantom: std::marker::PhantomData<fn(&S, &P)>,
+}
+
+/// Walk two HAMT nodes simultaneously, collecting diffs.
+///
+/// For each bitmap position, compares the entries in both nodes:
+/// - Same pointer (ptr_eq) → skip the entire subtree
+/// - Both HamtNode → recurse
+/// - Both Value → compare keys/values directly
+/// - Mixed or leaf node types → collect values from both, compare by key
+/// - Present in one only → emit all values as Add or Remove
+fn diff_hamt_nodes<'a, 'b, K, V, P>(
+    old_node: &'a Node<(K, V), P>,
+    new_node: &'b Node<(K, V), P>,
+    diffs: &mut Vec<DiffItem<'a, 'b, K, V>>,
+) where
+    K: Eq,
+    V: PartialEq,
+    P: SharedPointerKind,
+{
+    for i in 0..HASH_WIDTH {
+        match (old_node.data.get(i), new_node.data.get(i)) {
+            (None, None) => {}
+            (Some(old_entry), None) => {
+                // Everything in old subtree was removed.
+                let mut vals = Vec::new();
+                old_entry.collect_values(&mut vals);
+                for kv in vals {
+                    diffs.push(DiffItem::Remove(&kv.0, &kv.1));
+                }
+            }
+            (None, Some(new_entry)) => {
+                // Everything in new subtree was added.
+                let mut vals = Vec::new();
+                new_entry.collect_values(&mut vals);
+                for kv in vals {
+                    diffs.push(DiffItem::Add(&kv.0, &kv.1));
+                }
+            }
+            (Some(old_entry), Some(new_entry)) => {
+                // Both have entries — check pointer equality first.
+                if old_entry.ptr_eq(new_entry) {
+                    continue;
+                }
+                diff_entries(old_entry, new_entry, diffs);
+            }
+        }
+    }
+}
+
+/// Compare two HAMT entries that are not pointer-equal.
+fn diff_entries<'a, 'b, K, V, P>(
+    old_entry: &'a NodeEntry<(K, V), P>,
+    new_entry: &'b NodeEntry<(K, V), P>,
+    diffs: &mut Vec<DiffItem<'a, 'b, K, V>>,
+) where
+    K: Eq,
+    V: PartialEq,
+    P: SharedPointerKind,
+{
+    match (old_entry, new_entry) {
+        // Both HamtNodes — recurse into the bitmap.
+        (NodeEntry::HamtNode(old_node), NodeEntry::HamtNode(new_node)) => {
+            diff_hamt_nodes(old_node, new_node, diffs);
+        }
+        // Both values — compare directly.
+        (NodeEntry::Value(old_kv, _), NodeEntry::Value(new_kv, _)) => {
+            if old_kv.0 == new_kv.0 {
+                if old_kv.1 != new_kv.1 {
+                    diffs.push(DiffItem::Update {
+                        old: (&old_kv.0, &old_kv.1),
+                        new: (&new_kv.0, &new_kv.1),
+                    });
+                }
+            } else {
+                diffs.push(DiffItem::Remove(&old_kv.0, &old_kv.1));
+                diffs.push(DiffItem::Add(&new_kv.0, &new_kv.1));
+            }
+        }
+        // Mixed types or non-HamtNode node pairs — fall back to value
+        // comparison. This handles SmallSimdNode, LargeSimdNode, and
+        // Collision nodes, as well as cross-type comparisons (e.g.
+        // SmallSimdNode vs HamtNode when node promotion occurred).
+        _ => {
+            let mut old_vals: Vec<&'a (K, V)> = Vec::new();
+            let mut new_vals: Vec<&'b (K, V)> = Vec::new();
+            old_entry.collect_values(&mut old_vals);
+            new_entry.collect_values(&mut new_vals);
+            diff_value_lists(&old_vals, &new_vals, diffs);
+        }
+    }
+}
+
+/// Compare two flat lists of key-value pairs, producing diffs.
+///
+/// Used when two HAMT entries at the same position have different node
+/// types (e.g. SmallSimdNode vs LargeSimdNode) and cannot be compared
+/// structurally. O(n × m) but n and m are bounded by node capacity
+/// (≤32 for non-recursive node types).
+fn diff_value_lists<'a, 'b, K, V>(
+    old_vals: &[&'a (K, V)],
+    new_vals: &[&'b (K, V)],
+    diffs: &mut Vec<DiffItem<'a, 'b, K, V>>,
+) where
+    K: Eq,
+    V: PartialEq,
+{
+    for old in old_vals {
+        match new_vals.iter().find(|new| old.0 == new.0) {
+            None => diffs.push(DiffItem::Remove(&old.0, &old.1)),
+            Some(new) => {
+                if old.1 != new.1 {
+                    diffs.push(DiffItem::Update {
+                        old: (&old.0, &old.1),
+                        new: (&new.0, &new.1),
+                    });
+                }
+            }
+        }
+    }
+    for new in new_vals {
+        if !old_vals.iter().any(|old| old.0 == new.0) {
+            diffs.push(DiffItem::Add(&new.0, &new.1));
+        }
+    }
 }
 
 impl<'a, 'b, K, V, S, P> Iterator for DiffIter<'a, 'b, K, V, S, P>
@@ -2756,47 +2974,28 @@ where
     type Item = DiffItem<'a, 'b, K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.phase {
-                0 => {
-                    // Phase 0: iterate old map, find Remove/Update items.
-                    match self.old_iter.next() {
-                        Some((k, v)) => {
-                            match self.new_map.get_key_value(k) {
-                                None => return Some(DiffItem::Remove(k, v)),
-                                Some((k2, v2)) => {
-                                    if v != v2 {
-                                        return Some(DiffItem::Update {
-                                            old: (k, v),
-                                            new: (k2, v2),
-                                        });
-                                    }
-                                    // Same value — skip.
-                                }
-                            }
-                        }
-                        None => self.phase = 1,
-                    }
-                }
-                1 => {
-                    // Phase 1: iterate new map, find Add items.
-                    match self.new_iter.next() {
-                        Some((k, v)) => {
-                            if !self.old_map.contains_key(k) {
-                                return Some(DiffItem::Add(k, v));
-                            }
-                            // Key exists in old — already handled in phase 0.
-                        }
-                        None => {
-                            self.phase = 2;
-                            return None;
-                        }
-                    }
-                }
-                _ => return None,
-            }
+        if self.index < self.diffs.len() {
+            let item = self.diffs[self.index];
+            self.index += 1;
+            Some(item)
+        } else {
+            None
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.diffs.len() - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+impl<K, V, S, P> ExactSizeIterator for DiffIter<'_, '_, K, V, S, P>
+where
+    K: Hash + Eq,
+    V: PartialEq,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
 }
 
 impl<K, V, S, P> FusedIterator for DiffIter<'_, '_, K, V, S, P>
@@ -3334,6 +3533,42 @@ mod test {
         let diff: Vec<_> = base.diff(&modified).collect();
         let patched = base.apply_diff(diff);
         assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn diff_shared_structure_subtree_skipping() {
+        // Build a large map to ensure deep HAMT structure, then derive
+        // a second map with a small number of changes. The tree-walk diff
+        // should only visit changed subtrees.
+        let mut base = HashMap::new();
+        for i in 0..10_000 {
+            base.insert(i, i * 2);
+        }
+        let mut modified = base.clone();
+        modified.insert(42, 999); // Update
+        modified.remove(&100); // Remove
+        modified.insert(99_999, 1); // Add
+
+        let diffs: Vec<_> = base.diff(&modified).collect();
+        assert_eq!(diffs.len(), 3);
+
+        // Verify roundtrip.
+        let patched = base.apply_diff(diffs);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn diff_shared_structure_exact_size() {
+        let mut base = HashMap::new();
+        for i in 0..100 {
+            base.insert(i, i);
+        }
+        let mut modified = base.clone();
+        modified.insert(50, 999);
+        modified.remove(&0);
+
+        let iter = base.diff(&modified);
+        assert_eq!(iter.len(), 2);
     }
 
     #[test]

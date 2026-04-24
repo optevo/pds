@@ -18,7 +18,7 @@ use imbl_sized_chunks::sparse_chunk::{Iter as ChunkIter, IterMut as ChunkIterMut
 use crate::config::HASH_LEVEL_SIZE as HASH_SHIFT;
 pub(crate) type HashBits = <BitsImpl<HASH_WIDTH> as Bits>::Store; // a uint of HASH_WIDTH bits
 
-const HASH_WIDTH: usize = 2_usize.pow(HASH_SHIFT as u32);
+pub(crate) const HASH_WIDTH: usize = 2_usize.pow(HASH_SHIFT as u32);
 const ITER_STACK_CAPACITY: usize = HASH_WIDTH.div_ceil(HASH_SHIFT) + 1;
 const SMALL_NODE_WIDTH: usize = HASH_WIDTH / 2;
 const GROUP_WIDTH: usize = HASH_WIDTH / 2;
@@ -658,6 +658,47 @@ impl<A, P: SharedPointerKind> Entry<A, P> {
         match self {
             Entry::Value(a, _) => a,
             _ => panic!("nodes::hamt::Entry::unwrap_value: unwrapped a non-value"),
+        }
+    }
+
+    /// Check whether two entries point to the same allocation (for node
+    /// variants) or are the exact same value pointer. Returns false for
+    /// Value entries (use PartialEq instead) and for entries of different
+    /// types.
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Entry::HamtNode(a), Entry::HamtNode(b)) => SharedPointer::ptr_eq(a, b),
+            (Entry::SmallSimdNode(a), Entry::SmallSimdNode(b)) => SharedPointer::ptr_eq(a, b),
+            (Entry::LargeSimdNode(a), Entry::LargeSimdNode(b)) => SharedPointer::ptr_eq(a, b),
+            (Entry::Collision(a), Entry::Collision(b)) => SharedPointer::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
+    /// Collect all values reachable from this entry into the provided Vec.
+    pub(crate) fn collect_values<'a>(&'a self, out: &mut Vec<&'a A>) {
+        match self {
+            Entry::Value(a, _) => out.push(a),
+            Entry::HamtNode(node) => {
+                for entry in node.data.iter() {
+                    entry.collect_values(out);
+                }
+            }
+            Entry::SmallSimdNode(node) => {
+                for (a, _) in node.data.iter() {
+                    out.push(a);
+                }
+            }
+            Entry::LargeSimdNode(node) => {
+                for (a, _) in node.data.iter() {
+                    out.push(a);
+                }
+            }
+            Entry::Collision(coll) => {
+                for a in &coll.data {
+                    out.push(a);
+                }
+            }
         }
     }
 }

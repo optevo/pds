@@ -64,6 +64,18 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 3.6 (partial): Pointer-aware subtree skipping in diff.**
+  Rewrote HashMap and HashSet `DiffIter` from iterate-and-lookup to
+  simultaneous HAMT tree walk. At each node, `Entry::ptr_eq` checks
+  `SharedPointer` identity — shared subtrees are skipped in O(1).
+  Complexity: O(changes × tree_depth) for maps sharing structure, O(n+m)
+  fallback for independently-constructed maps with incompatible hashers
+  (detected via sentinel probe). Added `Entry::ptr_eq()` and
+  `Entry::collect_values()` to hamt.rs, made `HASH_WIDTH` pub(crate).
+  `DiffIter` now implements `ExactSizeIterator`. OrdMap already has
+  `advance_skipping_shared` upstream. Vector subtree skipping deferred
+  (requires RRB node pointer comparison).
+
 - **[2026-04-24] 3.2: Unsafe code audit.** Audited all unsafe sites across
   4 files. Removed 3 unsafe operations: 2 in hamt.rs (ptr::read/ptr::write →
   safe SparseChunk::remove/insert) and 1 in vector/mod.rs (ptr::swap in
@@ -241,7 +253,10 @@ Phase 2 — all items complete except 2.1 (RRB concat fix). Phase 3:
 3.2 complete (unsafe audit — 3 removals, 16 documented with SAFETY comments).
 3.4 partially complete (par_iter, FromParallelIterator, ParallelExtend
 done for all four hash/ord types; par_iter_mut, parallel bulk ops,
-parallel sort remaining). 3.5 complete. Item 3.6 unblocked.
+parallel sort remaining). 3.5 complete. 3.6 partially complete (HashMap
+and HashSet tree-walk diff done; OrdMap already has upstream
+`advance_skipping_shared`; Vector deferred — needs RRB node pointer
+comparison). Next: 2.1 (RRB concat fix).
 
 ---
 
