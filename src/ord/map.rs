@@ -89,8 +89,8 @@ pub type OrdMap<K, V> = GenericOrdMap<K, V, DefaultSharedPtr>;
 /// [hashmap::HashMap]: ../hashmap/type.HashMap.html
 /// [std::cmp::Ord]: https://doc.rust-lang.org/std/cmp/trait.Ord.html
 pub struct GenericOrdMap<K, V, P: SharedPointerKind> {
-    size: usize,
-    root: Option<Node<K, V, P>>,
+    pub(crate) size: usize,
+    pub(crate) root: Option<Node<K, V, P>>,
 }
 
 impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {

@@ -106,8 +106,8 @@ impl<K, V, P: SharedPointerKind> Node<K, V, P> {
 /// * root branch must have at least 1 key, whereas non-root branches must have at least MEDIAN - 1 keys
 #[derive(Debug)]
 pub(crate) struct Branch<K, V, P: SharedPointerKind> {
-    keys: Chunk<K, NODE_SIZE>,
-    children: Children<K, V, P>,
+    pub(crate) keys: Chunk<K, NODE_SIZE>,
+    pub(crate) children: Children<K, V, P>,
 }
 
 #[derive(Debug)]
@@ -257,7 +257,7 @@ impl<K, V, P: SharedPointerKind> Branch<K, V, P> {
 /// * non-root leaves must have at least THIRD keys
 #[derive(Debug)]
 pub(crate) struct Leaf<K, V> {
-    keys: Chunk<(K, V), NODE_SIZE>,
+    pub(crate) keys: Chunk<(K, V), NODE_SIZE>,
 }
 
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Node<K, V, P> {

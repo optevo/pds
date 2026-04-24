@@ -6,3 +6,6 @@
 pub mod map;
 #[macro_use]
 pub mod set;
+
+#[cfg(any(test, feature = "rayon"))]
+pub(crate) mod rayon;

@@ -77,7 +77,7 @@ pub type OrdSet<A> = GenericOrdSet<A, DefaultSharedPtr>;
 ///
 /// [1]: https://en.wikipedia.org/wiki/B%2B_tree
 pub struct GenericOrdSet<A, P: SharedPointerKind> {
-    map: GenericOrdMap<A, (), P>,
+    pub(crate) map: GenericOrdMap<A, (), P>,
 }
 
 impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
