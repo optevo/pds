@@ -2,14 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-//! # Immutable Data Structures for Rust
+//! # pds — Persistent Data Structures for Rust
 //!
-//! This library implements several of the more commonly useful immutable data
-//! structures for Rust.
+//! This library implements persistent (immutable) data structures with
+//! structural sharing for Rust.
 //!
-//! ## What are immutable data structures?
+//! ## What are persistent data structures?
 //!
-//! Immutable data structures are data structures which can be copied and
+//! Persistent data structures are data structures which can be copied and
 //! modified efficiently without altering the original. The most uncomplicated
 //! example of this is the venerable [cons list][cons-list]. This crate offers a
 //! selection of more modern and flexible data structures with similar
