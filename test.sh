@@ -16,12 +16,10 @@ echo "--- cargo clippy ---"
 # collapsible_match: ord/map.rs, ord/set.rs
 # enum_variant_names: nodes/hamt.rs IterItem, IterMutItem
 # unnecessary_cast: nodes/hamt.rs u8 cast
-# deprecated: bincode 2.x encode/decode traits
 cargo clippy --all-features -- -D warnings \
   -A clippy::enum_variant_names \
   -A clippy::collapsible_match \
-  -A clippy::unnecessary_cast \
-  -A deprecated
+  -A clippy::unnecessary_cast
 
 echo "--- cargo doc ---"
 cargo doc --no-deps

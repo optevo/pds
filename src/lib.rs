@@ -388,14 +388,6 @@ pub mod proptest;
 #[doc(hidden)]
 pub mod ser;
 
-#[cfg(feature = "bincode")]
-#[doc(hidden)]
-#[deprecated(
-    since = "7.0.1",
-    note = "The `bincode` feature is deprecated and will be removed. Use serde for serialisation instead."
-)]
-pub mod bincode;
-
 #[cfg(feature = "arbitrary")]
 #[doc(hidden)]
 pub mod arbitrary;

@@ -104,14 +104,14 @@ Phase 0.4 dependency audit. All semver-compatible dependencies are current
 | wide | 0.7 | 1.3 | SIMD for HAMT (CHAMP killed — DEC-007/015/020) |
 | criterion | 0.7 | 0.8 | Dev-dep, benchmarks |
 | proptest-derive | 0.6 | 0.8 | Dev-dep, test macros |
-| bincode | 2.0.1 | 3.0.0 | RUSTSEC-2025-0141 unmaintained |
+| bincode | — | — | Removed (DEC-025) |
 
 Duplicate crate: `getrandom` v0.3/v0.4 (transitive from different rand_core
 versions — harmless, resolves with rand update).
 
 **Decision:**
 - Do not update breaking dependencies now. All are non-urgent.
-- **bincode**: deprecation tracked in item 1.3 — remove in v2.0.0, not update.
+- **bincode**: removed entirely (DEC-025).
 - **wide 0.7 → 1.3**: CHAMP evaluation complete (DEC-007, DEC-015) —
   HAMT retained, `wide` stays. Update to 1.3 can proceed when convenient.
 - **rand ecosystem 0.9 → 0.10**: defer until the ecosystem stabilises.
@@ -128,9 +128,8 @@ versions — harmless, resolves with rand update).
   simultaneously with no functional benefit.
 
 **Consequences:**
-Breaking updates are deferred to natural integration points (v2.0.0
-for bincode removal). The semver-compatible deps are all current and
-audit-clean except the known bincode advisory.
+Breaking updates are deferred to natural integration points.
+The semver-compatible deps are all current and audit-clean.
 
 ---
 
@@ -1249,7 +1248,7 @@ hashers implement `Clone`, so the practical burden is low.
 ## DEC-025: Remove deprecated bincode feature {#sec:dec-025}
 
 **Date:** 2026-04-25
-**Status:** Pending — needs user decision
+**Status:** Accepted
 
 **Context:**
 The `bincode` feature was deprecated in imbl with a message "will be
@@ -1257,10 +1256,14 @@ removed in v8.0.0". Now that the crate is renamed to pds v1.0.0,
 there are no downstream users. The `bincode` crate itself is unmaintained
 (RUSTSEC-2025-0141). Users should use serde for serialisation instead.
 
-**Options:**
-1. **Remove now** — clean break at v1.0.0, removes security advisory
-2. **Keep deprecated** — update the deprecation message to reference a
-   future pds version instead of imbl v8.0.0
+**Decision:**
+Removed entirely at v1.0.0 — deleted `src/bincode.rs`, removed the
+`bincode` dependency from `Cargo.toml`, removed the deprecated module
+from `lib.rs`, and removed the `-A deprecated` clippy allow from `test.sh`.
 
-**Recommendation:** Remove. This is v1.0.0 of a new crate with zero
-downstream users. No migration burden.
+**Alternatives considered:**
+- Keep deprecated — no benefit, adds a security advisory to `cargo audit`
+
+**Consequences:**
+`cargo audit` is now clean. Users needing binary serialisation should use
+serde with any binary format crate (e.g. `postcard`, `bitcode`).

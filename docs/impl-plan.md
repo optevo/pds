@@ -67,6 +67,11 @@ single v2.0.0 release in Phase 5.
   comparing pds with rpds, im, and imbl — collections, backing structures,
   SIMD, Merkle hashing, no_std, and ecosystem features.
 
+- **[2026-04-25] Remove bincode feature (DEC-025).** Deleted
+  `src/bincode.rs`, removed bincode dependency, removed deprecated module
+  from `lib.rs`, removed `-A deprecated` clippy allow. `cargo audit` now
+  clean.
+
 - **[2026-04-25] Remove deprecated difference aliases.** Removed
   `difference`, `difference_with`, `difference_with_key` from HashMap,
   HashSet, OrdMap, OrdSet. These were deprecated aliases for the

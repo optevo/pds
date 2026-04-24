@@ -21,6 +21,13 @@ adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
  - no_std support
  - Persistent Trie as derived structure
  - O() complexity documentation comparing to std equivalents
+ - IntoIterator for PBag, HashMultiMap, InsertionOrderMap
+
+### Removed
+
+ - Deprecated `difference`/`difference_with`/`difference_with_key` method
+   aliases (use `symmetric_difference*` instead)
+ - Deprecated `bincode` feature (use serde with any binary format crate)
 
 ## [7.0.0] - 2026-01-25 (as imbl)
 
