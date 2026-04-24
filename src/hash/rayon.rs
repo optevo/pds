@@ -10,11 +10,11 @@ use std::hash::{BuildHasher, Hash};
 
 use ::rayon::iter::plumbing::{bridge_unindexed, Folder, UnindexedConsumer, UnindexedProducer};
 use ::rayon::iter::{
-    FromParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelExtend,
-    ParallelIterator,
+    FromParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
+    IntoParallelRefMutIterator, ParallelExtend, ParallelIterator,
 };
 
-use archery::SharedPointerKind;
+use archery::{SharedPointer, SharedPointerKind};
 
 use crate::config::HASH_LEVEL_SIZE as HASH_SHIFT;
 use crate::nodes::hamt::{Entry, Node};
@@ -193,6 +193,214 @@ impl<'a, K, V, P: SharedPointerKind> Iterator for MapEntryIter<'a, K, V, P> {
                 MapIterFrame::Collision(iter) => {
                     if let Some((k, v)) = iter.next() {
                         return Some((k, v));
+                    }
+                }
+            }
+            self.stack.pop();
+        }
+        None
+    }
+}
+
+// --- Mutable parallel iteration for HashMap ---
+
+impl<'a, K, V, S, P> IntoParallelRefMutIterator<'a> for GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone + Send + Sync + 'a,
+    V: Clone + Send + Sync + 'a,
+    S: Send + Sync + 'a,
+    P: SharedPointerKind + Send + Sync + 'a,
+{
+    type Item = (&'a K, &'a mut V);
+    type Iter = ParIterMutMap<'a, K, V, P>;
+
+    fn par_iter_mut(&'a mut self) -> Self::Iter {
+        let root = self.root.as_mut().map(SharedPointer::make_mut);
+        ParIterMutMap {
+            entries: root_entries_mut(root),
+        }
+    }
+}
+
+/// A parallel mutable iterator over the entries of a [`GenericHashMap`].
+pub struct ParIterMutMap<'a, K, V, P: SharedPointerKind> {
+    entries: Vec<&'a mut Entry<(K, V), P>>,
+}
+
+impl<'a, K, V, P> ParallelIterator for ParIterMutMap<'a, K, V, P>
+where
+    K: Clone + Send + Sync + 'a,
+    V: Clone + Send + Sync + 'a,
+    P: SharedPointerKind + Send + Sync + 'a,
+{
+    type Item = (&'a K, &'a mut V);
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where
+        C: UnindexedConsumer<Self::Item>,
+    {
+        bridge_unindexed(
+            MapMutProducer {
+                entries: self.entries,
+            },
+            consumer,
+        )
+    }
+}
+
+struct MapMutProducer<'a, K, V, P: SharedPointerKind> {
+    entries: Vec<&'a mut Entry<(K, V), P>>,
+}
+
+impl<'a, K, V, P> UnindexedProducer for MapMutProducer<'a, K, V, P>
+where
+    K: Clone + Send + Sync + 'a,
+    V: Clone + Send + Sync + 'a,
+    P: SharedPointerKind + Send + Sync + 'a,
+{
+    type Item = (&'a K, &'a mut V);
+
+    fn split(self) -> (Self, Option<Self>) {
+        let (left, right) = split_entries_mut(self.entries);
+        (
+            MapMutProducer { entries: left },
+            right.map(|entries| MapMutProducer { entries }),
+        )
+    }
+
+    fn fold_with<F>(self, folder: F) -> F
+    where
+        F: Folder<Self::Item>,
+    {
+        let iter = self
+            .entries
+            .into_iter()
+            .flat_map(|entry| map_entry_iter_mut(entry));
+        folder.consume_iter(iter)
+    }
+}
+
+/// Create a mutable DFS iterator from a single Entry, yielding (&K, &mut V).
+fn map_entry_iter_mut<'a, K, V, P>(
+    entry: &'a mut Entry<(K, V), P>,
+) -> MapEntryIterMut<'a, K, V, P>
+where
+    K: Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    let mut iter = MapEntryIterMut {
+        first: None,
+        stack: Vec::new(),
+    };
+    match entry {
+        Entry::Value(kv, _) => {
+            iter.first = Some((&kv.0, &mut kv.1));
+        }
+        Entry::HamtNode(ptr) => {
+            let node = SharedPointer::make_mut(ptr);
+            iter.stack
+                .push(MapMutIterFrame::Hamt(node.data.iter_mut()));
+        }
+        Entry::SmallSimdNode(ptr) => {
+            let node = SharedPointer::make_mut(ptr);
+            iter.stack
+                .push(MapMutIterFrame::SmallSimd(node.data.iter_mut()));
+        }
+        Entry::LargeSimdNode(ptr) => {
+            let node = SharedPointer::make_mut(ptr);
+            iter.stack
+                .push(MapMutIterFrame::LargeSimd(node.data.iter_mut()));
+        }
+        Entry::Collision(ptr) => {
+            let coll = SharedPointer::make_mut(ptr);
+            iter.stack
+                .push(MapMutIterFrame::Collision(coll.data.iter_mut()));
+        }
+    }
+    iter
+}
+
+struct MapEntryIterMut<'a, K, V, P: SharedPointerKind> {
+    first: Option<(&'a K, &'a mut V)>,
+    stack: Vec<MapMutIterFrame<'a, K, V, P>>,
+}
+
+/// A frame in the DFS stack for mutably iterating map entries.
+enum MapMutIterFrame<'a, K, V, P: SharedPointerKind> {
+    Hamt(
+        imbl_sized_chunks::sparse_chunk::IterMut<'a, Entry<(K, V), P>, HASH_WIDTH>,
+    ),
+    SmallSimd(
+        imbl_sized_chunks::sparse_chunk::IterMut<
+            'a,
+            ((K, V), crate::nodes::hamt::HashBits),
+            SMALL_NODE_WIDTH,
+        >,
+    ),
+    LargeSimd(
+        imbl_sized_chunks::sparse_chunk::IterMut<
+            'a,
+            ((K, V), crate::nodes::hamt::HashBits),
+            HASH_WIDTH,
+        >,
+    ),
+    Collision(std::slice::IterMut<'a, (K, V)>),
+}
+
+impl<'a, K, V, P: SharedPointerKind> Iterator for MapEntryIterMut<'a, K, V, P>
+where
+    K: Clone + 'a,
+    V: Clone + 'a,
+{
+    type Item = (&'a K, &'a mut V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(result) = self.first.take() {
+            return Some(result);
+        }
+        while let Some(frame) = self.stack.last_mut() {
+            match frame {
+                MapMutIterFrame::SmallSimd(iter) => {
+                    if let Some(item) = iter.next() {
+                        return Some((&item.0 .0, &mut item.0 .1));
+                    }
+                }
+                MapMutIterFrame::LargeSimd(iter) => {
+                    if let Some(item) = iter.next() {
+                        return Some((&item.0 .0, &mut item.0 .1));
+                    }
+                }
+                MapMutIterFrame::Hamt(iter) => {
+                    if let Some(entry) = iter.next() {
+                        let new_frame = match entry {
+                            Entry::Value(kv, _) => {
+                                return Some((&kv.0, &mut kv.1));
+                            }
+                            Entry::HamtNode(ptr) => {
+                                let node = SharedPointer::make_mut(ptr);
+                                MapMutIterFrame::Hamt(node.data.iter_mut())
+                            }
+                            Entry::SmallSimdNode(ptr) => {
+                                let node = SharedPointer::make_mut(ptr);
+                                MapMutIterFrame::SmallSimd(node.data.iter_mut())
+                            }
+                            Entry::LargeSimdNode(ptr) => {
+                                let node = SharedPointer::make_mut(ptr);
+                                MapMutIterFrame::LargeSimd(node.data.iter_mut())
+                            }
+                            Entry::Collision(ptr) => {
+                                let coll = SharedPointer::make_mut(ptr);
+                                MapMutIterFrame::Collision(coll.data.iter_mut())
+                            }
+                        };
+                        self.stack.push(new_frame);
+                        continue;
+                    }
+                }
+                MapMutIterFrame::Collision(iter) => {
+                    if let Some(kv) = iter.next() {
+                        return Some((&kv.0, &mut kv.1));
                     }
                 }
             }
@@ -485,11 +693,51 @@ fn split_entries<A, P: SharedPointerKind>(
     (entries, None)
 }
 
+/// Extract mutable entry references from a HAMT root node.
+fn root_entries_mut<A, P: SharedPointerKind>(
+    root: Option<&mut Node<A, P>>,
+) -> Vec<&mut Entry<A, P>> {
+    match root {
+        Some(node) => node.data.iter_mut().collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Split a vec of mutable entry references for rayon work distribution.
+/// Same strategy as `split_entries` but with `make_mut` for exclusive ownership.
+fn split_entries_mut<A: Clone, P: SharedPointerKind>(
+    mut entries: Vec<&mut Entry<A, P>>,
+) -> (Vec<&mut Entry<A, P>>, Option<Vec<&mut Entry<A, P>>>) {
+    if entries.len() >= 2 {
+        let mid = entries.len() / 2;
+        let right = entries.split_off(mid);
+        return (entries, Some(right));
+    }
+    // Single entry — try to expand if it's a HamtNode for deeper parallelism
+    if entries.len() == 1 {
+        let entry = entries.pop().unwrap();
+        if let Entry::HamtNode(child_ptr) = entry {
+            let child_node = SharedPointer::make_mut(child_ptr);
+            let mut child_entries: Vec<_> = child_node.data.iter_mut().collect();
+            if child_entries.len() >= 2 {
+                let mid = child_entries.len() / 2;
+                let right = child_entries.split_off(mid);
+                return (child_entries, Some(right));
+            }
+            return (child_entries, None);
+        }
+        entries.push(entry);
+    }
+    (entries, None)
+}
+
 #[cfg(test)]
 mod test {
     use super::super::map::HashMap;
     use super::super::set::HashSet;
-    use ::rayon::iter::{IntoParallelRefIterator, ParallelExtend, ParallelIterator};
+    use ::rayon::iter::{
+        IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelExtend, ParallelIterator,
+    };
 
     #[cfg_attr(miri, ignore)]
     #[test]
@@ -608,6 +856,51 @@ mod test {
         assert_eq!(set.len(), 10_000);
         for i in 0..10_000 {
             assert!(set.contains(&i));
+        }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_iter_mut_double() {
+        let mut map = HashMap::new();
+        for i in 0..10_000i64 {
+            map.insert(i, i);
+        }
+        map.par_iter_mut().for_each(|(_, v)| *v *= 2);
+        for i in 0..10_000i64 {
+            assert_eq!(map.get(&i), Some(&(i * 2)));
+        }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_iter_mut_count() {
+        let mut map = HashMap::new();
+        for i in 0..10_000 {
+            map.insert(i, i);
+        }
+        assert_eq!(map.par_iter_mut().count(), 10_000);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_iter_mut_empty() {
+        let mut map: HashMap<i32, i32> = HashMap::new();
+        assert_eq!(map.par_iter_mut().count(), 0);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_iter_mut_collect() {
+        let mut map = HashMap::new();
+        for i in 0..1_000 {
+            map.insert(i, i);
+        }
+        map.par_iter_mut().for_each(|(_, v)| *v += 100);
+        let mut pairs: Vec<_> = map.iter().map(|(&k, &v)| (k, v)).collect();
+        pairs.sort();
+        for (k, v) in &pairs {
+            assert_eq!(*v, k + 100);
         }
     }
 

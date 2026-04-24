@@ -64,6 +64,15 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 3.4 (partial): HashMap par_iter_mut.** Added
+  `IntoParallelRefMutIterator` for `GenericHashMap`, enabling parallel
+  mutable value iteration via `map.par_iter_mut()`. Implementation uses
+  `SharedPointer::make_mut` at the root and lazily at each HAMT node during
+  DFS traversal (same CoW semantics as sequential `iter_mut`). Work
+  splitting follows the same `UnindexedProducer` pattern as `par_iter`,
+  expanding single-child HamtNode entries for deeper parallelism. Remaining
+  3.4 items: parallel bulk ops (union/intersection/difference), parallel sort.
+
 - **[2026-04-24] 2.1: Fix RRB tree concatenation (issue #35).** Replaced
   Stucki's concatenation algorithm with L'orange's bounded-height approach.
   Key changes: `merge` now returns `(Node, level)` instead of always
@@ -263,11 +272,12 @@ Phase 2 — all items complete. Phase 3:
 3.1 resolved (already handled by Arc::make_mut — see DEC-004).
 3.2 complete (unsafe audit — 3 removals, 16 documented with SAFETY comments).
 3.4 partially complete (par_iter, FromParallelIterator, ParallelExtend
-done for all four hash/ord types; par_iter_mut, parallel bulk ops,
-parallel sort remaining). 3.5 complete. 3.6 partially complete (HashMap
-and HashSet tree-walk diff done; OrdMap already has upstream
-`advance_skipping_shared`; Vector deferred — needs RRB node pointer
-comparison). Next: 2.1 (RRB concat fix).
+done for all four hash/ord types; par_iter_mut done for HashMap;
+parallel bulk ops and parallel sort remaining). 3.5 complete. 3.6
+partially complete (HashMap and HashSet tree-walk diff done; OrdMap
+already has upstream `advance_skipping_shared`; Vector deferred — needs
+RRB node pointer comparison). Next: 3.4 remaining (parallel bulk ops,
+parallel sort).
 
 ---
 
