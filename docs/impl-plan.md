@@ -66,11 +66,12 @@ single v8.0.0 release in Phase 5.
 
 - **[2026-04-24] 4.4: Merkle hash caching — accepted, always-on.**
   Each HAMT node stores a u64 merkle_hash maintained incrementally during
-  mutations. Root hash is the sum of fmix64(key_hash) across all entries.
-  Equality check gains O(1) negative fast path (different root hashes →
-  definitely unequal). Final overhead: ~0% insert, ~1.5% lookup (noise),
-  ~5% remove_mut — all for i64 keys; string keys show negligible overhead.
-  Always-on, no feature flag. See DEC-009.
+  mutations. Root hash is the sum of mixer(key_hash) across all entries
+  (wyhash wide-multiply mixer). Equality check gains O(1) negative fast
+  path (different root hashes → definitely unequal). Final overhead:
+  effectively zero (-1.7% lookup, -8.7% insert_mut, +1.4% remove_mut vs
+  pre-merkle baseline — all within noise or improved). Always-on, no
+  feature flag. See DEC-009.
 
 - **[2026-04-24] 3.3: Transient/builder API — resolved as already handled.**
   Existing `&mut self` methods already provide the builder pattern's core

@@ -423,13 +423,18 @@ common case for maps cloned from a common ancestor.
 | Full recompute (v1) | +0.7% | +348% | +290% |
 | Incremental + inner fmix64 (v2) | +2.4% | +3.9% | +14.6% |
 | Incremental, no inner fmix64 (v3) | +1.6% | ~0% | +7.7% |
-| Inline old_m capture (v4, final) | +1.5% | ~0% | **+4.9%** |
+| Inline old_m capture (v4) | +1.5% | ~0% | +4.9% |
+| Wyhash wide-mul mixer (v5, final) | **-1.7%** | **-8.7%** | **+1.4%** |
+
+The wyhash-style wide-multiply mixer (128-bit multiply + fold-XOR, 2 ops
+vs fmix64's 6 ops) eliminated effectively all overhead. On Apple Silicon
+the UMULH instruction makes 64×64→128 multiply single-cycle.
 
 **Decision:**
 Accept the implementation as always-on (no feature flag). The final overhead
-is 0% on insert, ~1.5% on lookup (noise), and ~5% on remove_mut — all for
-i64 keys where hash computation is ~2ns and any overhead is proportionally
-amplified. For string keys or real-world workloads, the overhead is negligible.
+is effectively zero: insert is faster than pre-merkle (better codegen from
+simpler mixer), lookup unchanged, remove within noise threshold at +1.4%.
+All benchmarks are for i64 keys — string keys show even less relative impact.
 
 The benefit is O(1) negative equality rejection for maps that differ, which
 is a substantial win for workloads that frequently compare or diff maps.
