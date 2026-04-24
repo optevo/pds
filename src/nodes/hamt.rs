@@ -188,6 +188,7 @@ where
     }
 
     #[inline]
+    #[allow(clippy::unnecessary_cast)] // HashBits is u32 (normal) or u8 (small-chunks)
     fn ctrl_hash(hash: HashBits) -> u8 {
         ((hash >> (HashBits::BITS - 8)) as u8).max(1)
     }
@@ -741,6 +742,7 @@ impl<A, P: SharedPointerKind> Node<A, P> {
 /// An allocation-free stack for iterators.
 type InlineStack<T> = InlineArray<T, (usize, [T; ITER_STACK_CAPACITY])>;
 
+#[allow(clippy::enum_variant_names)] // mirrors Entry enum variant names
 enum IterItem<'a, A, P: SharedPointerKind> {
     SmallSimdNode(ChunkIter<'a, (A, HashBits), SMALL_NODE_WIDTH>),
     LargeSimdNode(ChunkIter<'a, (A, HashBits), HASH_WIDTH>),
@@ -862,6 +864,7 @@ impl<'a, A, P: SharedPointerKind> FusedIterator for Iter<'a, A, P> where A: 'a {
 
 // Mut ref iterator
 
+#[allow(clippy::enum_variant_names)] // mirrors Entry enum variant names
 enum IterMutItem<'a, A, P: SharedPointerKind> {
     SmallSimdNode(ChunkIterMut<'a, (A, HashBits), SMALL_NODE_WIDTH>),
     LargeSimdNode(ChunkIterMut<'a, (A, HashBits), HASH_WIDTH>),

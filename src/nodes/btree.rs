@@ -826,12 +826,8 @@ impl<K, V, P: SharedPointerKind> ConsumingIter<K, V, P> {
         let mut leaves = VecDeque::with_capacity(size.div_ceil(NODE_SIZE / 2));
         match node {
             Some(Node::Branch(b)) => push(&mut leaves, b),
-            Some(Node::Leaf(l)) => {
-                if !l.keys.is_empty() {
-                    leaves.push_back(l)
-                }
-            }
-            None => (),
+            Some(Node::Leaf(l)) if !l.keys.is_empty() => leaves.push_back(l),
+            _ => (),
         }
         Self {
             leaves,
