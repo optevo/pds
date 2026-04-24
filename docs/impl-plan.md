@@ -64,6 +64,14 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 4.4: Merkle hash caching — accepted, always-on.**
+  Each HAMT node stores a u64 merkle_hash maintained incrementally during
+  mutations. Root hash is the sum of fmix64(key_hash) across all entries.
+  Equality check gains O(1) negative fast path (different root hashes →
+  definitely unequal). Final overhead: ~0% insert, ~1.5% lookup (noise),
+  ~5% remove_mut — all for i64 keys; string keys show negligible overhead.
+  Always-on, no feature flag. See DEC-009.
+
 - **[2026-04-24] 3.3: Transient/builder API — resolved as already handled.**
   Existing `&mut self` methods already provide the builder pattern's core
   benefit: `Arc::make_mut` detects refcount == 1 and mutates in place
@@ -335,13 +343,11 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-5.2, 4.5, 4.2, and 3.3 complete. CHAMP benchmark result (DEC-007): SIMD
-HAMT retained — CHAMP wins on mutation/iteration but loses on lookup.
-Node layout is settled (SIMD HAMT stays). 3.3 resolved as already handled
-(DEC-008) — existing `&mut self` methods provide the builder benefit.
-Remaining work:
-
-1. **4.4 Merkle caching** — layered on the settled node layout.
+5.2, 4.5, 4.2, 3.3, and 4.4 complete. CHAMP benchmark result (DEC-007):
+SIMD HAMT retained — CHAMP wins on mutation/iteration but loses on
+lookup. Node layout is settled (SIMD HAMT stays). 4.4 Merkle hash
+caching accepted (DEC-009) — O(1) negative equality check, ~5% worst-case
+overhead on remove_mut. All Phase 3 and Phase 4 items resolved.
 
 Phase 3 status: 3.1 resolved (DEC-004). 3.2 complete. 3.3 resolved
 (DEC-008 — already handled by `&mut self` methods). 3.4 partially
@@ -349,8 +355,9 @@ complete (par_iter/FromParallelIterator/ParallelExtend done for all
 hash/ord types; par_iter_mut for HashMap; par_sort for Vector; parallel
 bulk ops deferred to Phase 6 — needs tree-level parallelism). 3.5
 complete. 3.6 complete.
-Phase 4: 4.1 resolved (4-buffer structure already symmetric). 4.5
-complete (hasher behind SharedPointer, S: Clone eliminated).
+Phase 4: 4.1 resolved (4-buffer already symmetric). 4.2 done (DEC-007).
+4.3 deferred (HAMT retained). 4.4 done (DEC-009). 4.5 done (hasher
+behind SharedPointer).
 
 ---
 
@@ -1371,49 +1378,28 @@ landed first, CHAMP would need to be generic from day one.
 
 ---
 
-### 4.4 Merkle hash caching
+### 4.4 Merkle hash caching — DONE
 
-**What:** Add a `u64` hash field to each internal tree node, computed as
-a Merkle-style fingerprint: `hash(children_hashes, own_data)`. The hash
-is maintained incrementally — only nodes on the mutation path recompute
-(O(tree_depth) per mutation, same as the structural copy-on-write cost).
+**Status:** Complete. See Done section for details and DEC-009.
 
-**Why:** Pointer equality (3.5, 3.6) catches the common case where two
-subtrees share lineage (one was cloned from the other). But two
-independently-constructed subtrees can contain identical data without
-being pointer-equal. The Merkle hash provides a fast negative check: if
-hashes differ, the subtrees definitely differ (skip deep comparison). If
-hashes match, the subtrees are almost certainly equal (structural verify
-or trust depending on collision tolerance). This makes diff and equality
-O(changes) even for collections with no shared lineage — a significant
-improvement for merge-heavy workloads where branches diverge and
-reconverge.
+**What was done:** Added a `u64` merkle_hash field to each HAMT node
+(GenericSimdNode, HamtNode), maintained incrementally during mutations
+using commutative addition of fmix64(key_hash) values. Equality check
+gains O(1) negative fast path. HAMT-only — B+ tree and RRB tree would
+need additional Hash bounds on values. Final overhead: ~0% insert, ~5%
+remove_mut (i64 keys). Always-on, no feature flag.
 
-**Design:**
-- Each node struct gains a `u64` field (xxHash3 or similar fast hash)
-- On node creation/mutation, compute `hash = hash_combine(child_hashes, leaf_data)`
-- Diff (3.6) checks: `ptr_eq` first (O(1)), then hash comparison (O(1)),
-  then structural descent only if both fail
-- PartialEq: same layered check — ptr_eq → hash → structural
-- The hash can be exposed via a public `content_hash(&self) -> u64`
-  method for use in application-level caching and change detection
+**Design evolution:**
+1. Full recompute: iterating all entries per level → +348% insert (rejected)
+2. Incremental with fmix64 at all levels → +14.6% remove
+3. Remove inner fmix64 (root hash = flat sum of leaf hashes) → +7.7% remove
+4. Inline old_m capture (eliminate upfront lookup) → +4.9% remove (accepted)
 
-**Cost:** One `u64` per node (~1-3% memory overhead depending on node
-size). Hash computation uses the same O(log n) path as copy-on-write, so
-it does not change the asymptotic cost of mutations.
+**Scope limitation:** The Merkle hash covers keys only (via existing
+HashBits), not values. This means it cannot be used for diff optimisation
+(where value changes matter), only for equality.
 
-**Complexity:** Moderate. Requires threading hash computation through all
-mutation paths for all three data structure types (HAMT, RRB, B+ tree).
-The hash function choice affects performance — must benchmark.
-
-**Affects:** All five collection types.
-
-**Prerequisites:** 0.3 (benchmarks for before/after), 0.5 (architecture
-docs for all node types). Benefits from 3.5 and 3.6 being in place (the
-hash check layers between ptr_eq and structural comparison).
-
-**References:** Merkle trees (Merkle, 1987); git content-addressable
-storage; immer `persist` module; xxHash3 (github.com/Cyan4973/xxHash).
+**References:** Merkle trees (Merkle, 1987); MurmurHash3 fmix64 finaliser.
 
 ---
 
@@ -1757,7 +1743,7 @@ Phase 4 (internals)                │                                      │
   4.1 prefix buffer ◄── 2.1                                               │
   4.2 CHAMP prototype ◄── 0.3, 0.5  ✓ DONE (DEC-007: HAMT retained)                                        │
   4.3 CHAMP integration ◄── 4.2, 0.1, 0.2 (only if benchmarks justify)   │
-  4.4 Merkle hash caching ◄── 0.3, 0.5                                    │
+  4.4 Merkle hash caching ◄── 0.3, 0.5  ✓ DONE                            │
   4.5 SharedPointer hasher PoC ◄── 5.2  ✓ DONE                                    │
                                    │                                      │
 Phase 5 (breaking — v8.0.0)        │                                      │
@@ -1793,10 +1779,8 @@ parallel:
    all other tracks). 2.7 (general merge) shares HAMT traversal
    infrastructure with 2.4 (HashMap diff) — co-development is efficient
    but not required.
-7. **Hash integrity track:** 4.4 (Merkle hash caching) → 6.5 (hash
-   consing/interning). Independent of CHAMP (4.2/4.3) — works with
-   whatever node architecture exists. Benefits from 3.5/3.6 being in
-   place (layered equality: ptr_eq → hash → structural).
+7. **Hash integrity track:** 4.4 ✓ (Merkle hash caching) → 6.5 (hash
+   consing/interning). 4.4 complete — 6.5 can now proceed.
 8. **Serialisation track:** 6.6 (sharing-preserving serialisation).
    Independent but benefits from 4.4 (Merkle hashes enable
    content-addressed node pools).

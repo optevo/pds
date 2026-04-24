@@ -512,6 +512,15 @@ where
                 if a_ptr == b_ptr {
                     return true;
                 }
+                // Merkle negative check: if both maps share the same hasher
+                // instance (common ancestor via clone), their key hashes are
+                // computed identically. If the root Merkle hashes differ, the
+                // key sets differ and the maps are definitely not equal.
+                let a_hasher = &*self.hasher as *const S as *const ();
+                let b_hasher = &*other.hasher as *const S2 as *const ();
+                if a_hasher == b_hasher && a.merkle_hash != b.merkle_hash {
+                    return false;
+                }
             }
             _ => {}
         }
@@ -3444,6 +3453,87 @@ mod test {
 
         // Self-comparison.
         assert_eq!(map, map);
+    }
+
+    #[test]
+    fn merkle_hash_basic() {
+        // Two maps built from the same data with the same hasher should
+        // have the same root merkle hash.
+        let mut m1 = HashMap::new();
+        for i in 0..100 {
+            m1.insert(i, i * 2);
+        }
+        let m2 = m1.clone();
+
+        // Same hasher → same merkle hash.
+        let r1 = m1.root.as_ref().unwrap();
+        let r2 = m2.root.as_ref().unwrap();
+        assert_eq!(r1.merkle_hash, r2.merkle_hash);
+
+        // After inserting a new key, merkle hash changes.
+        let mut m3 = m1.clone();
+        m3.insert(999, 0);
+        let r3 = m3.root.as_ref().unwrap();
+        assert_ne!(r1.merkle_hash, r3.merkle_hash);
+
+        // After removing a key, merkle hash changes.
+        let mut m4 = m1.clone();
+        m4.remove(&50);
+        let r4 = m4.root.as_ref().unwrap();
+        assert_ne!(r1.merkle_hash, r4.merkle_hash);
+
+        // Replacing a value for the same key does NOT change the merkle
+        // hash (keys-only fingerprint by design — see DEC for rationale).
+        let mut m5 = m1.clone();
+        m5.insert(50, 9999);
+        let r5 = m5.root.as_ref().unwrap();
+        assert_eq!(r1.merkle_hash, r5.merkle_hash);
+    }
+
+    #[test]
+    fn merkle_hash_insert_remove_roundtrip() {
+        // Insert then remove should restore the original merkle hash.
+        let mut m = HashMap::new();
+        for i in 0..50 {
+            m.insert(i, i);
+        }
+        let original_merkle = m.root.as_ref().unwrap().merkle_hash;
+
+        // Insert a new key and then remove it.
+        m.insert(9999, 0);
+        assert_ne!(m.root.as_ref().unwrap().merkle_hash, original_merkle);
+        m.remove(&9999);
+        assert_eq!(m.root.as_ref().unwrap().merkle_hash, original_merkle);
+    }
+
+    #[test]
+    fn merkle_hash_empty_map() {
+        let m: HashMap<i32, i32> = HashMap::new();
+        assert!(m.root.is_none()); // empty maps have no root
+    }
+
+    #[test]
+    fn merkle_hash_equality_negative_check() {
+        // Two maps derived from a common clone with different key sets
+        // should have different merkle hashes and the equality check
+        // should detect this without element-wise comparison.
+        let mut m1 = HashMap::new();
+        for i in 0..1000 {
+            m1.insert(i, i);
+        }
+        let mut m2 = m1.clone();
+        m2.remove(&500);
+        m2.insert(99999, 0);
+
+        // Maps have the same size but different key sets.
+        assert_eq!(m1.len(), m2.len());
+        // Merkle hashes differ because key sets differ.
+        assert_ne!(
+            m1.root.as_ref().unwrap().merkle_hash,
+            m2.root.as_ref().unwrap().merkle_hash
+        );
+        // Equality check correctly returns false.
+        assert_ne!(m1, m2);
     }
 
     #[test]

@@ -382,3 +382,74 @@ map.insert(k2, v2);
 ```
 Documentation should guide users toward this pattern. No code changes
 needed for 3.3.
+
+---
+
+## DEC-009: 4.4 Merkle hash caching — accepted with incremental maintenance
+
+**Date:** 2026-04-24
+**Status:** Accepted
+
+**Context:**
+Plan item 4.4 proposed adding a Merkle hash fingerprint to HAMT nodes for
+O(1) negative equality checks (maps with different root hashes are definitely
+unequal, skipping element-by-element comparison). The implementation is
+HAMT-only — B+ tree and RRB tree nodes would require additional `Hash`
+bounds on values.
+
+**Design:**
+Each HAMT node (GenericSimdNode, HamtNode) stores a `u64` merkle_hash field.
+The hash is maintained incrementally during mutations:
+- Leaf entries contribute `fmix64(key_hash as u64)` (MurmurHash3 finaliser)
+- Child nodes contribute their `merkle_hash` directly (no outer mixing)
+- Combination is commutative addition (`wrapping_add`/`wrapping_sub`)
+- On insert/remove, compute `old_contrib` and `new_contrib` for the changed
+  entry, then: `merkle_hash = merkle_hash - old_contrib + new_contrib`
+
+The root merkle_hash is effectively the sum of `fmix64(key_hash)` across all
+entries — independent of tree structure. This is correct because HAMT tree
+structure is fully determined by key hashes (same keys → same structure).
+
+**Equality check integration:**
+In `test_eq`, after the existing `ptr_eq` fast path, a Merkle negative check
+compares root hashes. The check is only valid when both maps share the same
+hasher instance (detected via type-erased pointer comparison), which is the
+common case for maps cloned from a common ancestor.
+
+**Benchmark results (criterion, Apple M5 Max, 10K i64 keys):**
+
+| Approach | lookup | insert_mut | remove_mut |
+|----------|--------|-----------|------------|
+| Full recompute (v1) | +0.7% | +348% | +290% |
+| Incremental + inner fmix64 (v2) | +2.4% | +3.9% | +14.6% |
+| Incremental, no inner fmix64 (v3) | +1.6% | ~0% | +7.7% |
+| Inline old_m capture (v4, final) | +1.5% | ~0% | **+4.9%** |
+
+**Decision:**
+Accept the implementation as always-on (no feature flag). The final overhead
+is 0% on insert, ~1.5% on lookup (noise), and ~5% on remove_mut — all for
+i64 keys where hash computation is ~2ns and any overhead is proportionally
+amplified. For string keys or real-world workloads, the overhead is negligible.
+
+The benefit is O(1) negative equality rejection for maps that differ, which
+is a substantial win for workloads that frequently compare or diff maps.
+
+**Alternatives considered:**
+- Feature flag (opt-in or opt-out) — rejected because conditional compilation
+  throughout the HAMT code adds complexity disproportionate to a <5% overhead.
+- u32 merkle_hash — saves 4 bytes per node but same arithmetic speed on 64-bit
+  hardware. Could be revisited if memory footprint becomes critical.
+- XOR-based combination instead of addition — rejected because XOR has higher
+  collision risk (a ⊕ a = 0 for any a, losing information on duplicates).
+- Lazy computation (compute merkle_hash only on first equality check) — rejected
+  because it adds branching on every mutation and equality check, and the
+  incremental approach is already near-free.
+- Full recompute on mutation — rejected due to catastrophic O(n) per-level cost.
+
+**Consequences:**
+All HAMT nodes gain a `u64` merkle_hash field (+8 bytes per node). The hash
+is maintained incrementally during insert/remove. Equality checks gain a fast
+path that rejects unequal maps in O(1). The hash only covers keys (via their
+existing HashBits), not values — value-only changes are not detected by the
+Merkle hash. This means the Merkle check cannot be used for diff optimisation
+(where value changes matter), only for equality.

@@ -26,6 +26,19 @@ const GROUP_WIDTH: usize = HASH_WIDTH / 2;
 type SimdGroup = wide::u8x16;
 type GroupBitmap = bitmaps::Bitmap<GROUP_WIDTH>;
 
+/// MurmurHash3 finaliser — a fast bijective mixer that spreads input bits
+/// evenly across the output. Used to compute Merkle hash contributions so
+/// that commutative addition of similar inputs doesn't cancel information.
+#[inline]
+pub(crate) fn fmix64(mut h: u64) -> u64 {
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51afd7ed558ccd);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xc4ceb9fe1a85ec53);
+    h ^= h >> 33;
+    h
+}
+
 const _: () = {
     // Limitations of the current implementation, can only handle up to 2 groups,
     // but can be lifted with further code changes
@@ -106,6 +119,11 @@ where
     /// Each byte corresponds to the u8 suffix of the hash.
     /// 0 indicates an empty slot, 1-255 are valid hash prefixes.
     control: [SimdGroup; GROUPS],
+
+    /// Merkle fingerprint: commutative sum of fmix64(entry_hash) for all
+    /// entries. Used for fast negative equality/diff checks — if two nodes
+    /// have different merkle_hash values, their key sets definitely differ.
+    pub(crate) merkle_hash: u64,
 }
 
 /// HAMT node that stores Entry enum (can contain values or child nodes).
@@ -116,6 +134,11 @@ where
 {
     /// Stores Entry enum which can contain values, collision nodes, or child nodes
     pub(crate) data: SparseChunk<Entry<A, P>, HASH_WIDTH>,
+
+    /// Merkle fingerprint: commutative sum of fmix64(contribution) for all
+    /// entries, where contribution is the entry's key hash (for values) or
+    /// child merkle_hash (for sub-nodes). See `Entry::merkle_contribution`.
+    pub(crate) merkle_hash: u64,
 }
 
 impl<A: Clone, const WIDTH: usize, const GROUPS: usize> Clone for GenericSimdNode<A, WIDTH, GROUPS>
@@ -126,6 +149,7 @@ where
         Self {
             data: self.data.clone(),
             control: self.control,
+            merkle_hash: self.merkle_hash,
         }
     }
 }
@@ -137,6 +161,7 @@ where
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
+            merkle_hash: self.merkle_hash,
         }
     }
 }
@@ -174,6 +199,7 @@ where
         GenericSimdNode {
             data: SparseChunk::new(),
             control: [SimdGroup::default(); GROUPS],
+            merkle_hash: 0,
         }
     }
 
@@ -272,10 +298,13 @@ where
             let index = group * GROUP_WIDTH + offset;
             let (ref value, value_hash) = self.data.get(index).unwrap();
             if hash_may_eq::<A>(hash, *value_hash) && key.equivalent(value.extract_key()) {
+                let removed_hash = *value_hash;
                 let mut ctrl_array = self.control[group].to_array();
                 ctrl_array[offset] = 0;
                 self.control[group] = SimdGroup::from(ctrl_array);
-                return self.data.remove(index).map(|(v, _)| v);
+                let removed = self.data.remove(index).map(|(v, _)| v);
+                self.merkle_hash = self.merkle_hash.wrapping_sub(fmix64(removed_hash as u64));
+                return removed;
             }
             bitmap.set(offset, false);
         }
@@ -291,6 +320,7 @@ where
             let (current, current_hash) = self.data.get_mut(index).unwrap();
             if hash_may_eq::<A>(hash, *current_hash) && current.extract_key() == value.extract_key()
             {
+                // Key hash unchanged — merkle_hash stays the same.
                 return Ok(Some(mem::replace(current, value)));
             }
             bitmap.set(offset, false);
@@ -303,6 +333,7 @@ where
             let mut ctrl_array = self.control[group].to_array();
             ctrl_array[offset] = search;
             self.control[group] = SimdGroup::from(ctrl_array);
+            self.merkle_hash = self.merkle_hash.wrapping_add(fmix64(hash as u64));
             return Ok(None);
         }
 
@@ -319,6 +350,7 @@ where
     pub(crate) fn new() -> Self {
         HamtNode {
             data: SparseChunk::new(),
+            merkle_hash: 0,
         }
     }
 
@@ -357,8 +389,11 @@ impl<A: HashValue> SmallSimdNode<A> {
         // Move all small node entries into a LargeSimdNode and try to insert the new value
         // Existing entries are guaranteed to fit since SmallNode has 16 entries max
         // and LargeSimdNode has 2 groups of 16 (32 total)
+        let old_merkle = self.merkle_hash;
         let mut remaining_value = None;
         let mut large_node = LargeSimdNode::with(|node| {
+            // Carry over the merkle hash from the small node — same entries.
+            node.merkle_hash = old_merkle;
             let mut group_offsets = [0; 2];
             while let Some((val, entry_hash)) = self.data.pop() {
                 let (search, group) = LargeSimdNode::<A>::ctrl_hash_and_group(entry_hash);
@@ -370,6 +405,7 @@ impl<A: HashValue> SmallSimdNode<A> {
                 node.control[group] = SimdGroup::from(ctrl_array);
                 node.data.insert(data_offset, (val, entry_hash));
             }
+            // node.insert updates merkle_hash for the new entry.
             if let Err(val) = node.insert(hash, value) {
                 // Put it back if insert failed
                 remaining_value = Some(val);
@@ -504,6 +540,7 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
             ctrl_array[0] = SmallSimdNode::<A>::ctrl_hash(hash1);
             ctrl_array[1] = SmallSimdNode::<A>::ctrl_hash(hash2);
             node.control[0] = SimdGroup::from(ctrl_array);
+            node.merkle_hash = fmix64(hash1 as u64).wrapping_add(fmix64(hash2 as u64));
         });
         Entry::SmallSimdNode(small_node)
     }
@@ -513,35 +550,69 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
         A: Clone,
     {
         let index = Self::mask(hash, shift) as usize;
+
         let Some(entry) = self.data.get_mut(index) else {
             // Insert at empty HAMT position
             self.data.insert(index, Entry::Value(value, hash));
+            self.merkle_hash = self.merkle_hash.wrapping_add(fmix64(hash as u64));
             return None;
         };
 
-        match entry {
+        // old_contrib is captured inline per arm to avoid a separate
+        // upfront lookup + merkle_contribution() dispatch. Only the
+        // Value fall-through case needs it after the match.
+        let old_contrib = match entry {
             Entry::HamtNode(child_ref) => {
                 let child = SharedPointer::make_mut(child_ref);
-                return child.insert(hash, shift + HASH_SHIFT, value);
+                let old_m = child.merkle_hash;
+                let result = child.insert(hash, shift + HASH_SHIFT, value);
+                self.merkle_hash = self.merkle_hash
+                    .wrapping_sub(old_m)
+                    .wrapping_add(child.merkle_hash);
+                return result;
             }
             Entry::SmallSimdNode(small_ref) => {
                 let small = SharedPointer::make_mut(small_ref);
+                let old_m = small.merkle_hash;
                 match small.insert(hash, value) {
-                    Ok(result) => return result,
+                    Ok(result) => {
+                        self.merkle_hash = self.merkle_hash
+                            .wrapping_sub(old_m)
+                            .wrapping_add(small.merkle_hash);
+                        return result;
+                    }
                     Err(value) => {
                         // Small SIMD node is full, upgrade to LargeSimdNode
-                        *entry = small.upgrade_to_large(hash, shift + HASH_SHIFT, value);
+                        let new_entry =
+                            small.upgrade_to_large(hash, shift + HASH_SHIFT, value);
+                        let new_m = new_entry.merkle_contribution();
+                        *entry = new_entry;
+                        self.merkle_hash = self.merkle_hash
+                            .wrapping_sub(old_m)
+                            .wrapping_add(new_m);
                         return None;
                     }
                 }
             }
             Entry::LargeSimdNode(large_ref) => {
                 let large = SharedPointer::make_mut(large_ref);
+                let old_m = large.merkle_hash;
                 match large.insert(hash, value) {
-                    Ok(result) => return result,
+                    Ok(result) => {
+                        self.merkle_hash = self.merkle_hash
+                            .wrapping_sub(old_m)
+                            .wrapping_add(large.merkle_hash);
+                        return result;
+                    }
                     Err(value) => {
                         // Large SIMD node is full, upgrade to HamtNode
-                        *entry = large.upgrade_to_hamt(hash, shift + HASH_SHIFT, value);
+                        let new_entry =
+                            large.upgrade_to_hamt(hash, shift + HASH_SHIFT, value);
+                        let new_m = new_entry.merkle_contribution();
+                        *entry = new_entry;
+                        self.merkle_hash = self.merkle_hash
+                            .wrapping_sub(old_m)
+                            .wrapping_add(new_m);
                         return None;
                     }
                 }
@@ -551,16 +622,26 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
                 if hash_may_eq::<A>(hash, *current_hash)
                     && current.extract_key() == value.extract_key()
                 {
+                    // Same key → same hash → merkle unchanged.
                     return Some(mem::replace(current, value));
                 }
+                fmix64(*current_hash as u64)
             }
             Entry::Collision(collision) => {
                 let coll = SharedPointer::make_mut(collision);
-                return coll.insert(value);
+                let old_m = (coll.data.len() as u64)
+                    .wrapping_mul(fmix64(coll.hash as u64));
+                let result = coll.insert(value);
+                let new_m = (coll.data.len() as u64)
+                    .wrapping_mul(fmix64(coll.hash as u64));
+                self.merkle_hash = self.merkle_hash
+                    .wrapping_sub(old_m)
+                    .wrapping_add(new_m);
+                return result;
             }
-        }
+        };
 
-        // If we get here, we're inserting a value that collides with an existing Value entry.
+        // Only reachable from Entry::Value when keys don't match (hash collision).
         // Remove the old entry, build the merged node, and insert it back.
         let Entry::Value(old_value, old_hash) = self.data.remove(index).unwrap() else {
             unreachable!()
@@ -571,7 +652,11 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
         } else {
             Self::merge_values(old_value, old_hash, value, hash)
         };
+        let new_m = new_entry.merkle_contribution();
         self.data.insert(index, new_entry);
+        self.merkle_hash = self.merkle_hash
+            .wrapping_sub(old_contrib)
+            .wrapping_add(new_m);
         None
     }
 
@@ -581,42 +666,84 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
         Q: Equivalent<A::Key> + ?Sized,
     {
         let index = Self::mask(hash, shift) as usize;
+
         let removed;
-        let new_node = match self.data.get_mut(index)? {
+        // old_m and demotion value are captured inline per arm to avoid a
+        // separate upfront lookup + merkle_contribution() dispatch.
+        let (old_m, new_node) = match self.data.get_mut(index)? {
             Entry::HamtNode(child_ref) => {
                 let child = SharedPointer::make_mut(child_ref);
+                let old_m = child.merkle_hash;
                 removed = child.remove(hash, shift + HASH_SHIFT, key);
                 if child.len() == 1 && child.data.iter().next().is_some_and(|e| e.is_value()) {
-                    Some(child.pop())
+                    (old_m, Some(child.pop()))
                 } else {
-                    None
+                    self.merkle_hash = self.merkle_hash
+                        .wrapping_sub(old_m)
+                        .wrapping_add(child.merkle_hash);
+                    return removed;
                 }
             }
             Entry::SmallSimdNode(small_ref) => {
                 let small = SharedPointer::make_mut(small_ref);
+                let old_m = small.merkle_hash;
                 removed = small.remove(hash, key);
-                (small.len() == 1).then(|| small.pop_value())
+                if small.len() == 1 {
+                    (old_m, Some(small.pop_value()))
+                } else {
+                    self.merkle_hash = self.merkle_hash
+                        .wrapping_sub(old_m)
+                        .wrapping_add(small.merkle_hash);
+                    return removed;
+                }
             }
             Entry::LargeSimdNode(large_ref) => {
                 let large = SharedPointer::make_mut(large_ref);
+                let old_m = large.merkle_hash;
                 removed = large.remove(hash, key);
-                (large.len() == 1).then(|| large.pop_value())
+                if large.len() == 1 {
+                    (old_m, Some(large.pop_value()))
+                } else {
+                    self.merkle_hash = self.merkle_hash
+                        .wrapping_sub(old_m)
+                        .wrapping_add(large.merkle_hash);
+                    return removed;
+                }
             }
             Entry::Value(value, value_hash) => {
                 if hash_may_eq::<A>(hash, *value_hash) && key.equivalent(value.extract_key()) {
-                    return self.data.remove(index).map(Entry::unwrap_value);
+                    let old_m = fmix64(*value_hash as u64);
+                    let result = self.data.remove(index).map(Entry::unwrap_value);
+                    self.merkle_hash = self.merkle_hash.wrapping_sub(old_m);
+                    return result;
                 } else {
                     return None;
                 }
             }
             Entry::Collision(coll_ref) => {
                 let coll = SharedPointer::make_mut(coll_ref);
+                let old_m = (coll.data.len() as u64)
+                    .wrapping_mul(fmix64(coll.hash as u64));
                 removed = coll.remove(key);
-                (coll.len() == 1).then(|| coll.pop_value())
+                if coll.len() == 1 {
+                    (old_m, Some(coll.pop_value()))
+                } else {
+                    let new_m = (coll.data.len() as u64)
+                        .wrapping_mul(fmix64(coll.hash as u64));
+                    self.merkle_hash = self.merkle_hash
+                        .wrapping_sub(old_m)
+                        .wrapping_add(new_m);
+                    return removed;
+                }
             }
         };
+        // Node was demoted to a single value — replace entry.
         if let Some(new_node) = new_node {
+            let new_m = new_node.merkle_contribution();
             self.data.insert(index, new_node);
+            self.merkle_hash = self.merkle_hash
+                .wrapping_sub(old_m)
+                .wrapping_add(new_m);
         }
         removed
     }
@@ -651,6 +778,25 @@ impl<A: Clone, P: SharedPointerKind> Clone for Entry<A, P> {
 impl<A, P: SharedPointerKind> Entry<A, P> {
     fn is_value(&self) -> bool {
         matches!(self, Entry::Value(_, _))
+    }
+
+    /// Return this entry's contribution to its parent's Merkle hash.
+    /// For leaf values this is fmix64(key_hash). For child nodes the
+    /// merkle_hash is passed through directly — the root hash is a flat
+    /// sum of fmix64(leaf_hash) values, independent of tree structure.
+    /// For collision nodes we include the entry count so that
+    /// adding/removing colliding keys is detected.
+    #[inline]
+    pub(crate) fn merkle_contribution(&self) -> u64 {
+        match self {
+            Entry::Value(_, hash) => fmix64(*hash as u64),
+            Entry::SmallSimdNode(node) => node.merkle_hash,
+            Entry::LargeSimdNode(node) => node.merkle_hash,
+            Entry::HamtNode(node) => node.merkle_hash,
+            Entry::Collision(coll) => {
+                (coll.data.len() as u64).wrapping_mul(fmix64(coll.hash as u64))
+            }
+        }
     }
 
     #[inline(always)]
