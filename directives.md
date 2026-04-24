@@ -241,6 +241,34 @@ New benchmarks should be added for any data structure that gains or loses a
 benchmark during the improvement work (e.g. hashset, ordset benchmarks are
 currently missing and should be added in Phase 0.3).
 
+### Benchmark isolation
+
+Benchmarks require exclusive CPU access to produce reliable results.
+**Non-negotiable rules:**
+
+- **Never run benchmarks in parallel.** Run one benchmark suite at a time —
+  criterion measures are sensitive to CPU contention.
+- **No CPU-intensive work during benchmarks.** Do not compile, run tests, or
+  perform other heavy work while benchmarks are running. Wait for the benchmark
+  to finish before starting other work.
+- **No background benchmark runs.** Always run benchmarks in the foreground and
+  wait for completion. Background execution risks interference from other tasks.
+
+### Benchmark coverage
+
+Benchmarks are a review obligation, just like tests. When adding new
+functionality that has performance implications:
+
+- **Add benchmarks for new operations** — any new public method or data
+  structure operation that is expected to be called in hot paths needs a
+  criterion benchmark.
+- **Add benchmarks for parallel/concurrent methods** — methods that use
+  parallelism (e.g. via `rayon`) need benchmarks that measure scaling
+  behaviour across different collection sizes.
+- **Review benchmark coverage** after completing any work item, just as you
+  review test coverage. If a change affects a hot path that lacks a benchmark,
+  add one.
+
 ---
 
 ## Build outputs
