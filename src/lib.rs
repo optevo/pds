@@ -376,10 +376,12 @@ pub mod shared_ptr;
 pub mod atom;
 
 pub mod hash_multimap;
+pub mod insertion_order_map;
 pub mod pbag;
 
 pub use crate::hash_multimap::{GenericHashMultiMap, HashMultiMap};
 pub use crate::hashmap::{GenericHashMap, HashMap};
+pub use crate::insertion_order_map::{GenericInsertionOrderMap, InsertionOrderMap};
 pub use crate::hashset::{GenericHashSet, HashSet};
 pub use crate::ordmap::{GenericOrdMap, OrdMap};
 pub use crate::ordset::{GenericOrdSet, OrdSet};
