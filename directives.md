@@ -123,7 +123,11 @@ caught by review. They are listed because they recur in AI-assisted development.
   documenting the invariant and a `debug_assert!` checking the
   precondition where feasible (e.g. pointer non-null, index in-bounds).
   Debug assertions compile to nothing in release builds, so they do not
-  affect benchmarks or production performance.
+  affect benchmarks or production performance. Every unsafe code path
+  must have a corresponding test that exercises it under miri — these
+  tests should NOT be marked `#[cfg_attr(miri, ignore)]` and should
+  target boundary conditions likely to trigger UB (e.g. aliasing
+  violations, dangling pointers, out-of-bounds access).
   See also Phase 3.2 (unsafe audit).
 - **No undeclared dependencies.** NEVER add a crate to `Cargo.toml` that is
   not already present, without explicit approval. Consult `Cargo.toml` for
