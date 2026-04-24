@@ -508,3 +508,45 @@ already enabling the `triomphe` feature. Batched into v8.0.0. Users who
 extract or inspect internal pointer types, or who rely on `Arc::downgrade`,
 must opt out of the default feature. The `triomphe` crate becomes a
 required dependency (previously optional).
+
+---
+
+## DEC-011: 5.3 Const generic branching factor — deferred
+
+**Date:** 2026-04-24
+**Status:** Deferred
+
+**Context:**
+The plan proposed replacing the compile-time `small-chunks` feature flag
+with const generic parameters on all collection types, allowing users to
+specify branching factor at the type level (e.g. `Vector<A, 4>`).
+
+**Decision:**
+Defer indefinitely. The cost is disproportionate to the benefit.
+
+**Blockers identified:**
+1. **HashMap/HashSet: blocked by stable Rust.** The HAMT's SIMD node
+   hierarchy derives constants from HASH_LEVEL_SIZE: HASH_WIDTH = 2^B,
+   SMALL_NODE_WIDTH = HASH_WIDTH/2. Using computed values as const generic
+   arguments (e.g. `SparseChunk<..., {2_usize.pow(B)}>`) requires the
+   unstable `generic_const_exprs` feature. No workaround on stable Rust.
+2. **Vector + OrdMap/OrdSet: feasible but massive.** ~140+ type reference
+   sites across ~80 impl blocks, plus iterators, Focus/FocusMut, rayon,
+   serde, diff, and proptest implementations. Purely mechanical but
+   high-risk for compilation cascades.
+3. **Marginal practical benefit.** The `small-chunks` feature flag already
+   provides the only real use case (testing with small nodes). No
+   production use case for custom branching factors exists.
+
+**Alternatives considered:**
+- Trait-based config (e.g. `HashConfig` trait with associated constants) —
+  same `generic_const_exprs` blocker for SparseChunk parameterisation.
+- Partial implementation (Vector + OrdMap only, not HashMap) — inconsistent
+  API, confusing for users.
+- Internal const generics without public exposure — provides no benefit
+  over the feature flag approach.
+
+**Consequences:**
+The `small-chunks` feature flag remains the mechanism for testing with
+small node sizes. Revisit when `generic_const_exprs` stabilises (tracking
+issue rust-lang/rust#76560).

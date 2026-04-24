@@ -1466,32 +1466,18 @@ eliminating this by wrapping the hasher in `SharedPointer`.
 
 ---
 
-### 5.3 Configurable branching factor (issue [#145](https://github.com/jneem/imbl/issues/145))
+### 5.3 Configurable branching factor (issue [#145](https://github.com/jneem/imbl/issues/145)) — DEFERRED
 
-**What:** Replace compile-time constants and the binary `small-chunks`
-feature flag with const generic parameters. Current constants in `config.rs`:
-- `VECTOR_CHUNK_SIZE`: 64 (or 4 with `small-chunks`)
-- `ORD_CHUNK_SIZE`: 16 (or 6 with `small-chunks`)
-- `HASH_LEVEL_SIZE`: 5 (or 3 with `small-chunks`)
+**Status:** Deferred. See DEC-011.
 
-**Breaking because:** Adds a const generic parameter to every collection
-type. Mitigated by using a default value: `Vector<A, 64>`.
-
-**Design:** The maintainer prefers const generics over feature flags (issue
-#145 / PR #155 discussion). The `small-chunks` feature can be preserved as
-a type alias for backwards compatibility: `type SmallVector<A> = Vector<A, 4>`.
-
-**Ordering rationale:** Must land AFTER 4.3 (CHAMP integration) if CHAMP
-proceeds, because the branching factor parameterisation needs to target
-whatever node architecture exists at that point.
-
-**Complexity:** Moderate. Threading a const generic through all types and
-iterators. May impact compile times.
-
-**Affects:** All five collection types.
-
-**Prerequisites:** 4.3 (CHAMP integration, if proceeding — otherwise
-independent).
+**Blocker:** Stable Rust cannot compute derived constants from const generic
+parameters (`generic_const_exprs` is unstable, tracking issue
+rust-lang/rust#76560). The HAMT's SIMD node hierarchy requires
+`SparseChunk<..., 2^HASH_LEVEL_SIZE>` — this is a computed const generic
+argument, which is not supported. Vector and OrdMap const generics are
+feasible but the scope (~140 type reference sites, ~80 impl blocks) is
+disproportionate to the marginal benefit over the existing `small-chunks`
+feature flag.
 
 **References:** imbl issue #145; PR #155; immer `BL` template parameter.
 
@@ -1741,7 +1727,7 @@ Phase 4 (internals)                │                                      │
 Phase 5 (breaking — v8.0.0)        │                                      │
   5.1 triomphe default ◄── 0.3, 0.4  ✓ DONE (DEC-010)                     │
   5.2 remove Clone bounds ◄── 3.1  ✓ DONE                                │
-  5.3 const generic branching ◄── 4.3 (if proceeding)                     │
+  5.3 const generic branching ◄── 4.3  ✗ DEFERRED (DEC-011: stable Rust blocker) │
   5.4 no_std ◄── 4.3 (if proceeding)                                      │
                                    │                                      │
 Phase 6 (research)                 │                                      │
