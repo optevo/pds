@@ -300,6 +300,78 @@ where
     }
 }
 
+/// A consuming iterator over the entries of a [`GenericInsertionOrderMap`].
+///
+/// Yields `(K, V)` pairs in insertion order.
+pub struct ConsumingIter<K, V, P: SharedPointerKind> {
+    inner: crate::ordmap::ConsumingIter<usize, (K, V), P>,
+}
+
+impl<K, V, P> Iterator for ConsumingIter<K, V, P>
+where
+    K: Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, (k, v))| (k, v))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<K, V, P> ExactSizeIterator for ConsumingIter<K, V, P>
+where
+    K: Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+}
+
+impl<K, V, P> core::iter::FusedIterator for ConsumingIter<K, V, P>
+where
+    K: Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+}
+
+impl<K, V, S, P> IntoIterator for GenericInsertionOrderMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    type Item = (K, V);
+    type IntoIter = ConsumingIter<K, V, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ConsumingIter {
+            inner: self.entries.into_iter(),
+        }
+    }
+}
+
+impl<'a, K, V, S, P> IntoIterator for &'a GenericInsertionOrderMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    type Item = (&'a K, &'a V);
+    type IntoIter = alloc::boxed::Box<dyn Iterator<Item = (&'a K, &'a V)> + 'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        alloc::boxed::Box::new(self.iter())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -423,6 +495,51 @@ mod test {
         b.insert("y", 2);
 
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn into_iter_owned() {
+        let mut map = InsertionOrderMap::new();
+        map.insert("c", 3);
+        map.insert("a", 1);
+        map.insert("b", 2);
+
+        let pairs: Vec<_> = map.into_iter().collect();
+        assert_eq!(pairs, vec![("c", 3), ("a", 1), ("b", 2)]);
+    }
+
+    #[test]
+    fn into_iter_ref() {
+        let mut map = InsertionOrderMap::new();
+        map.insert("a", 1);
+        map.insert("b", 2);
+
+        let pairs: Vec<_> = (&map).into_iter().collect();
+        assert_eq!(pairs, vec![(&"a", &1), (&"b", &2)]);
+    }
+
+    #[test]
+    fn for_loop() {
+        let mut map = InsertionOrderMap::new();
+        map.insert("x", 10);
+        map.insert("y", 20);
+
+        let mut sum = 0;
+        for (_, &v) in &map {
+            sum += v;
+        }
+        assert_eq!(sum, 30);
+    }
+
+    #[test]
+    fn into_iter_preserves_insertion_order() {
+        let mut map = InsertionOrderMap::new();
+        map.insert(3, "c");
+        map.insert(1, "a");
+        map.insert(2, "b");
+
+        let keys: Vec<_> = map.into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec![3, 1, 2]);
     }
 
     #[test]

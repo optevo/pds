@@ -342,6 +342,70 @@ where
     }
 }
 
+/// A consuming iterator over the key-value pairs of a [`GenericHashMultiMap`].
+///
+/// Yields each `(K, V)` pair, flattening the per-key value sets.
+pub struct ConsumingIter<K: Eq, V: Hash + Eq + Clone, S, P: SharedPointerKind> {
+    outer: crate::hashmap::ConsumingIter<(K, GenericHashSet<V, S, P>), P>,
+    inner: Option<(K, crate::hashset::ConsumingIter<V, P>)>,
+}
+
+impl<K, V, S, P> Iterator for ConsumingIter<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some((ref k, ref mut inner)) = self.inner {
+                if let Some(v) = inner.next() {
+                    return Some((k.clone(), v));
+                }
+                self.inner = None;
+            }
+            let (k, set) = self.outer.next()?;
+            self.inner = Some((k, set.into_iter()));
+        }
+    }
+}
+
+impl<K, V, S, P> IntoIterator for GenericHashMultiMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    type Item = (K, V);
+    type IntoIter = ConsumingIter<K, V, S, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ConsumingIter {
+            outer: self.map.into_iter(),
+            inner: None,
+        }
+    }
+}
+
+impl<'a, K, V, S, P> IntoIterator for &'a GenericHashMultiMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    type Item = (&'a K, &'a V);
+    type IntoIter = alloc::boxed::Box<dyn Iterator<Item = (&'a K, &'a V)> + 'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        alloc::boxed::Box::new(self.iter())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -502,6 +566,43 @@ mod test {
         b.insert("x", 2);
 
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn into_iter_owned() {
+        let mut mm = HashMultiMap::new();
+        mm.insert(1, "a");
+        mm.insert(1, "b");
+        mm.insert(2, "c");
+
+        let mut pairs: Vec<_> = mm.into_iter().collect();
+        pairs.sort();
+        assert_eq!(pairs, vec![(1, "a"), (1, "b"), (2, "c")]);
+    }
+
+    #[test]
+    fn into_iter_ref() {
+        let mut mm = HashMultiMap::new();
+        mm.insert(1, "a");
+        mm.insert(2, "b");
+
+        let mut pairs: Vec<_> = (&mm).into_iter().collect();
+        pairs.sort_by_key(|(&k, _)| k);
+        assert_eq!(pairs, vec![(&1, &"a"), (&2, &"b")]);
+    }
+
+    #[test]
+    fn for_loop() {
+        let mut mm = HashMultiMap::new();
+        mm.insert("x", 1);
+        mm.insert("x", 2);
+        mm.insert("y", 3);
+
+        let mut sum = 0;
+        for (_, &v) in &mm {
+            sum += v;
+        }
+        assert_eq!(sum, 6);
     }
 
     #[test]

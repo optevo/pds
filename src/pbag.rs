@@ -370,6 +370,78 @@ where
     }
 }
 
+/// A consuming iterator over the elements of a [`GenericPBag`].
+///
+/// Each item is `(element, count)`.
+pub struct ConsumingIter<A: Hash + Eq, S, P: SharedPointerKind> {
+    inner: crate::hashmap::ConsumingIter<(A, usize), P>,
+    _phantom: core::marker::PhantomData<S>,
+}
+
+impl<A, S, P> Iterator for ConsumingIter<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    P: SharedPointerKind,
+{
+    type Item = (A, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<A, S, P> ExactSizeIterator for ConsumingIter<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    P: SharedPointerKind,
+{
+}
+
+impl<A, S, P> core::iter::FusedIterator for ConsumingIter<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    P: SharedPointerKind,
+{
+}
+
+impl<A, S, P> IntoIterator for GenericPBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    type Item = (A, usize);
+    type IntoIter = ConsumingIter<A, S, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ConsumingIter {
+            inner: self.map.into_iter(),
+            _phantom: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, A, S, P> IntoIterator for &'a GenericPBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    type Item = (&'a A, usize);
+    type IntoIter = core::iter::Map<
+        crate::hashmap::Iter<'a, A, usize, P>,
+        fn((&'a A, &'a usize)) -> (&'a A, usize),
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.map.iter().map(|(k, &v)| (k, v))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -542,6 +614,43 @@ mod test {
         b.insert(2);
 
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn into_iter_owned() {
+        let mut bag = PBag::new();
+        bag.insert("a");
+        bag.insert("a");
+        bag.insert("b");
+
+        let mut items: Vec<_> = bag.into_iter().collect();
+        items.sort_by_key(|(k, _)| *k);
+        assert_eq!(items, vec![("a", 2), ("b", 1)]);
+    }
+
+    #[test]
+    fn into_iter_ref() {
+        let mut bag = PBag::new();
+        bag.insert("a");
+        bag.insert("b");
+
+        let mut items: Vec<_> = (&bag).into_iter().collect();
+        items.sort_by_key(|(k, _)| *k);
+        assert_eq!(items, vec![(&"a", 1), (&"b", 1)]);
+    }
+
+    #[test]
+    fn for_loop() {
+        let mut bag = PBag::new();
+        bag.insert(1);
+        bag.insert(2);
+        bag.insert(2);
+
+        let mut total = 0;
+        for (_, count) in &bag {
+            total += count;
+        }
+        assert_eq!(total, 3);
     }
 
     #[test]
