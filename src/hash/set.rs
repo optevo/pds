@@ -606,6 +606,26 @@ where
         }
     }
 
+    /// Keep only values that are in the given set.
+    ///
+    /// Time: O(n log m) where n = self.len(), m = other.len()
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashset::HashSet;
+    /// let set = hashset!{1, 2, 3, 4, 5};
+    /// let keep = hashset!{2, 4, 6};
+    /// assert_eq!(set.restrict(&keep), hashset!{2, 4});
+    /// ```
+    #[must_use]
+    pub fn restrict(&self, other: &Self) -> Self {
+        let mut out = self.clone();
+        out.retain(|a| other.contains(a));
+        out
+    }
+
     /// Construct the union of two sets.
     ///
     /// Time: O(n log n)
@@ -1459,6 +1479,13 @@ mod test {
         let b: HashSet<i32> = HashSet::new();
         assert!(a.disjoint(&b));
         assert!(b.disjoint(&a));
+    }
+
+    #[test]
+    fn restrict_basic() {
+        let set = hashset! {1, 2, 3, 4, 5};
+        let keep = hashset! {2, 4, 6};
+        assert_eq!(set.restrict(&keep), hashset! {2, 4});
     }
 
     proptest! {

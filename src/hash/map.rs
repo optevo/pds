@@ -33,6 +33,7 @@ use std::ops::{Add, Index, IndexMut};
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
 
+use crate::hashset::GenericHashSet;
 use crate::nodes::hamt::{
     hash_key, Drain as NodeDrain, HashBits, HashValue, Iter as NodeIter, IterMut as NodeIterMut,
     Node,
@@ -844,6 +845,33 @@ where
         Ok(out)
     }
 
+    /// Construct a new map with keys transformed by the given
+    /// function, keeping the values. If the function maps two
+    /// different keys to the same new key, one entry is kept
+    /// (unspecified which).
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let map = hashmap!{1 => "a", 2 => "b", 3 => "c"};
+    /// let negated = map.map_keys(|k| -k);
+    /// assert_eq!(negated.len(), 3);
+    /// assert_eq!(negated.get(&-1), Some(&"a"));
+    /// ```
+    #[must_use]
+    pub fn map_keys<K2, F>(&self, mut f: F) -> GenericHashMap<K2, V, S, P>
+    where
+        K2: Hash + Eq + Clone,
+        S: Default,
+        F: FnMut(&K) -> K2,
+    {
+        self.iter().map(|(k, v)| (f(k), v.clone())).collect()
+    }
+
     /// Split a map into two maps, where the first contains entries
     /// that satisfy the predicate and the second contains entries
     /// that do not.
@@ -1256,6 +1284,52 @@ where
                 self.size -= 1;
             }
         }
+    }
+
+    /// Keep only entries whose keys are in the given set.
+    ///
+    /// Time: O(n log m) where n = self.len(), m = keys.len()
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// # use imbl::hashset::HashSet;
+    /// let map = hashmap!{1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+    /// let keys = hashset!{2, 4};
+    /// let restricted = map.restrict_keys(&keys);
+    /// assert_eq!(restricted, hashmap!{2 => "b", 4 => "d"});
+    /// ```
+    #[must_use]
+    pub fn restrict_keys(&self, keys: &GenericHashSet<K, S, P>) -> Self {
+        let mut out = self.clone();
+        out.retain(|k, _| keys.contains(k));
+        out
+    }
+
+    /// Remove all entries whose keys are in the given set.
+    ///
+    /// Time: O(m log n) where m = keys.len(), n = self.len()
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// # use imbl::hashset::HashSet;
+    /// let map = hashmap!{1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+    /// let keys = hashset!{2, 4};
+    /// let reduced = map.without_keys(&keys);
+    /// assert_eq!(reduced, hashmap!{1 => "a", 3 => "c"});
+    /// ```
+    #[must_use]
+    pub fn without_keys(&self, keys: &GenericHashSet<K, S, P>) -> Self {
+        let mut out = self.clone();
+        for key in keys.iter() {
+            out.remove(key);
+        }
+        out
     }
 
     /// Remove a key/value pair from a map, if it exists, and return
@@ -3138,5 +3212,31 @@ mod test {
         let b: HashMap<i32, &str> = HashMap::new();
         assert!(a.disjoint(&b));
         assert!(b.disjoint(&a));
+    }
+
+    #[test]
+    fn map_keys_basic() {
+        let map = hashmap! {1 => "a", 2 => "b", 3 => "c"};
+        let negated = map.map_keys(|k| -k);
+        assert_eq!(negated.len(), 3);
+        assert_eq!(negated.get(&-1), Some(&"a"));
+        assert_eq!(negated.get(&-2), Some(&"b"));
+        assert_eq!(negated.get(&-3), Some(&"c"));
+    }
+
+    #[test]
+    fn restrict_keys_basic() {
+        let map = hashmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let keys = crate::hashset::HashSet::from_iter(vec![2, 4]);
+        let restricted = map.restrict_keys(&keys);
+        assert_eq!(restricted, hashmap! {2 => "b", 4 => "d"});
+    }
+
+    #[test]
+    fn without_keys_basic() {
+        let map = hashmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let keys = crate::hashset::HashSet::from_iter(vec![2, 4]);
+        let reduced = map.without_keys(&keys);
+        assert_eq!(reduced, hashmap! {1 => "a", 3 => "c"});
     }
 }

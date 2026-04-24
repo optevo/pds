@@ -591,6 +591,26 @@ where
         (left, right)
     }
 
+    /// Keep only values that are in the given set.
+    ///
+    /// Time: O(n log m) where n = self.len(), m = other.len()
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordset::OrdSet;
+    /// let set = ordset!{1, 2, 3, 4, 5};
+    /// let keep = ordset!{2, 4, 6};
+    /// assert_eq!(set.restrict(&keep), ordset!{2, 4});
+    /// ```
+    #[must_use]
+    pub fn restrict(&self, other: &Self) -> Self {
+        let mut out = self.clone();
+        out.retain(|a| other.contains(a));
+        out
+    }
+
     /// Remove the smallest value from a set.
     ///
     /// Time: O(log n)
@@ -1471,5 +1491,12 @@ mod test {
         let b: OrdSet<i32> = OrdSet::new();
         assert!(a.disjoint(&b));
         assert!(b.disjoint(&a));
+    }
+
+    #[test]
+    fn restrict_basic() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let keep = ordset![2, 4, 6];
+        assert_eq!(set.restrict(&keep), ordset![2, 4]);
     }
 }

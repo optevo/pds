@@ -30,6 +30,7 @@ use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Comparable;
 
 use crate::hashmap::GenericHashMap;
+use crate::ordset::GenericOrdSet;
 use crate::nodes::btree::{
     ConsumingIter as NodeConsumingIter, Cursor, InsertAction, Iter as NodeIter,
     IterMut as NodeIterMut, Node,
@@ -1030,6 +1031,74 @@ where
         Ok(out)
     }
 
+    /// Construct a new map with keys transformed by the given
+    /// function, keeping the values. If the function maps two
+    /// different keys to the same new key, later entries (in key
+    /// order) overwrite earlier ones.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c"};
+    /// let negated = map.map_keys(|k| -k);
+    /// assert_eq!(negated, ordmap!{-3 => "c", -2 => "b", -1 => "a"});
+    /// ```
+    #[must_use]
+    pub fn map_keys<K2, F>(&self, mut f: F) -> GenericOrdMap<K2, V, P>
+    where
+        K2: Ord + Clone,
+        F: FnMut(&K) -> K2,
+    {
+        self.iter().map(|(k, v)| (f(k), v.clone())).collect()
+    }
+
+    /// Construct a new map with keys transformed by a monotonically
+    /// increasing function, keeping the values. The function must
+    /// preserve key ordering: if `a < b`, then `f(a) < f(b)`.
+    ///
+    /// This is semantically equivalent to [`map_keys`][GenericOrdMap::map_keys]
+    /// but asserts the monotonicity invariant (in debug builds).
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c"};
+    /// let doubled = map.map_keys_monotonic(|k| k * 2);
+    /// assert_eq!(doubled, ordmap!{2 => "a", 4 => "b", 6 => "c"});
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if the function does not preserve
+    /// key ordering.
+    #[must_use]
+    pub fn map_keys_monotonic<K2, F>(&self, mut f: F) -> GenericOrdMap<K2, V, P>
+    where
+        K2: Ord + Clone,
+        F: FnMut(&K) -> K2,
+    {
+        let mut out = GenericOrdMap::new();
+        let mut prev: Option<K2> = None;
+        for (k, v) in self.iter() {
+            let new_key = f(k);
+            debug_assert!(
+                prev.as_ref().is_none_or(|p| *p < new_key),
+                "map_keys_monotonic: function must preserve key ordering"
+            );
+            prev = Some(new_key.clone());
+            out.insert(new_key, v.clone());
+        }
+        out
+    }
+
     /// Split a map into two maps, where the first contains entries
     /// that satisfy the predicate and the second contains entries
     /// that do not.
@@ -1089,6 +1158,52 @@ where
         for key in &keys_to_remove {
             self.remove(key);
         }
+    }
+
+    /// Keep only entries whose keys are in the given set.
+    ///
+    /// Time: O(n log m) where n = self.len(), m = keys.len()
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// # use imbl::ordset::OrdSet;
+    /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+    /// let keys = ordset!{2, 4};
+    /// let restricted = map.restrict_keys(&keys);
+    /// assert_eq!(restricted, ordmap!{2 => "b", 4 => "d"});
+    /// ```
+    #[must_use]
+    pub fn restrict_keys(&self, keys: &GenericOrdSet<K, P>) -> Self {
+        let mut out = self.clone();
+        out.retain(|k, _| keys.contains(k));
+        out
+    }
+
+    /// Remove all entries whose keys are in the given set.
+    ///
+    /// Time: O(m log n) where m = keys.len(), n = self.len()
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// # use imbl::ordset::OrdSet;
+    /// let map = ordmap!{1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+    /// let keys = ordset!{2, 4};
+    /// let reduced = map.without_keys(&keys);
+    /// assert_eq!(reduced, ordmap!{1 => "a", 3 => "c"});
+    /// ```
+    #[must_use]
+    pub fn without_keys(&self, keys: &GenericOrdSet<K, P>) -> Self {
+        let mut out = self.clone();
+        for key in keys.iter() {
+            out.remove(key);
+        }
+        out
     }
 
     /// Construct a new map by inserting a key/value mapping into a
@@ -3527,5 +3642,35 @@ mod test {
         let b: OrdMap<i32, &str> = OrdMap::new();
         assert!(a.disjoint(&b));
         assert!(b.disjoint(&a));
+    }
+
+    #[test]
+    fn map_keys_basic() {
+        let map = ordmap! {1 => "a", 2 => "b", 3 => "c"};
+        let negated = map.map_keys(|k| -k);
+        assert_eq!(negated, ordmap! {-3 => "c", -2 => "b", -1 => "a"});
+    }
+
+    #[test]
+    fn map_keys_monotonic_basic() {
+        let map = ordmap! {1 => "a", 2 => "b", 3 => "c"};
+        let doubled = map.map_keys_monotonic(|k| k * 2);
+        assert_eq!(doubled, ordmap! {2 => "a", 4 => "b", 6 => "c"});
+    }
+
+    #[test]
+    fn restrict_keys_basic() {
+        let map = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let keys = crate::ordset::OrdSet::from_iter(vec![2, 4]);
+        let restricted = map.restrict_keys(&keys);
+        assert_eq!(restricted, ordmap! {2 => "b", 4 => "d"});
+    }
+
+    #[test]
+    fn without_keys_basic() {
+        let map = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let keys = crate::ordset::OrdSet::from_iter(vec![2, 4]);
+        let reduced = map.without_keys(&keys);
+        assert_eq!(reduced, ordmap! {1 => "a", 3 => "c"});
     }
 }
