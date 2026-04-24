@@ -246,6 +246,14 @@
 //! | [`HashSet<A>`] | [HAMT][hamt] | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] | undefined | O(log n) | O(log n) | O(log n) |
 //! | [`OrdSet<A>`] | [B+tree][b+tree] | [`Clone`] + [`Ord`] | sorted | O(log n) | O(log n) | O(log n) |
 //!
+//! ### Other Collections
+//!
+//! | Type | Description | Key Constraints |
+//! | --- | --- | --- |
+//! | [`PBag<A>`][crate::PBag] | Persistent multiset (bag) — tracks element counts | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//! | [`HashMultiMap<K, V>`][crate::HashMultiMap] | Key → set of values multimap | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//! | [`InsertionOrderMap<K, V>`][crate::InsertionOrderMap] | Map that iterates in insertion order | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//!
 //! ## In-place Mutation
 //!
 //! All of these data structures support in-place copy-on-write
@@ -282,33 +290,47 @@
 //! ## Thread Safety
 //!
 //! The data structures in `imbl` are thread safe by default using
-//! [`Arc`](std::sync::Arc). However, `imbl` also supports `Rc` as the pointer
-//! type through the [`archery`] crate, just like `im-rc` in the original
-//! `im` crate. If you prioritise speed over thread safety, you can use
-//! [`GenericVector<T, shared_pointer::RcK>`](vector::GenericVector) that uses
-//! non-threadsafe but faster `Rc`, instead of the type alias
-//! [`Vector`]. You can also create your own type alias for that.
-//!  It can be done on other types too.
+//! [`triomphe::Arc`](https://docs.rs/triomphe/latest/triomphe/struct.Arc.html)
+//! (a drop-in replacement for `std::sync::Arc` without the weak reference
+//! count — saves 8 bytes per node and eliminates one atomic operation per
+//! clone/drop). Disable the `triomphe` feature to fall back to `std::sync::Arc`.
 //!
-//! ## Feature Flags
+//! `imbl` also supports `Rc` as the pointer type through the [`archery`]
+//! crate, just like `im-rc` in the original `im` crate. If you prioritise
+//! speed over thread safety, you can use
+//! [`GenericVector<T, shared_pointer::RcK>`](vector::GenericVector) with
+//! non-threadsafe but faster `Rc`, instead of the type alias [`Vector`].
+//! The same pattern works on all other collection types.
 //!
-//! `imbl` comes with optional support for the following crates through Cargo
-//! feature flags. You can enable them in your `Cargo.toml` file like this:
+//! ## `no_std` Support
+//!
+//! `imbl` supports `no_std` environments that provide `alloc`. Disable the
+//! default `std` feature:
 //!
 //! ```no_compile
 //! [dependencies]
-//! imbl = { version = "*", features = ["proptest", "serde", "bincode"] }
+//! imbl = { version = "*", default-features = false, features = ["triomphe"] }
 //! ```
 //!
-//! | Feature | Description |
-//! | ------- | ----------- |
-//! | [`proptest`](https://crates.io/crates/proptest) | Strategies for all `imbl` datatypes under a `proptest` namespace, eg. `imbl::vector::proptest::vector()` |
-//! | [`quickcheck`](https://crates.io/crates/quickcheck) | [`quickcheck::Arbitrary`](https://docs.rs/quickcheck/latest/quickcheck/trait.Arbitrary.html) implementations for all `imbl` datatypes |
-//! | [`rayon`](https://crates.io/crates/rayon) | parallel iterator implementations for [`Vector`] |
-//! | [`serde`](https://crates.io/crates/serde) | [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html) and [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html) implementations for all `imbl` datatypes |
-//! | [`bincode`](https://crates.io/crates/bincode) | **Deprecated — will be removed in v8.0.0.** Use serde instead. |
-//! | [`arbitrary`](https://crates.io/crates/arbitrary/) | [`arbitrary::Arbitrary`](https://docs.rs/arbitrary/latest/arbitrary/trait.Arbitrary.html) implementations for all `imbl` datatypes |
-//! | [`triomphe`](https://crates.io/crates/triomphe/) | Use [`triomphe::Arc`](https://docs.rs/triomphe/latest/triomphe/struct.Arc.html) for the default shared pointer. This is a drop-in replacement for [`std::sync::Arc`](https://doc.rust-lang.org/std/sync/struct.Arc.html) that is faster in some cases. |
+//! In `no_std` mode, convenience type aliases (`HashMap`, `HashSet`, `PBag`,
+//! `HashMultiMap`, `InsertionOrderMap`) are not available because they depend
+//! on `std::collections::hash_map::RandomState`. Use the generic variants
+//! (`GenericHashMap`, `GenericHashSet`, etc.) with your own
+//! [`BuildHasher`](core::hash::BuildHasher) implementation instead.
+//! `OrdMap`, `OrdSet`, and `Vector` are always available.
+//!
+//! ## Feature Flags
+//!
+//! | Feature | Default | Description |
+//! | ------- | :-----: | ----------- |
+//! | `std` | Yes | Enables `std`-dependent functionality: `RandomState`-based type aliases (`HashMap`, `HashSet`, etc.), `From<std::collections::*>` conversions, and `Mutex`-based locking. Disable for `no_std + alloc` environments. |
+//! | [`triomphe`](https://crates.io/crates/triomphe/) | Yes | Use [`triomphe::Arc`](https://docs.rs/triomphe/latest/triomphe/struct.Arc.html) as the default shared pointer — faster than `std::sync::Arc` (no weak reference count). |
+//! | [`proptest`](https://crates.io/crates/proptest) | No | Strategies for all `imbl` datatypes under a `proptest` namespace, e.g. `imbl::vector::proptest::vector()` |
+//! | [`quickcheck`](https://crates.io/crates/quickcheck) | No | [`quickcheck::Arbitrary`](https://docs.rs/quickcheck/latest/quickcheck/trait.Arbitrary.html) implementations for all `imbl` datatypes |
+//! | [`rayon`](https://crates.io/crates/rayon) | No | Parallel iterator implementations for all collection types |
+//! | [`serde`](https://crates.io/crates/serde) | No | [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html) and [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html) implementations for all `imbl` datatypes |
+//! | [`arbitrary`](https://crates.io/crates/arbitrary/) | No | [`arbitrary::Arbitrary`](https://docs.rs/arbitrary/latest/arbitrary/trait.Arbitrary.html) implementations for all `imbl` datatypes |
+//! | [`atom`](https://crates.io/crates/arc-swap/) | No | Thread-safe shared values via `arc-swap` (requires `std`) |
 //!
 //! [rrb-tree]: https://infoscience.epfl.ch/record/213452/files/rrbvector.pdf
 //! [hamt]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie

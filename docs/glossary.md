@@ -40,3 +40,14 @@ comments, and documentation — do not substitute synonyms.
 **SparseChunk** — Bitmap-indexed sparse array backed by a `Chunk`. Used in
   HAMT nodes and internally for compact storage.
 
+**Merkle hash** — A u64 hash maintained incrementally on each HAMT node. The
+  root Merkle hash is the sum of `mixer(key_hash)` across all entries (wyhash
+  wide-multiply mixer). Provides an O(1) negative equality fast path: if two
+  maps/sets have different root hashes, they are definitely unequal. Added in
+  Phase 4.4 (DEC-009).
+
+**BuildHasher** — The `core::hash::BuildHasher` trait, parameterised as `S`
+  on all hash-based collections. In `std` mode, defaults to
+  `std::collections::hash_map::RandomState`. In `no_std` mode, users supply
+  their own implementation via the `Generic*` type variants.
+
