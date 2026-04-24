@@ -261,3 +261,74 @@ The hasher field is `SharedPointer<S, P>` in both `GenericHashMap` and
 deref) for generic function calls and `&self.hasher` (auto-deref) for
 return types. The `Clone` impl for both types no longer requires
 `K: Clone`, `V: Clone`, or `S: Clone` — only `P: SharedPointerKind`.
+
+---
+
+## DEC-007: 4.2 CHAMP prototype — mixed results, defer integration
+
+**Date:** 2026-04-24
+**Status:** Accepted
+
+**Context:**
+Plan item 4.2 required a standalone CHAMP (Compressed Hash-Array Mapped
+Prefix-tree) prototype benchmarked against the current SIMD HAMT to make
+a go/no-go decision on item 4.3 (CHAMP integration). The prototype
+(`src/champ.rs`) implements the full OOPSLA 2015 design: two-bitmap
+encoding (datamap + nodemap), contiguous value/child arrays, canonical
+deletion, and `Arc`-based structural sharing. Benchmarked with criterion,
+`target-cpu=native`, on Apple M5 Max.
+
+**Benchmark results (median, 100 samples):**
+
+| Operation | Size | CHAMP | HAMT | Delta |
+|-----------|------|-------|------|-------|
+| i64 lookup | 10K | 138 µs | 84 µs | +64% slower |
+| i64 lookup | 100K | 1720 µs | 1534 µs | +12% slower |
+| str lookup | 10K | 176 µs | 149 µs | +18% slower |
+| str lookup | 100K | 3345 µs | 3051 µs | +10% slower |
+| i64 insert (persistent) | 10K | 2700 µs | 3841 µs | -30% faster |
+| i64 remove (persistent) | 10K | 2258 µs | 3811 µs | -41% faster |
+| i64 iter | 100K | 511 µs | 909 µs | -44% faster |
+| str insert (persistent) | 10K | 3241 µs | 4353 µs | -26% faster |
+| str remove (persistent) | 10K | 2855 µs | 4521 µs | -37% faster |
+| str iter | 100K | 543 µs | 853 µs | -36% faster |
+
+**Decision:**
+Do not proceed to 4.3 (full CHAMP integration) at this time. The
+results are mixed — CHAMP is dramatically faster for persistent
+mutations (26-41%) and iteration (36-44%), but significantly slower for
+lookups (10-64%). The SIMD HAMT's parallel probe is genuinely effective
+for lookups and cannot be replicated with CHAMP's popcount-based
+indexing.
+
+**Rationale:**
+- The 64% i64 lookup regression at 10K is too large to accept for a
+  general-purpose collection library. Lookups are the most common
+  operation in typical map usage.
+- The mutation and iteration wins are impressive but insufficient to
+  offset the lookup penalty for most workloads.
+- A hybrid approach (CHAMP node layout with SIMD probing) might capture
+  both benefits, but that requires further research — it's not the
+  standard CHAMP design from the paper.
+
+**Alternatives considered:**
+- Accept the lookup regression and adopt CHAMP for its mutation/iteration
+  wins — rejected because lookup is the dominant operation for most map
+  users.
+- Abandon CHAMP entirely — rejected because the prototype demonstrates
+  significant structural advantages (contiguous layout, canonical form)
+  that could be exploited in future work.
+- Hybrid SIMD-CHAMP — promising but speculative; deferred to Phase 6
+  as a research item.
+
+**Consequences:**
+- 4.3 (CHAMP integration) is deferred indefinitely. The current SIMD
+  HAMT remains.
+- The prototype (`src/champ.rs`) is retained for future reference and
+  benchmarking.
+- The CHAMP iteration advantage (36-44%) motivates investigating whether
+  the SIMD HAMT's iteration can be improved independently (the current
+  3-tier node hierarchy fragments iteration across node types).
+- Future work: explore a hybrid SIMD-CHAMP that uses CHAMP's two-bitmap
+  layout for memory density and iteration but adds SIMD control groups
+  for lookup acceleration.

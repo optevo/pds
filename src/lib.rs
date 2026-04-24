@@ -379,6 +379,11 @@ pub mod hash_multimap;
 pub mod insertion_order_map;
 pub mod pbag;
 
+// CHAMP prototype — standalone benchmark against the current SIMD HAMT.
+// Hidden from docs; exists only for the go/no-go benchmark (plan item 4.2).
+#[doc(hidden)]
+pub mod champ;
+
 pub use crate::hash_multimap::{GenericHashMultiMap, HashMultiMap};
 pub use crate::hashmap::{GenericHashMap, HashMap};
 pub use crate::insertion_order_map::{GenericInsertionOrderMap, InsertionOrderMap};

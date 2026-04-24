@@ -64,6 +64,17 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 4.2: CHAMP prototype benchmark.** Built a standalone
+  CHAMP implementation (`src/champ.rs`): two-bitmap encoding
+  (datamap + nodemap), contiguous value/child arrays, canonical deletion,
+  Arc-based structural sharing. Benchmarked against the SIMD HAMT.
+  Results: CHAMP is 26-41% faster for persistent insert/remove and
+  36-44% faster for iteration (contiguous value arrays), but 10-64%
+  slower for lookups (popcount vs SIMD parallel probe). Decision
+  (DEC-007): do not proceed to 4.3 — the lookup regression is too
+  large for a general-purpose library. The SIMD HAMT remains. The
+  prototype is retained for future hybrid-SIMD-CHAMP research.
+
 - **[2026-04-24] 4.5: SharedPointer-wrapped hasher.** Wrapped the hasher
   in `SharedPointer<S, P>` in both `GenericHashMap` and `GenericHashSet`.
   Cloning the map now bumps a refcount instead of cloning the hasher,
@@ -315,14 +326,13 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-5.2 (Clone bounds cleanup) and 4.5 (SharedPointer-wrapped hasher)
-complete. Agreed sequencing for remaining work:
+5.2, 4.5, and 4.2 complete. CHAMP benchmark result (DEC-007): SIMD HAMT
+retained — CHAMP wins on mutation/iteration but loses on lookup.
+Node layout is settled (SIMD HAMT stays). Remaining work:
 
-1. **4.2 CHAMP prototype** — standalone research benchmark against
-   current SIMD HAMT. Go/no-go gate for 4.3.
-2. **3.3 Owned-node construction** — targets whichever node layout wins
-   (current SIMD HAMT or CHAMP).
-3. **4.4 Merkle caching** — layered on after node layout is settled.
+1. **3.3 Transient/builder API** — owned-node construction for the
+   existing SIMD HAMT.
+2. **4.4 Merkle caching** — layered on the settled node layout.
 
 Phase 3 status: 3.1 resolved (DEC-004). 3.2 complete. 3.4 partially
 complete (par_iter/FromParallelIterator/ParallelExtend done for all
@@ -1299,7 +1309,9 @@ Implementation"; Hinze and Paterson, "Finger Trees" (JFP 2006).
 
 ---
 
-### 4.2 CHAMP prototype benchmark
+### 4.2 CHAMP prototype benchmark — DONE
+
+**Status:** Complete. See Done section for details and DEC-007.
 
 **Important context:** The current HAMT is NOT a textbook bitmap trie. It
 is a SIMD-accelerated hybrid with a 3-tier node hierarchy:
@@ -1753,7 +1765,7 @@ Phase 3 (mutation + parallel perf)  │                                      │
                                    │                                      │
 Phase 4 (internals)                │                                      │
   4.1 prefix buffer ◄── 2.1                                               │
-  4.2 CHAMP prototype ◄── 0.3, 0.5                                        │
+  4.2 CHAMP prototype ◄── 0.3, 0.5  ✓ DONE (DEC-007: HAMT retained)                                        │
   4.3 CHAMP integration ◄── 4.2, 0.1, 0.2 (only if benchmarks justify)   │
   4.4 Merkle hash caching ◄── 0.3, 0.5                                    │
   4.5 SharedPointer hasher PoC ◄── 5.2  ✓ DONE                                    │
