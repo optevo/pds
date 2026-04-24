@@ -690,6 +690,35 @@ where
     {
         self.is_proper_submap_by(other.borrow(), PartialEq::eq)
     }
+
+    /// Compute the diff between two hash maps.
+    ///
+    /// Returns an iterator of [`DiffItem`] values describing the
+    /// differences between `self` (old) and `other` (new). Keys
+    /// present only in `self` produce [`DiffItem::Remove`], keys
+    /// present only in `other` produce [`DiffItem::Add`], and keys
+    /// present in both with different values produce
+    /// [`DiffItem::Update`].
+    ///
+    /// If the two maps share the same root (i.e.
+    /// [`ptr_eq`][GenericHashMap::ptr_eq] returns true), the iterator
+    /// is empty without traversing any elements.
+    ///
+    /// Time: O(n + m) where n = self.len(), m = other.len()
+    #[must_use]
+    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, K, V, S, P>
+    where
+        V: PartialEq,
+    {
+        let done = self.ptr_eq(other);
+        DiffIter {
+            old_iter: self.iter(),
+            new_iter: other.iter(),
+            old_map: self,
+            new_map: other,
+            phase: if done { 2 } else { 0 },
+        }
+    }
 }
 
 impl<K, V, S, P> GenericHashMap<K, V, S, P>
@@ -2236,6 +2265,100 @@ where
 //     }
 // }
 
+// Diff
+
+/// An item in a diff between two hash maps.
+///
+/// Produced by [`GenericHashMap::diff`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum DiffItem<'a, 'b, K, V> {
+    /// This key-value pair was added (present in new map only).
+    Add(&'b K, &'b V),
+    /// This key's value changed between the two maps.
+    Update {
+        /// The old key-value pair.
+        old: (&'a K, &'a V),
+        /// The new key-value pair.
+        new: (&'b K, &'b V),
+    },
+    /// This key-value pair was removed (present in old map only).
+    Remove(&'a K, &'a V),
+}
+
+/// An iterator over the differences between two hash maps.
+///
+/// Created by [`GenericHashMap::diff`].
+pub struct DiffIter<'a, 'b, K, V, S, P: SharedPointerKind> {
+    old_iter: Iter<'a, K, V, P>,
+    new_iter: Iter<'b, K, V, P>,
+    old_map: &'a GenericHashMap<K, V, S, P>,
+    new_map: &'b GenericHashMap<K, V, S, P>,
+    // 0 = scanning old for Remove/Update, 1 = scanning new for Add, 2 = done
+    phase: u8,
+}
+
+impl<'a, 'b, K, V, S, P> Iterator for DiffIter<'a, 'b, K, V, S, P>
+where
+    K: Hash + Eq,
+    V: PartialEq,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    type Item = DiffItem<'a, 'b, K, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.phase {
+                0 => {
+                    // Phase 0: iterate old map, find Remove/Update items.
+                    match self.old_iter.next() {
+                        Some((k, v)) => {
+                            match self.new_map.get_key_value(k) {
+                                None => return Some(DiffItem::Remove(k, v)),
+                                Some((k2, v2)) => {
+                                    if v != v2 {
+                                        return Some(DiffItem::Update {
+                                            old: (k, v),
+                                            new: (k2, v2),
+                                        });
+                                    }
+                                    // Same value — skip.
+                                }
+                            }
+                        }
+                        None => self.phase = 1,
+                    }
+                }
+                1 => {
+                    // Phase 1: iterate new map, find Add items.
+                    match self.new_iter.next() {
+                        Some((k, v)) => {
+                            if !self.old_map.contains_key(k) {
+                                return Some(DiffItem::Add(k, v));
+                            }
+                            // Key exists in old — already handled in phase 0.
+                        }
+                        None => {
+                            self.phase = 2;
+                            return None;
+                        }
+                    }
+                }
+                _ => return None,
+            }
+        }
+    }
+}
+
+impl<K, V, S, P> FusedIterator for DiffIter<'_, '_, K, V, S, P>
+where
+    K: Hash + Eq,
+    V: PartialEq,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+}
+
 // Proptest
 #[cfg(any(test, feature = "proptest"))]
 #[doc(hidden)]
@@ -2620,5 +2743,113 @@ mod test {
 
         // Self-comparison.
         assert_eq!(map, map);
+    }
+
+    #[test]
+    fn diff_identical_maps() {
+        let mut map = HashMap::new();
+        for i in 0..50 {
+            map.insert(i, i * 2);
+        }
+        let map2 = map.clone();
+        assert_eq!(map.diff(&map2).count(), 0);
+    }
+
+    #[test]
+    fn diff_ptr_eq_fast_path() {
+        let mut map = HashMap::new();
+        for i in 0..50 {
+            map.insert(i, i * 2);
+        }
+        let map2 = map.clone();
+        assert!(map.ptr_eq(&map2));
+        assert_eq!(map.diff(&map2).count(), 0);
+    }
+
+    #[test]
+    fn diff_additions() {
+        let map1: HashMap<i32, i32> = HashMap::new();
+        let mut map2 = HashMap::new();
+        map2.insert(1, 10);
+        map2.insert(2, 20);
+        let diffs: Vec<_> = map1.diff(&map2).collect();
+        assert_eq!(diffs.len(), 2);
+        assert!(diffs.iter().all(|d| matches!(d, DiffItem::Add(_, _))));
+    }
+
+    #[test]
+    fn diff_removals() {
+        let mut map1 = HashMap::new();
+        map1.insert(1, 10);
+        map1.insert(2, 20);
+        let map2: HashMap<i32, i32> = HashMap::new();
+        let diffs: Vec<_> = map1.diff(&map2).collect();
+        assert_eq!(diffs.len(), 2);
+        assert!(diffs.iter().all(|d| matches!(d, DiffItem::Remove(_, _))));
+    }
+
+    #[test]
+    fn diff_updates() {
+        let mut map1 = HashMap::new();
+        map1.insert(1, 10);
+        map1.insert(2, 20);
+        let mut map2 = map1.clone();
+        map2.insert(1, 99);
+        let diffs: Vec<_> = map1.diff(&map2).collect();
+        assert_eq!(diffs.len(), 1);
+        match &diffs[0] {
+            DiffItem::Update { old, new } => {
+                assert_eq!(*old.0, 1);
+                assert_eq!(*old.1, 10);
+                assert_eq!(*new.0, 1);
+                assert_eq!(*new.1, 99);
+            }
+            _ => panic!("expected Update"),
+        }
+    }
+
+    #[test]
+    fn diff_mixed() {
+        let mut map1 = HashMap::new();
+        for i in 0..5 {
+            map1.insert(i, i * 10);
+        }
+        let mut map2 = map1.clone();
+        map2.remove(&0); // Remove
+        map2.insert(2, 999); // Update
+        map2.insert(10, 100); // Add
+        let diffs: Vec<_> = map1.diff(&map2).collect();
+        assert_eq!(diffs.len(), 3);
+        let mut adds = 0;
+        let mut updates = 0;
+        let mut removes = 0;
+        for d in &diffs {
+            match d {
+                DiffItem::Add(_, _) => adds += 1,
+                DiffItem::Update { .. } => updates += 1,
+                DiffItem::Remove(_, _) => removes += 1,
+            }
+        }
+        assert_eq!(adds, 1);
+        assert_eq!(updates, 1);
+        assert_eq!(removes, 1);
+    }
+
+    #[test]
+    fn diff_empty_maps() {
+        let map1: HashMap<i32, i32> = HashMap::new();
+        let map2: HashMap<i32, i32> = HashMap::new();
+        assert_eq!(map1.diff(&map2).count(), 0);
+    }
+
+    #[test]
+    fn diff_is_fused() {
+        let mut map1 = HashMap::new();
+        map1.insert(1, 10);
+        let map2: HashMap<i32, i32> = HashMap::new();
+        let mut iter = map1.diff(&map2);
+        assert!(iter.next().is_some());
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
     }
 }

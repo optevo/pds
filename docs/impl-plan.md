@@ -64,6 +64,16 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 2.4: HashMap/HashSet diff.** Added `diff()` to HashMap and
+  HashSet, producing `DiffIter` iterators that yield `DiffItem` variants.
+  HashMap diff yields `Add/Update/Remove` (matching OrdMap's API); HashSet
+  diff yields `Add/Remove` (matching OrdSet's API). Implementation uses a
+  two-phase iterate-and-lookup approach: phase 0 iterates the old collection
+  finding Remove/Update items via lookup in the new collection, phase 1
+  iterates the new collection finding Add items via lookup in the old
+  collection. Includes `ptr_eq` fast path. Implements FusedIterator. The
+  simultaneous trie walk with subtree skipping is deferred to 3.6.
+
 - **[2026-04-24] 2.5: Vector diff.** Added `diff()` to Vector, producing a
   `DiffIter` that yields positional `DiffItem::{Add, Update, Remove}` items.
   Compares elements at each index; excess elements in the longer vector are
@@ -156,9 +166,9 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — items 2.2, 2.3, 2.5 complete. Remaining Phase 2 items: 2.1 (RRB
-concat fix), 2.4 (HashMap/HashSet diff), 2.6 (patch/apply — blocked on
-2.4). Phase 3 item 3.5 complete. Items 3.1–3.4 and 3.6 unblocked.
+Phase 2 — items 2.2, 2.3, 2.4, 2.5 complete. Remaining: 2.1 (RRB concat
+fix), 2.6 (patch/apply — unblocked). Phase 3 item 3.5 complete. Items
+3.1–3.4 and 3.6 unblocked.
 
 ---
 

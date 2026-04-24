@@ -371,6 +371,30 @@ where
     {
         self.len() != other.borrow().len() && self.is_subset(other)
     }
+
+    /// Compute the diff between two hash sets.
+    ///
+    /// Returns an iterator of [`DiffItem`] values describing the
+    /// differences between `self` (old) and `other` (new). Values
+    /// present only in `self` produce [`DiffItem::Remove`], values
+    /// present only in `other` produce [`DiffItem::Add`].
+    ///
+    /// If the two sets share the same root (i.e.
+    /// [`ptr_eq`][GenericHashSet::ptr_eq] returns true), the iterator
+    /// is empty without traversing any elements.
+    ///
+    /// Time: O(n + m) where n = self.len(), m = other.len()
+    #[must_use]
+    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, A, S, P> {
+        let done = self.ptr_eq(other);
+        DiffIter {
+            old_iter: self.iter(),
+            new_iter: other.iter(),
+            old_set: self,
+            new_set: other,
+            phase: if done { 2 } else { 0 },
+        }
+    }
 }
 
 impl<A, S, P> GenericHashSet<A, S, P>
@@ -1037,6 +1061,75 @@ where
     }
 }
 
+// Diff
+
+/// An item in a diff between two hash sets.
+///
+/// Produced by [`GenericHashSet::diff`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum DiffItem<'a, 'b, A> {
+    /// This value was added (present in new set only).
+    Add(&'b A),
+    /// This value was removed (present in old set only).
+    Remove(&'a A),
+}
+
+/// An iterator over the differences between two hash sets.
+///
+/// Created by [`GenericHashSet::diff`].
+pub struct DiffIter<'a, 'b, A, S, P: SharedPointerKind> {
+    old_iter: Iter<'a, A, P>,
+    new_iter: Iter<'b, A, P>,
+    old_set: &'a GenericHashSet<A, S, P>,
+    new_set: &'b GenericHashSet<A, S, P>,
+    // 0 = scanning old for Remove, 1 = scanning new for Add, 2 = done
+    phase: u8,
+}
+
+impl<'a, 'b, A, S, P> Iterator for DiffIter<'a, 'b, A, S, P>
+where
+    A: Hash + Eq,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    type Item = DiffItem<'a, 'b, A>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.phase {
+                0 => match self.old_iter.next() {
+                    Some(v) => {
+                        if !self.new_set.contains(v) {
+                            return Some(DiffItem::Remove(v));
+                        }
+                    }
+                    None => self.phase = 1,
+                },
+                1 => match self.new_iter.next() {
+                    Some(v) => {
+                        if !self.old_set.contains(v) {
+                            return Some(DiffItem::Add(v));
+                        }
+                    }
+                    None => {
+                        self.phase = 2;
+                        return None;
+                    }
+                },
+                _ => return None,
+            }
+        }
+    }
+}
+
+impl<A, S, P> FusedIterator for DiffIter<'_, '_, A, S, P>
+where
+    A: Hash + Eq,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+}
+
 // Proptest
 #[cfg(any(test, feature = "proptest"))]
 #[doc(hidden)]
@@ -1137,6 +1230,77 @@ mod test {
 
         // Self-comparison.
         assert_eq!(set, set);
+    }
+
+    #[test]
+    fn diff_identical_sets() {
+        let set: HashSet<i32> = (0..50).collect();
+        let set2 = set.clone();
+        assert_eq!(set.diff(&set2).count(), 0);
+    }
+
+    #[test]
+    fn diff_ptr_eq_fast_path() {
+        let set: HashSet<i32> = (0..50).collect();
+        let set2 = set.clone();
+        assert!(set.ptr_eq(&set2));
+        assert_eq!(set.diff(&set2).count(), 0);
+    }
+
+    #[test]
+    fn diff_additions() {
+        let set1: HashSet<i32> = HashSet::new();
+        let set2: HashSet<i32> = (0..3).collect();
+        let diffs: Vec<_> = set1.diff(&set2).collect();
+        assert_eq!(diffs.len(), 3);
+        assert!(diffs.iter().all(|d| matches!(d, DiffItem::Add(_))));
+    }
+
+    #[test]
+    fn diff_removals() {
+        let set1: HashSet<i32> = (0..3).collect();
+        let set2: HashSet<i32> = HashSet::new();
+        let diffs: Vec<_> = set1.diff(&set2).collect();
+        assert_eq!(diffs.len(), 3);
+        assert!(diffs.iter().all(|d| matches!(d, DiffItem::Remove(_))));
+    }
+
+    #[test]
+    fn diff_mixed() {
+        let set1: HashSet<i32> = (0..5).collect();
+        let mut set2 = set1.clone();
+        set2.remove(&0);
+        set2.insert(10);
+        let diffs: Vec<_> = set1.diff(&set2).collect();
+        assert_eq!(diffs.len(), 2);
+        let mut adds = 0;
+        let mut removes = 0;
+        for d in &diffs {
+            match d {
+                DiffItem::Add(_) => adds += 1,
+                DiffItem::Remove(_) => removes += 1,
+            }
+        }
+        assert_eq!(adds, 1);
+        assert_eq!(removes, 1);
+    }
+
+    #[test]
+    fn diff_empty_sets() {
+        let set1: HashSet<i32> = HashSet::new();
+        let set2: HashSet<i32> = HashSet::new();
+        assert_eq!(set1.diff(&set2).count(), 0);
+    }
+
+    #[test]
+    fn diff_is_fused() {
+        let mut set1: HashSet<i32> = HashSet::new();
+        set1.insert(1);
+        let set2: HashSet<i32> = HashSet::new();
+        let mut iter = set1.diff(&set2);
+        assert!(iter.next().is_some());
+        assert!(iter.next().is_none());
+        assert!(iter.next().is_none());
     }
 
     proptest! {
