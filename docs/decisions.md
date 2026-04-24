@@ -458,3 +458,53 @@ path that rejects unequal maps in O(1). The hash only covers keys (via their
 existing HashBits), not values — value-only changes are not detected by the
 Merkle hash. This means the Merkle check cannot be used for diff optimisation
 (where value changes matter), only for equality.
+
+---
+
+## DEC-010: 5.1 Default to triomphe::Arc
+
+**Date:** 2026-04-24
+**Status:** Accepted
+
+**Context:**
+The `triomphe` feature flag already existed, switching the internal
+`DefaultSharedPtr` from `std::sync::Arc` (via archery's `ArcK`) to
+`triomphe::Arc` (via `ArcTK`). `triomphe::Arc` omits the weak reference
+count, saving 8 bytes per allocation and eliminating one atomic RMW per
+clone/drop. The feature was opt-in; this decision makes it the default.
+
+**Decision:**
+Add `triomphe` to the default features in `Cargo.toml`. All collections
+now use `triomphe::Arc` internally by default. Users who need
+`Arc::downgrade` (weak references) can opt out with
+`default-features = false`.
+
+**Benchmark results (triomphe vs std::Arc):**
+
+| Benchmark | Change |
+|-----------|--------|
+| hashmap_i64/lookup_10000 | -0.8% |
+| hashmap_i64/insert_mut_10000 | +4.8% (noise — 100K shows -4.2%) |
+| hashmap_i64/remove_mut_10000 | -5.3% |
+| hashmap_str/lookup_10000 | -2.0% |
+| hashmap_str/insert_mut_10000 | -6.8% |
+| hashmap_str/remove_mut_10000 | -8.6% |
+
+String-key operations improve 2-9% (allocation-heavy paths benefit most).
+Integer-key operations show mixed results at 10K but consistent improvement
+at 100K. No significant regressions.
+
+**Alternatives considered:**
+- Keep as opt-in — rejected because the performance improvement is
+  consistent and the trade-off (no weak references) is acceptable for
+  persistent collections that never use `Arc::downgrade` internally.
+- Remove std::Arc support entirely — rejected because downstream users
+  may have legitimate reasons (weak references, interop with other crates
+  that require `std::Arc`).
+
+**Consequences:**
+Breaking change: the concrete pointer type changes for all users not
+already enabling the `triomphe` feature. Batched into v8.0.0. Users who
+extract or inspect internal pointer types, or who rely on `Arc::downgrade`,
+must opt out of the default feature. The `triomphe` crate becomes a
+required dependency (previously optional).

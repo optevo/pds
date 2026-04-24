@@ -64,6 +64,14 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 5.1: Default to triomphe::Arc.**
+  Added `triomphe` to default features. All collections now use
+  `triomphe::Arc` (no weak reference count) internally — saves 8 bytes
+  per node, eliminates one atomic RMW per clone/drop. String-key hashmap
+  ops improved 2-9%, integer-key ops mixed at 10K but consistent
+  improvement at 100K. Users needing `Arc::downgrade` can opt out with
+  `default-features = false`. See DEC-010.
+
 - **[2026-04-24] 4.4: Merkle hash caching — accepted, always-on.**
   Each HAMT node stores a u64 merkle_hash maintained incrementally during
   mutations. Root hash is the sum of mixer(key_hash) across all entries
@@ -344,21 +352,16 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-5.2, 4.5, 4.2, 3.3, and 4.4 complete. CHAMP benchmark result (DEC-007):
-SIMD HAMT retained — CHAMP wins on mutation/iteration but loses on
-lookup. Node layout is settled (SIMD HAMT stays). 4.4 Merkle hash
-caching accepted (DEC-009) — O(1) negative equality check, ~5% worst-case
-overhead on remove_mut. All Phase 3 and Phase 4 items resolved.
+Phases 0–4 complete. Phase 5 in progress — 5.1 done (triomphe default,
+DEC-010), 5.2 done (Clone bounds). Remaining Phase 5: 5.3 (const generic
+branching), 5.4 (no_std). Both unblocked since 4.3 (CHAMP) was deferred.
 
-Phase 3 status: 3.1 resolved (DEC-004). 3.2 complete. 3.3 resolved
-(DEC-008 — already handled by `&mut self` methods). 3.4 partially
-complete (par_iter/FromParallelIterator/ParallelExtend done for all
-hash/ord types; par_iter_mut for HashMap; par_sort for Vector; parallel
-bulk ops deferred to Phase 6 — needs tree-level parallelism). 3.5
-complete. 3.6 complete.
-Phase 4: 4.1 resolved (4-buffer already symmetric). 4.2 done (DEC-007).
-4.3 deferred (HAMT retained). 4.4 done (DEC-009). 4.5 done (hasher
-behind SharedPointer).
+Phase 3 status: All resolved. 3.4 partially complete (par_iter done for
+all types; par_iter_mut for HashMap; par_sort for Vector; parallel bulk
+ops deferred to Phase 6).
+Phase 4: All resolved. SIMD HAMT retained (DEC-007). Merkle caching
+accepted (DEC-009). SharedPointer-wrapped hasher done.
+Phase 5: 5.1 done (DEC-010). 5.2 done.
 
 ---
 
@@ -1428,26 +1431,14 @@ All items in this phase are breaking changes. They must be batched into a
 single major version bump to minimise disruption for downstream users.
 Ship as v8.0.0 when all are ready.
 
-### 5.1 Default to triomphe::Arc
+### 5.1 Default to triomphe::Arc — DONE
 
-**What:** Change `DefaultSharedPtr` from `ArcK` (std::sync::Arc) to `ArcTK`
-(triomphe::Arc). triomphe's Arc omits the weak reference count, saving
-8 bytes per allocation and removing one atomic RMW from every clone/drop.
+**Status:** Complete. See Done section for details and DEC-010.
 
-**Breaking because:** The concrete type of internal pointers changes.
-Any downstream code that extracts or inspects the pointer type (rare but
-possible) will break. Code using `Arc::downgrade` on extracted pointers
-will break (triomphe has no weak references).
-
-**Validation:** Memory profiling benchmarks (from 0.3) must show the
-expected ~8 bytes/node reduction. Throughput benchmarks must not regress.
-
-**Complexity:** Low. The feature already exists and works. The change is
-flipping the default in `shared_ptr.rs`.
-
-**Affects:** All five collection types.
-
-**Prerequisites:** 0.3 (memory profiling benchmarks).
+**What was done:** Added `triomphe` to default features in Cargo.toml.
+`DefaultSharedPtr` now resolves to `ArcTK` (triomphe::Arc) by default.
+String-key hashmap ops improved 2-9%, no significant regressions.
+Users can opt out with `default-features = false`.
 
 **References:** triomphe (docs.rs/triomphe); archery (docs.rs/archery).
 
@@ -1748,7 +1739,7 @@ Phase 4 (internals)                │                                      │
   4.5 SharedPointer hasher PoC ◄── 5.2  ✓ DONE                                    │
                                    │                                      │
 Phase 5 (breaking — v8.0.0)        │                                      │
-  5.1 triomphe default ◄── 0.3, 0.4                                       │
+  5.1 triomphe default ◄── 0.3, 0.4  ✓ DONE (DEC-010)                     │
   5.2 remove Clone bounds ◄── 3.1  ✓ DONE                                │
   5.3 const generic branching ◄── 4.3 (if proceeding)                     │
   5.4 no_std ◄── 4.3 (if proceeding)                                      │

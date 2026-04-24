@@ -8,7 +8,11 @@ pub use archery::{ArcK, RcK, SharedPointer, SharedPointerKind};
 pub use archery::ArcTK;
 
 #[cfg(not(feature = "triomphe"))]
-/// Default shared pointer used in data structures like [`vector::Vector`] in this crate. This alias points to [`ArcK`] if `triomphe` is disabled, [`ArcTK`] otherwise.
+/// Default shared pointer used in data structures like [`vector::Vector`] in this crate.
+///
+/// Points to [`ArcTK`] (triomphe::Arc) by default — saves 8 bytes per node (no weak
+/// reference count) and eliminates one atomic RMW per clone/drop. Disable the default
+/// `triomphe` feature to fall back to [`ArcK`] (std::sync::Arc).
 ///
 /// [`vector::Vector`]: ./type.Vector.html
 /// [`ArcK`]: https://docs.rs/archery/latest/archery/shared_pointer/kind/struct.ArcK.html
@@ -16,7 +20,11 @@ pub use archery::ArcTK;
 pub type DefaultSharedPtr = ArcK;
 
 #[cfg(feature = "triomphe")]
-/// Default shared pointer used in data structures like [`vector::Vector`] in this crate. This alias points to [`ArcK`] if `triomphe` is disabled, [`ArcTK`] otherwise.
+/// Default shared pointer used in data structures like [`vector::Vector`] in this crate.
+///
+/// Points to [`ArcTK`] (triomphe::Arc) by default — saves 8 bytes per node (no weak
+/// reference count) and eliminates one atomic RMW per clone/drop. Disable the default
+/// `triomphe` feature to fall back to [`ArcK`] (std::sync::Arc).
 ///
 /// [`vector::Vector`]: ./type.Vector.html
 /// [`ArcK`]: https://docs.rs/archery/latest/archery/shared_pointer/kind/struct.ArcK.html
