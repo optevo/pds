@@ -92,19 +92,22 @@ pub type HashSet<A> = GenericHashSet<A, RandomState, DefaultSharedPtr>;
 #[cfg(all(not(feature = "std"), feature = "foldhash"))]
 pub type HashSet<A> = GenericHashSet<A, foldhash::fast::RandomState, DefaultSharedPtr>;
 
-/// An unordered set.
+/// An unordered set backed by a [hash array mapped trie][1].
 ///
-/// An immutable hash set using [hash array mapped tries] [1].
+/// Most operations are O(log<sub>32</sub> n), which is effectively O(1)
+/// for practical collection sizes. Clone is O(1) via structural sharing.
 ///
-/// Most operations on this set are O(log<sub>x</sub> n) for a
-/// suitably high *x* that it should be nearly O(1) for most sets.
-/// Because of this, it's a great choice for a generic set as long as
-/// you don't mind that values will need to implement
-/// [`Hash`][std::hash::Hash] and [`Eq`][std::cmp::Eq].
+/// **Equality is O(1)** for sets that share a common ancestor (the common
+/// case with persistent data structures). Internally, each node maintains
+/// a Merkle hash — a commutative fingerprint of all elements. Sets with
+/// the same hasher, same size, and matching Merkle hash are treated as
+/// equal without element-by-element comparison. The false positive rate
+/// (~2<sup>−64</sup>) is below hardware error rates.
 ///
-/// Values will have a predictable order based on the hasher
-/// being used. Unless otherwise specified, this will be the standard
-/// [`RandomState`][std::collections::hash_map::RandomState] hasher.
+/// For sets with independent hashers (no shared ancestor), equality falls
+/// back to O(n) element-by-element comparison.
+///
+/// Values must implement [`Hash`][std::hash::Hash] and [`Eq`][std::cmp::Eq].
 ///
 /// [1]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
 /// [std::cmp::Eq]: https://doc.rust-lang.org/std/cmp/trait.Eq.html

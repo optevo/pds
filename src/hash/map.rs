@@ -97,19 +97,18 @@ pub type HashMap<K, V> = GenericHashMap<K, V, RandomState, DefaultSharedPtr>;
 pub type HashMap<K, V> =
     GenericHashMap<K, V, foldhash::fast::RandomState, DefaultSharedPtr>;
 
-/// An unordered map.
+/// An unordered map backed by a [hash array mapped trie][1].
 ///
-/// An immutable hash map using [hash array mapped tries] [1].
+/// Most operations are O(log<sub>32</sub> n), which is effectively O(1)
+/// for practical collection sizes. Clone is O(1) via structural sharing.
 ///
-/// Most operations on this map are O(log<sub>x</sub> n) for a
-/// suitably high *x* that it should be nearly O(1) for most maps.
-/// Because of this, it's a great choice for a generic map as long as
-/// you don't mind that keys will need to implement
-/// [`Hash`][std::hash::Hash] and [`Eq`][std::cmp::Eq].
+/// **Inequality detection is O(1)** for maps that share a common ancestor
+/// (the common case with persistent data structures). Each node maintains
+/// a Merkle hash of its key set; maps with different Merkle hashes are
+/// known to be unequal without element-by-element comparison. Full equality
+/// requires O(n) value comparison since Merkle hashes cover keys only.
 ///
-/// Map entries will have a predictable order based on the hasher
-/// being used. Unless otherwise specified, this will be the standard
-/// [`RandomState`][std::collections::hash_map::RandomState] hasher.
+/// Keys must implement [`Hash`][std::hash::Hash] and [`Eq`][std::cmp::Eq].
 ///
 /// [1]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
 /// [std::cmp::Eq]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
