@@ -1097,6 +1097,77 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         result
     }
 
+    /// Produce a vector of cumulative results by threading an
+    /// accumulator through the elements from left to right.
+    ///
+    /// The output vector has `self.len() + 1` elements: the initial
+    /// state followed by each intermediate result.
+    ///
+    /// Time: O(n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// let vec = vector![1, 2, 3, 4];
+    /// let sums = vec.scan_left(0, |acc, x| acc + x);
+    /// assert_eq!(sums, vector![0, 1, 3, 6, 10]);
+    /// ```
+    #[must_use]
+    pub fn scan_left<S, F>(&self, init: S, mut f: F) -> GenericVector<S, P>
+    where
+        S: Clone,
+        F: FnMut(&S, &A) -> S,
+    {
+        let mut result = GenericVector::new();
+        let mut acc = init;
+        result.push_back(acc.clone());
+        for item in self.iter() {
+            acc = f(&acc, item);
+            result.push_back(acc.clone());
+        }
+        result
+    }
+
+    /// Produce overlapping windows of a given size, advancing by
+    /// `step` elements between each window.
+    ///
+    /// Time: O(n/step × size × log n) — each window is an O(log n)
+    /// slice operation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` is 0 or `step` is 0.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// let vec = vector![1, 2, 3, 4, 5];
+    /// let windows = vec.sliding(3, 1);
+    /// assert_eq!(windows, vec![
+    ///     vector![1, 2, 3],
+    ///     vector![2, 3, 4],
+    ///     vector![3, 4, 5],
+    /// ]);
+    /// ```
+    #[must_use]
+    pub fn sliding(&self, size: usize, step: usize) -> Vec<Self> {
+        assert!(size > 0, "window size must be greater than 0");
+        assert!(step > 0, "step must be greater than 0");
+        if self.len() < size {
+            return Vec::new();
+        }
+        let num_windows = (self.len() - size) / step + 1;
+        let mut result = Vec::with_capacity(num_windows);
+        let mut start = 0;
+        while start + size <= self.len() {
+            result.push(self.skip(start).take(size));
+            start += step;
+        }
+        result
+    }
+
     /// Remove the first element from a vector and return it.
     ///
     /// Time: O(1)*
@@ -3182,6 +3253,69 @@ mod test {
         let tail = vector![4, 5];
         let patched = vec.patch(3, &tail, 0);
         assert_eq!(patched, vector![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn scan_left_prefix_sums() {
+        let vec = vector![1, 2, 3, 4];
+        let result = vec.scan_left(0, |acc, x| acc + x);
+        assert_eq!(result, vector![0, 1, 3, 6, 10]);
+    }
+
+    #[test]
+    fn scan_left_empty() {
+        let vec: Vector<i32> = Vector::new();
+        let result = vec.scan_left(42, |acc, x| acc + x);
+        assert_eq!(result, vector![42]);
+    }
+
+    #[test]
+    fn scan_left_single() {
+        let vec = vector![5];
+        let result = vec.scan_left(0, |acc, x| acc + x);
+        assert_eq!(result, vector![0, 5]);
+    }
+
+    #[test]
+    fn sliding_basic() {
+        let vec = vector![1, 2, 3, 4, 5];
+        let windows = vec.sliding(3, 1);
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0], vector![1, 2, 3]);
+        assert_eq!(windows[1], vector![2, 3, 4]);
+        assert_eq!(windows[2], vector![3, 4, 5]);
+    }
+
+    #[test]
+    fn sliding_step_two() {
+        let vec = vector![1, 2, 3, 4, 5, 6];
+        let windows = vec.sliding(2, 2);
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0], vector![1, 2]);
+        assert_eq!(windows[1], vector![3, 4]);
+        assert_eq!(windows[2], vector![5, 6]);
+    }
+
+    #[test]
+    fn sliding_window_equals_len() {
+        let vec = vector![1, 2, 3];
+        let windows = vec.sliding(3, 1);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0], vector![1, 2, 3]);
+    }
+
+    #[test]
+    fn sliding_window_larger_than_vec() {
+        let vec = vector![1, 2];
+        let windows = vec.sliding(3, 1);
+        assert!(windows.is_empty());
+    }
+
+    #[test]
+    fn sliding_empty_vec() {
+        let vec: Vector<i32> = Vector::new();
+        let windows = vec.sliding(2, 1);
+        assert!(windows.is_empty());
     }
 
     #[test]
