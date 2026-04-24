@@ -36,7 +36,7 @@ touching `src/lib.rs` with everything else cached.
 
 | Crate | Time | Notes |
 |-------|------|-------|
-| imbl (self) | 2.75s | Bottleneck — single crate, cannot parallelise |
+| pds (self) | 2.75s | Bottleneck — single crate, cannot parallelise |
 | serde_derive | 0.79s | Proc macro, dev-dep |
 | proc-macro2 | 0.51s | Transitive |
 | proptest-derive | 0.42s | Dev-dep |
@@ -58,7 +58,7 @@ Times measured with crate already compiled (execution only, not compilation).
 | Configuration | Unit tests | Proptests | Wall clock | Notes |
 |---------------|-----------|-----------|------------|-------|
 | Default features | 122 + 120 | ~7s | 7.1s | Baseline |
-| All features | 132 + 125 | ~13s | 13.2s | Serde/bincode/rayon tests added |
+| All features | 132 + 125 | ~13s | 13.2s | Serde/rayon tests added |
 | small-chunks | 122 + 120 | ~13s | 13.2s | Smaller nodes trigger more edge cases |
 | **Full test.sh** | — | — | **37s** | All 3 configs + clippy + doc |
 
