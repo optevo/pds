@@ -64,6 +64,17 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 2.1: Fix RRB tree concatenation (issue #35).** Replaced
+  Stucki's concatenation algorithm with L'orange's bounded-height approach.
+  Key changes: `merge` now returns `(Node, level)` instead of always
+  wrapping at level+1; new `concat_rebalance` collects children from the
+  merge boundary, redistributes undersized nodes (flattening and repacking
+  children below a minimum-size threshold based on L'orange's invariant
+  m - floor(m/4)), and only increases tree height when children genuinely
+  overflow NODE_SIZE. Removed dead `Entry::values()` and `Entry::nodes()`
+  methods. Added `concat_depth_bounded` and `concat_depth_equal_sized`
+  regression tests verifying O(log n) height for repeated concatenation.
+
 - **[2026-04-24] 3.6 (partial): Pointer-aware subtree skipping in diff.**
   Rewrote HashMap and HashSet `DiffIter` from iterate-and-lookup to
   simultaneous HAMT tree walk. At each node, `Entry::ptr_eq` checks
@@ -248,7 +259,7 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — all items complete except 2.1 (RRB concat fix). Phase 3:
+Phase 2 — all items complete. Phase 3:
 3.1 resolved (already handled by Arc::make_mut — see DEC-004).
 3.2 complete (unsafe audit — 3 removals, 16 documented with SAFETY comments).
 3.4 partially complete (par_iter, FromParallelIterator, ParallelExtend

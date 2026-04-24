@@ -725,6 +725,16 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
             tree.assert_invariants();
         }
     }
+
+    /// Returns the height of the middle tree (0 if no tree structure).
+    /// Test-only helper for verifying concatenation depth bounds.
+    #[cfg(test)]
+    fn middle_level(&self) -> usize {
+        match &self.vector {
+            Inline(_) | Single(_) => 0,
+            Full(tree) => tree.middle_level,
+        }
+    }
 }
 
 impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
@@ -1321,9 +1331,10 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
                         }
                         Ordering::Equal => left.middle_level,
                     };
-                    left.middle =
-                        SharedPointer::new(Node::merge(middle1, middle2, normalised_middle));
-                    left.middle_level = normalised_middle + 1;
+                    let (merged, merged_level) =
+                        Node::merge(middle1, middle2, normalised_middle);
+                    left.middle = SharedPointer::new(merged);
+                    left.middle_level = merged_level;
 
                     left.inner_b = right.inner_b;
                     left.outer_b = right.outer_b;
@@ -3898,6 +3909,106 @@ mod test {
             }
             assert_eq!(v[0], 10);
             assert_eq!(v[1], 20);
+        }
+
+        /// Verify that repeated concatenation produces bounded tree height.
+        /// This is the regression test for issue #35: with Stucki's algorithm,
+        /// vectors of ~40K elements reached height 7 after repeated concatenation
+        /// (expected height 3 with branching factor 64).
+        #[test]
+        fn concat_depth_bounded() {
+            use crate::nodes::chunk::CHUNK_SIZE;
+            let chunk_count = 100;
+            let chunk_size = CHUNK_SIZE; // 64 or 4 depending on small-chunks
+
+            // Build a vector by repeatedly concatenating small vectors
+            let mut vec = Vector::new();
+            for i in 0..chunk_count {
+                let chunk: Vector<usize> =
+                    (i * chunk_size..(i + 1) * chunk_size).collect();
+                vec.append(chunk);
+            }
+
+            let total = chunk_count * chunk_size;
+            assert_eq!(vec.len(), total);
+
+            // Verify correctness: all elements present in order
+            for (idx, val) in vec.iter().enumerate() {
+                assert_eq!(idx, *val);
+            }
+
+            // Verify invariants
+            vec.assert_invariants();
+
+            // Check tree height is bounded by O(log_m(n))
+            // For n elements and branching factor m, max height = ceil(log_m(n)) + 1
+            // (the +1 accounts for the leaf level)
+            let max_height = {
+                let mut h = 0;
+                let mut capacity = 1_usize;
+                while capacity < total {
+                    capacity = capacity.saturating_mul(CHUNK_SIZE);
+                    h += 1;
+                }
+                h + 1 // extra margin for relaxed nodes
+            };
+            let actual_height = vec.middle_level();
+            assert!(
+                actual_height <= max_height,
+                "tree height {} exceeds expected bound {} for {} elements (branching factor {})",
+                actual_height,
+                max_height,
+                total,
+                CHUNK_SIZE,
+            );
+        }
+
+        /// Verify that repeated equal-sized concatenation maintains bounded height.
+        /// This is the pathological case: building 40K elements from 40 chunks
+        /// of 1000 elements via repeated append.
+        #[cfg(not(miri))]
+        #[test]
+        fn concat_depth_equal_sized() {
+            use crate::nodes::chunk::CHUNK_SIZE;
+            let chunk_count = 40;
+            let elements_per_chunk = 1000;
+
+            let mut vec = Vector::new();
+            for i in 0..chunk_count {
+                let chunk: Vector<usize> =
+                    (i * elements_per_chunk..(i + 1) * elements_per_chunk).collect();
+                vec.append(chunk);
+            }
+
+            let total = chunk_count * elements_per_chunk;
+            assert_eq!(vec.len(), total);
+
+            // Verify correctness
+            for (idx, val) in vec.iter().enumerate() {
+                assert_eq!(idx, *val);
+            }
+
+            vec.assert_invariants();
+
+            // Height bound: ceil(log_m(n)) + 1
+            let max_height = {
+                let mut h = 0;
+                let mut capacity = 1_usize;
+                while capacity < total {
+                    capacity = capacity.saturating_mul(CHUNK_SIZE);
+                    h += 1;
+                }
+                h + 1
+            };
+            let actual_height = vec.middle_level();
+            assert!(
+                actual_height <= max_height,
+                "tree height {} exceeds expected bound {} for {} elements (branching factor {})",
+                actual_height,
+                max_height,
+                total,
+                CHUNK_SIZE,
+            );
         }
     }
 }

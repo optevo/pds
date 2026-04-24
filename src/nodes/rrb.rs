@@ -223,19 +223,6 @@ impl<A: Clone, P: SharedPointerKind> Entry<A, P> {
         }
     }
 
-    fn values(self) -> Chunk<A> {
-        match self {
-            Values(values) => clone_ref(values),
-            _ => panic!("rrb::Entry::values: expected values, found nodes"),
-        }
-    }
-
-    fn nodes(self) -> Chunk<Node<A, P>> {
-        match self {
-            Nodes(_, nodes) => clone_ref(nodes),
-            _ => panic!("rrb::Entry::nodes: expected nodes, found values"),
-        }
-    }
 }
 
 // Node
@@ -977,10 +964,8 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
 
     fn merge_leaves(mut left: Self, mut right: Self) -> Self {
         if left.children.is_empty_node() {
-            // Left is empty, just use right
             Self::single_parent(right)
         } else if right.children.is_empty_node() {
-            // Right is empty, just use left
             Self::single_parent(left)
         } else {
             {
@@ -1003,105 +988,203 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
         }
     }
 
-    fn merge_rebalance(level: usize, left: Self, middle: Self, right: Self) -> Self {
-        let left_nodes = left.children.nodes().into_iter();
-        let middle_nodes = middle.children.nodes().into_iter();
-        let right_nodes = right.children.nodes().into_iter();
-        let mut subtree_still_balanced = true;
-        let mut next_leaf = Chunk::new();
-        let mut next_node = Chunk::new();
-        let mut next_subtree = Chunk::new();
-        let mut root = Chunk::new();
+    /// L'orange-style redistribution: ensures children are near-full to
+    /// maintain O(log n) tree height. Flattens undersized children one
+    /// level and repacks into maximally-full nodes.
+    fn rebalance_children(children: &[Self], level: usize) -> Vec<Self> {
+        // Minimum children per node before redistribution triggers.
+        // Based on L'orange's invariant: m - floor(m/4) - 1
+        let min_size = if NODE_SIZE <= 4 {
+            NODE_SIZE.saturating_sub(1).max(1)
+        } else {
+            NODE_SIZE - NODE_SIZE / 4
+        };
 
-        for subtree in left_nodes.chain(middle_nodes).chain(right_nodes) {
-            if subtree.is_empty() {
-                continue;
-            }
-            if subtree.is_completely_dense(level) && subtree_still_balanced {
-                root.push_back(subtree);
-                continue;
-            }
-            subtree_still_balanced = false;
+        let needs_redistribution = children
+            .iter()
+            .any(|c| c.children.len() > 0 && c.children.len() < min_size);
 
-            if level == 1 {
-                for value in subtree.children.values() {
-                    next_leaf.push_back(value);
-                    if next_leaf.is_full() {
-                        let new_node = Node::from_chunk(0, SharedPointer::new(next_leaf));
-                        next_subtree.push_back(new_node);
-                        next_leaf = Chunk::new();
-                        if next_subtree.is_full() {
-                            let new_subtree = Node::parent(level, next_subtree);
-                            root.push_back(new_subtree);
-                            next_subtree = Chunk::new();
-                        }
-                    }
-                }
-            } else {
-                for node in subtree.children.nodes() {
-                    next_node.push_back(node);
-                    if next_node.is_full() {
-                        let new_node = Node::parent(level - 1, next_node);
-                        next_subtree.push_back(new_node);
-                        next_node = Chunk::new();
-                        if next_subtree.is_full() {
-                            let new_subtree = Node::parent(level, next_subtree);
-                            root.push_back(new_subtree);
-                            next_subtree = Chunk::new();
-                        }
-                    }
-                }
-            }
+        if !needs_redistribution {
+            return children.to_vec();
         }
-        if !next_leaf.is_empty() {
-            let new_node = Node::from_chunk(0, SharedPointer::new(next_leaf));
-            next_subtree.push_back(new_node);
+
+        if level == 1 {
+            Self::rebalance_leaves(children)
+        } else {
+            Self::rebalance_nodes(children, level - 1)
         }
-        if !next_node.is_empty() {
-            let new_node = Node::parent(level - 1, next_node);
-            next_subtree.push_back(new_node);
-        }
-        if !next_subtree.is_empty() {
-            let new_subtree = Node::parent(level, next_subtree);
-            root.push_back(new_subtree);
-        }
-        Node::parent(level + 1, root)
     }
 
-    pub(crate) fn merge(mut left: Self, mut right: Self, level: usize) -> Self {
-        if level == 0 {
-            Self::merge_leaves(left, right)
-        } else {
-            let merged = {
-                if level == 1 {
-                    // We're going to rebalance all the leaves anyway, there's
-                    // no need for a middle at level 1
-                    Node::parent(0, Chunk::new())
-                } else {
-                    let left_last =
-                        if let Entry::Nodes(ref mut size, ref mut children) = left.children {
-                            let node = SharedPointer::make_mut(children).pop_back();
-                            if !node.is_empty() {
-                                size.pop(Side::Right, level, node.len());
-                            }
-                            node
-                        } else {
-                            panic!("expected nodes, found entries or empty");
-                        };
-                    let right_first =
-                        if let Entry::Nodes(ref mut size, ref mut children) = right.children {
-                            let node = SharedPointer::make_mut(children).pop_front();
-                            if !node.is_empty() {
-                                size.pop(Side::Left, level, node.len());
-                            }
-                            node
-                        } else {
-                            panic!("expected nodes, found entries or empty");
-                        };
-                    Self::merge(left_last, right_first, level - 1)
+    /// Flatten all values from leaf children and repack into full leaves.
+    fn rebalance_leaves(children: &[Self]) -> Vec<Self> {
+        let total_values: usize = children
+            .iter()
+            .map(|c| match &c.children {
+                Values(v) => v.len(),
+                _ => 0,
+            })
+            .sum();
+        let mut all_values: Vec<A> = Vec::with_capacity(total_values);
+        for child in children {
+            if let Values(ref values) = child.children {
+                for v in values.iter() {
+                    all_values.push(v.clone());
                 }
+            }
+        }
+
+        let result_count = all_values.len().div_ceil(NODE_SIZE);
+        let mut result = Vec::with_capacity(result_count);
+        let mut chunk: Chunk<A> = Chunk::new();
+        for value in all_values {
+            chunk.push_back(value);
+            if chunk.is_full() {
+                result.push(Node {
+                    children: Values(SharedPointer::new(chunk)),
+                });
+                chunk = Chunk::new();
+            }
+        }
+        if !chunk.is_empty() {
+            result.push(Node {
+                children: Values(SharedPointer::new(chunk)),
+            });
+        }
+        result
+    }
+
+    /// Flatten children of undersized internal nodes and repack into
+    /// near-full nodes at `child_level`.
+    fn rebalance_nodes(children: &[Self], child_level: usize) -> Vec<Self> {
+        let total_gc: usize = children
+            .iter()
+            .map(|c| match &c.children {
+                Nodes(_, nodes) => nodes.len(),
+                _ => 0,
+            })
+            .sum();
+        let mut grandchildren: Vec<Self> = Vec::with_capacity(total_gc);
+        for child in children {
+            if let Nodes(_, ref nodes) = child.children {
+                for gc in nodes.iter() {
+                    if !gc.is_empty() {
+                        grandchildren.push(gc.clone());
+                    }
+                }
+            }
+        }
+
+        let result_count = grandchildren.len().div_ceil(NODE_SIZE);
+        let mut result = Vec::with_capacity(result_count);
+        let mut batch: Chunk<Self> = Chunk::new();
+        for gc in grandchildren {
+            batch.push_back(gc);
+            if batch.is_full() {
+                result.push(Node::parent(child_level, batch));
+                batch = Chunk::new();
+            }
+        }
+        if !batch.is_empty() {
+            result.push(Node::parent(child_level, batch));
+        }
+        result
+    }
+
+    /// Collect children from left, middle, and right; rebalance; and
+    /// pack into a result node. Returns (node, level_of_node).
+    /// Height increases only when the rebalanced children exceed
+    /// NODE_SIZE, implementing L'orange's bounded-height concatenation.
+    fn concat_rebalance(
+        level: usize,
+        left: Self,
+        middle: Self,
+        right: Self,
+    ) -> (Self, usize) {
+        // Collect all children at level-1 from the three level-`level` nodes
+        let mut all: Vec<Self> = Vec::new();
+
+        for node in [left, middle, right] {
+            match node.children {
+                Nodes(_, nodes) => {
+                    for child in clone_ref(nodes) {
+                        if !child.is_empty() {
+                            all.push(child);
+                        }
+                    }
+                }
+                Empty => {}
+                Values(_) => panic!("concat_rebalance: unexpected leaf at level > 0"),
+            }
+        }
+
+        if all.is_empty() {
+            return (Node::new(), 0);
+        }
+
+        let rebalanced = Self::rebalance_children(&all, level);
+
+        if rebalanced.len() <= NODE_SIZE {
+            // Fits at the current level — no height increase
+            let chunk: Chunk<Self> = rebalanced.into_iter().collect();
+            (Node::parent(level, chunk), level)
+        } else {
+            // Overflow: group into subtrees and wrap at level+1
+            let mut root: Chunk<Self> = Chunk::new();
+            let mut batch: Chunk<Self> = Chunk::new();
+            for child in rebalanced {
+                batch.push_back(child);
+                if batch.is_full() {
+                    root.push_back(Node::parent(level, batch));
+                    batch = Chunk::new();
+                }
+            }
+            if !batch.is_empty() {
+                root.push_back(Node::parent(level, batch));
+            }
+            (Node::parent(level + 1, root), level + 1)
+        }
+    }
+
+    /// Merge two nodes at the same level, returning the merged node and
+    /// its level. Based on L'orange's RRB concatenation algorithm which
+    /// maintains O(log n) tree height by redistributing children at each
+    /// level and only increasing height when genuinely needed.
+    pub(crate) fn merge(mut left: Self, mut right: Self, level: usize) -> (Self, usize) {
+        if level == 0 {
+            (Self::merge_leaves(left, right), 1)
+        } else {
+            let left_last =
+                if let Entry::Nodes(ref mut size, ref mut children) = left.children {
+                    let node = SharedPointer::make_mut(children).pop_back();
+                    if !node.is_empty() {
+                        size.pop(Side::Right, level, node.len());
+                    }
+                    node
+                } else {
+                    panic!("merge: expected nodes in left at level {}", level);
+                };
+            let right_first =
+                if let Entry::Nodes(ref mut size, ref mut children) = right.children {
+                    let node = SharedPointer::make_mut(children).pop_front();
+                    if !node.is_empty() {
+                        size.pop(Side::Left, level, node.len());
+                    }
+                    node
+                } else {
+                    panic!("merge: expected nodes in right at level {}", level);
+                };
+
+            let (merged, merged_level) = Self::merge(left_last, right_first, level - 1);
+
+            // Elevate merged result to `level` if the recursive merge
+            // returned at a lower level (common when children are compact)
+            let middle = if merged_level < level {
+                merged.elevate(level - merged_level)
+            } else {
+                merged
             };
-            Self::merge_rebalance(level, left, merged, right)
+
+            Self::concat_rebalance(level, left, middle, right)
         }
     }
 }
