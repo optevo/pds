@@ -996,6 +996,107 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         out
     }
 
+    /// Apply a function at a single index, returning a new vector
+    /// with the element at that index replaced by the function's
+    /// result. Avoids the get-transform-set pattern.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// let vec = vector![1, 2, 3, 4];
+    /// let updated = vec.adjust(1, |v| v * 10);
+    /// assert_eq!(updated, vector![1, 20, 3, 4]);
+    /// ```
+    #[must_use]
+    pub fn adjust<F>(&self, index: usize, f: F) -> Self
+    where
+        F: FnOnce(&A) -> A,
+    {
+        let mut out = self.clone();
+        let old = &out[index];
+        let new_val = f(old);
+        out.set(index, new_val);
+        out
+    }
+
+    /// Split a vector into non-overlapping fixed-size chunks. The
+    /// last chunk may contain fewer than `chunk_size` elements.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `chunk_size` is 0.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// let vec = vector![1, 2, 3, 4, 5];
+    /// let chunks = vec.chunked(2);
+    /// assert_eq!(chunks, vec![vector![1, 2], vector![3, 4], vector![5]]);
+    /// ```
+    #[must_use]
+    pub fn chunked(&self, chunk_size: usize) -> Vec<Self> {
+        assert!(chunk_size > 0, "chunk_size must be greater than 0");
+        if self.is_empty() {
+            return Vec::new();
+        }
+        let num_chunks = self.len().div_ceil(chunk_size);
+        let mut result = Vec::with_capacity(num_chunks);
+        let mut remaining = self.clone();
+        while remaining.len() > chunk_size {
+            let (left, right) = remaining.split_at(chunk_size);
+            result.push(left);
+            remaining = right;
+        }
+        result.push(remaining);
+        result
+    }
+
+    /// Replace a range of elements with the contents of another
+    /// vector. Removes `replaced` elements starting at `from` and
+    /// inserts all elements from `replacement` at that position.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `from + replaced > self.len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// let vec = vector![1, 2, 3, 4, 5];
+    /// let replacement = vector![20, 30];
+    /// let patched = vec.patch(1, &replacement, 2);
+    /// assert_eq!(patched, vector![1, 20, 30, 4, 5]);
+    /// ```
+    #[must_use]
+    pub fn patch(&self, from: usize, replacement: &Self, replaced: usize) -> Self {
+        assert!(
+            from + replaced <= self.len(),
+            "patch range {}..{} out of bounds for vector of length {}",
+            from,
+            from + replaced,
+            self.len()
+        );
+        let (left, rest) = self.clone().split_at(from);
+        let (_, right) = rest.split_at(replaced);
+        let mut result = left;
+        result.append(replacement.clone());
+        result.append(right);
+        result
+    }
+
     /// Remove the first element from a vector and return it.
     ///
     /// Time: O(1)*
@@ -3012,6 +3113,75 @@ mod test {
         let diff: Vec<_> = base.diff(&modified).collect();
         let _patched = base.apply_diff(diff);
         assert_eq!(base, vector![1, 2, 3]);
+    }
+
+    #[test]
+    fn adjust_basic() {
+        let vec = vector![1, 2, 3, 4];
+        let updated = vec.adjust(1, |v| v * 10);
+        assert_eq!(updated, vector![1, 20, 3, 4]);
+        // Original unchanged
+        assert_eq!(vec, vector![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn chunked_even() {
+        let vec = vector![1, 2, 3, 4];
+        let chunks = vec.chunked(2);
+        assert_eq!(chunks, vec![vector![1, 2], vector![3, 4]]);
+    }
+
+    #[test]
+    fn chunked_uneven() {
+        let vec = vector![1, 2, 3, 4, 5];
+        let chunks = vec.chunked(2);
+        assert_eq!(chunks, vec![vector![1, 2], vector![3, 4], vector![5]]);
+    }
+
+    #[test]
+    fn chunked_larger_than_vec() {
+        let vec = vector![1, 2, 3];
+        let chunks = vec.chunked(10);
+        assert_eq!(chunks, vec![vector![1, 2, 3]]);
+    }
+
+    #[test]
+    fn chunked_empty() {
+        let vec: Vector<i32> = Vector::new();
+        let chunks = vec.chunked(3);
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn patch_replace_middle() {
+        let vec = vector![1, 2, 3, 4, 5];
+        let replacement = vector![20, 30];
+        let patched = vec.patch(1, &replacement, 2);
+        assert_eq!(patched, vector![1, 20, 30, 4, 5]);
+    }
+
+    #[test]
+    fn patch_insert_without_removing() {
+        let vec = vector![1, 2, 3];
+        let insertion = vector![10, 20];
+        let patched = vec.patch(1, &insertion, 0);
+        assert_eq!(patched, vector![1, 10, 20, 2, 3]);
+    }
+
+    #[test]
+    fn patch_remove_without_inserting() {
+        let vec = vector![1, 2, 3, 4, 5];
+        let empty: Vector<i32> = Vector::new();
+        let patched = vec.patch(1, &empty, 2);
+        assert_eq!(patched, vector![1, 4, 5]);
+    }
+
+    #[test]
+    fn patch_at_end() {
+        let vec = vector![1, 2, 3];
+        let tail = vector![4, 5];
+        let patched = vec.patch(3, &tail, 0);
+        assert_eq!(patched, vector![1, 2, 3, 4, 5]);
     }
 
     #[test]

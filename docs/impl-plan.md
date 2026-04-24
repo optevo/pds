@@ -64,6 +64,16 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 2.8/2.9: Map/set API completeness.** Added to all relevant
+  collection types: `map_values`, `map_values_with_key`, `try_map_values`,
+  `map_keys` (OrdMap gets `map_keys_monotonic` with debug_assert for order
+  preservation), `retain` (OrdMap/OrdSet — closes parity gap with HashMap),
+  `partition`, `disjoint` (O(n+m) sorted traversal for Ord types, O(n)
+  iterate-smaller-probe-larger for Hash types), `restrict_keys`/`without_keys`
+  (maps), `restrict` (sets, complement to existing `difference`). Remaining
+  lower-priority items deferred: `partition_map`, `map_accum`,
+  `relative_complement_with`.
+
 - **[2026-04-24] 2.6: Patch/apply from diff.** Added `apply_diff()` to all
   five collection types: OrdMap, OrdSet, HashMap, HashSet, Vector. Each
   method takes any `IntoIterator<Item = DiffItem>` and produces a new
@@ -177,10 +187,11 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — items 2.2, 2.3, 2.4, 2.5, 2.6 complete. Remaining: 2.1 (RRB
-concat fix), 2.7–2.9 (map/set API completeness), 2.10 (vector
-operations), 2.11 (companion types). Phase 3 item 3.5 complete. Items
-3.1–3.4 and 3.6 unblocked.
+Phase 2 — items 2.2–2.6 complete, 2.8/2.9 substantially complete (core
+methods done, lower-priority items deferred). Remaining: 2.1 (RRB concat
+fix), 2.7 (general merge), 2.10 (vector convenience ops), 2.11
+(companion types). Phase 3 item 3.5 complete. Items 3.1–3.4 and 3.6
+unblocked.
 
 ---
 
