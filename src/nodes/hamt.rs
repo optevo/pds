@@ -26,17 +26,14 @@ const GROUP_WIDTH: usize = HASH_WIDTH / 2;
 type SimdGroup = wide::u8x16;
 type GroupBitmap = bitmaps::Bitmap<GROUP_WIDTH>;
 
-/// MurmurHash3 finaliser — a fast bijective mixer that spreads input bits
-/// evenly across the output. Used to compute Merkle hash contributions so
-/// that commutative addition of similar inputs doesn't cancel information.
+/// Wide-multiply mixer — a single 128-bit multiply followed by a fold-XOR.
+/// Produces excellent avalanche in just 2 operations. Used to compute Merkle
+/// hash contributions so that commutative addition of similar inputs doesn't
+/// cancel information. Based on wyhash mixing (Wang Yi, 2019).
 #[inline]
-pub(crate) fn fmix64(mut h: u64) -> u64 {
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xff51afd7ed558ccd);
-    h ^= h >> 33;
-    h = h.wrapping_mul(0xc4ceb9fe1a85ec53);
-    h ^= h >> 33;
-    h
+pub(crate) fn fmix64(h: u64) -> u64 {
+    let full = (h as u128).wrapping_mul(0x9E3779B97F4A7C15_u128);
+    (full as u64) ^ ((full >> 64) as u64)
 }
 
 const _: () = {
