@@ -64,6 +64,18 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] Docs review, coverage tests, and trait audit.**
+  Fixed stale doc comments across crate (branching factor, OrdSet "map"→"set",
+  broken links, missing features in README). Added ~100 coverage tests for
+  ord/map.rs, ord/set.rs, hash/set.rs. Crate-wide coverage: 90.1% lines,
+  86.4% functions (up from ~79%/76%). Trait audit: core 5 types complete;
+  PBag/HashMultiMap/InsertionOrderMap lack IntoIterator (needs named iterators).
+
+- **[2026-04-25] Demotion edge case regression tests.** Added 12 tests in
+  hash/map.rs covering all HAMT node upgrade/demotion paths using LolHasher
+  for deterministic hash control. Guards against the proptest flake root cause
+  (non-Value entry demotion).
+
 - **[2026-04-25] CHAMP PoC artefacts removed (DEC-020).** Deleted
   `src/champ.rs`, `src/champ_v2.rs`, `src/nodes/champ_node.rs`, and
   `benches/champ.rs` (3,406 lines total). Three independent PoC attempts
@@ -396,11 +408,11 @@ items killed (6.3, 6.7, and 6.2 by inheritance), one deprioritised (6.1).
    non-breaking. Reduces collision probability at large sizes.
 3. [ ] 6.9 Persistent trie — to be explored (research + PoC gate)
 4. [ ] 4.6 Vector Merkle hash caching — PoC gate needed (overhead vs gain)
-5. [ ] Test coverage gaps — ord/set.rs at 58% line coverage, ord/map.rs
-   at 72%. HAMT uncovered paths: `upgrade_to_large`, `pop_value`.
-6. [ ] Proptest stability — demotion edge case regression tests. Root
-   cause identified: only Value entries can be safely demoted from child
-   HamtNode to parent (shift-dependent upgrade paths).
+5. [x] Test coverage gaps — **DONE.** ord/set.rs 58%→96%, ord/map.rs
+   72%→95%, hash/set.rs 72%→92%. Crate total 90.1% lines. Demotion
+   edge cases covered via LolHasher tests in hash/map.rs.
+6. [x] Proptest stability — **DONE.** Demotion edge case regression tests
+   added. Value-only demotion guard verified.
 7. [ ] Memory profiling benchmarks — `dhat` integration (from 0.3 scope,
    never implemented). Needed for arena work and future memory claims.
 
