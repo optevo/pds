@@ -375,8 +375,10 @@ pub mod shared_ptr;
 #[cfg(feature = "atom")]
 pub mod atom;
 
+pub mod hash_multimap;
 pub mod pbag;
 
+pub use crate::hash_multimap::{GenericHashMultiMap, HashMultiMap};
 pub use crate::hashmap::{GenericHashMap, HashMap};
 pub use crate::hashset::{GenericHashSet, HashSet};
 pub use crate::ordmap::{GenericOrdMap, OrdMap};
