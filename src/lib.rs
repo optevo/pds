@@ -372,6 +372,9 @@ pub mod quickcheck;
 
 pub mod shared_ptr;
 
+#[cfg(feature = "atom")]
+pub mod atom;
+
 pub mod pbag;
 
 pub use crate::hashmap::{GenericHashMap, HashMap};
