@@ -40,7 +40,7 @@ fuzz_target!(|actions: Vec<Action<u32, u32>>| {
                 let other_nat: NatMap<_, _> = pairs.into_iter().collect();
                 let merged = map.clone().union(other);
                 let mut merged_nat = nat.clone();
-                // imbl union: right side wins on conflict
+                // pds union: right side wins on conflict
                 for (k, v) in &other_nat {
                     merged_nat.insert(*k, *v);
                 }
