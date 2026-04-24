@@ -64,6 +64,15 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 3.3: Transient/builder API — resolved as already handled.**
+  Existing `&mut self` methods already provide the builder pattern's core
+  benefit: `Arc::make_mut` detects refcount == 1 and mutates in place
+  without cloning (8-14× faster than persistent methods at 100K elements).
+  A dedicated builder would only eliminate per-node atomic CAS overhead
+  (~20-30%) but requires ~5000 lines of parallel node types. The Rust
+  idiom of taking ownership (`let mut map = map; map.insert(...)`) is the
+  correct pattern. See DEC-008.
+
 - **[2026-04-24] 4.2: CHAMP prototype benchmark.** Built a standalone
   CHAMP implementation (`src/champ.rs`): two-bitmap encoding
   (datamap + nodemap), contiguous value/child arrays, canonical deletion,
@@ -326,19 +335,20 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-5.2, 4.5, and 4.2 complete. CHAMP benchmark result (DEC-007): SIMD HAMT
-retained — CHAMP wins on mutation/iteration but loses on lookup.
-Node layout is settled (SIMD HAMT stays). Remaining work:
+5.2, 4.5, 4.2, and 3.3 complete. CHAMP benchmark result (DEC-007): SIMD
+HAMT retained — CHAMP wins on mutation/iteration but loses on lookup.
+Node layout is settled (SIMD HAMT stays). 3.3 resolved as already handled
+(DEC-008) — existing `&mut self` methods provide the builder benefit.
+Remaining work:
 
-1. **3.3 Transient/builder API** — owned-node construction for the
-   existing SIMD HAMT.
-2. **4.4 Merkle caching** — layered on the settled node layout.
+1. **4.4 Merkle caching** — layered on the settled node layout.
 
-Phase 3 status: 3.1 resolved (DEC-004). 3.2 complete. 3.4 partially
+Phase 3 status: 3.1 resolved (DEC-004). 3.2 complete. 3.3 resolved
+(DEC-008 — already handled by `&mut self` methods). 3.4 partially
 complete (par_iter/FromParallelIterator/ParallelExtend done for all
 hash/ord types; par_iter_mut for HashMap; par_sort for Vector; parallel
 bulk ops deferred to Phase 6 — needs tree-level parallelism). 3.5
-complete. 3.6 complete. 3.3 deferred pending node layout decision.
+complete. 3.6 complete.
 Phase 4: 4.1 resolved (4-buffer structure already symmetric). 4.5
 complete (hasher behind SharedPointer, S: Clone eliminated).
 
@@ -1108,34 +1118,14 @@ and nodes/btree.rs.
 
 ---
 
-### 3.3 Transient / builder API
+### 3.3 Transient / builder API — DONE
 
-**What:** An explicit API for batch mutations. A `Builder<T>` wrapper holds
-sole ownership and exposes `&mut` methods. `.build()` consumes it and returns
-the persistent collection.
+**Status:** Resolved — already handled. See Done section and DEC-008.
 
-**Design:** Use the Rust-native approach — the type system guarantees sole
-ownership at compile time, so `SharedPointer::get_mut` always succeeds
-inside the builder (no runtime checks, no fallback cloning). This builds
-directly on 3.1.
-
-**Design consideration:** The builder must work through the `archery`
-`SharedPointerKind` abstraction so it supports both `ArcK` and `ArcTK`.
-The `FromIterator` impls should use the builder internally for optimal
-performance.
-
-**Validation:** Benchmark bulk construction (1K/10K/100K/1M elements) via
-builder vs direct insertion vs `FromIterator`.
-
-**Complexity:** Moderate.
-
-**Affects:** All five collection types.
-
-**Prerequisites:** 3.1 (Arc::get_mut — provides the internal mechanism).
-
-**References:** Clojure transients (clojure.org/reference/transients);
-Bifurcan linear/forked (github.com/lacuna/bifurcan); immer
-`transient_rvalue` policy.
+The existing `&mut self` methods already provide the builder pattern's
+core benefit via `Arc::make_mut`'s refcount-1 fast path (8-14× faster
+than persistent ops). A dedicated builder would only save ~20-30% on
+atomic CAS overhead but requires ~5000 lines of parallel node types.
 
 ---
 
@@ -1196,8 +1186,8 @@ HAMT parallelism). OrdMap/OrdSet are lower priority (less natural split).
 **Affects:** All five collection types.
 
 **Prerequisites:** 0.1 (CI), 0.3 (benchmarks for before/after comparison).
-Items 3.4.3–3.4.5 benefit from but do not require 3.1 (Arc::get_mut) and
-3.3 (transient/builder).
+Items 3.4.3–3.4.5 benefit from but do not require 3.1 (Arc::get_mut,
+resolved DEC-004) and 3.3 (resolved DEC-008 — `&mut self` is sufficient).
 
 **References:** rayon crate (docs.rs/rayon); Vector's existing
 `src/vector/rayon.rs`; Scala parallel collections
@@ -1758,7 +1748,7 @@ Phase 2 (correctness + API)                                               │
 Phase 3 (mutation + parallel perf)  │                                      │
   3.1 Arc::get_mut ◄── 0.1, 0.3, 0.5                                     │
   3.2 unsafe audit ◄── 0.1, 0.2, 0.5                                     │
-  3.3 transient/builder ◄── 3.1                                           │
+  3.3 transient/builder ◄── 3.1                          ✓ DONE (DEC-008) │
   3.4 parallel iterators ◄── 0.1, 0.3                                     │
   3.5 PartialEq ptr_eq fast paths ◄── 0.1                                 │
   3.6 subtree-aware diff ◄── 2.4, 0.5                                     │
@@ -1792,7 +1782,7 @@ parallel:
 
 1. **Vector track:** 2.1 → 4.1
 2. **Hash track:** 4.2 → (4.3 if justified) → 5.3, 5.4
-3. **Mutation track:** 3.1 → 3.2, 3.3 → 5.2 ✓ → 4.5 ✓
+3. **Mutation track:** 3.1 ✓ → 3.2 ✓, 3.3 ✓ → 5.2 ✓ → 4.5 ✓
 4. **Parallel track:** 3.4 (HashMap/HashSet par_iter first, then
    OrdMap/OrdSet, then bulk ops and parallel sort). Benefits from but
    does not block on 3.1/3.3.

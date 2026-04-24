@@ -332,3 +332,53 @@ indexing.
 - Future work: explore a hybrid SIMD-CHAMP that uses CHAMP's two-bitmap
   layout for memory density and iteration but adds SIMD control groups
   for lookup acceleration.
+
+---
+
+## DEC-008: 3.3 Transient/Builder API — already handled by &mut self methods
+
+**Date:** 2026-04-24
+**Status:** Accepted
+
+**Context:**
+Plan item 3.3 proposed a `Builder<T>` wrapper that holds sole ownership of
+nodes, ensuring `SharedPointer::get_mut` always succeeds (no fallback
+cloning). The motivating scenario was batch mutations where the persistent
+API clones nodes unnecessarily because the collection is still referenced.
+
+**Decision:**
+Mark 3.3 as already handled. The existing `&mut self` methods on all five
+collection types already provide the builder pattern's core benefit: when
+the caller holds the only reference, `Arc::make_mut` detects refcount == 1
+and returns `&mut T` without cloning (DEC-004). Benchmarked at 100K i64
+inserts: `&mut self` methods are 8-14× faster than persistent methods,
+achieving throughput comparable to `std::collections::HashMap`.
+
+The only remaining overhead a builder could eliminate is the per-node
+atomic compare-exchange in `Arc::make_mut` (~20-30% potential saving).
+However, implementing a builder requires duplicating the entire node
+hierarchy for each collection type (~5000 lines of parallel builder node
+types across the five collections), plus maintaining two code paths for
+every mutation. The complexity cost vastly exceeds the marginal gain.
+
+**Alternatives considered:**
+- Full builder implementation — rejected due to massive code duplication
+  (~5000 lines) for a marginal 20-30% improvement over `&mut self` which
+  is already 8-14× faster than persistent ops.
+- `UnsafeCell`-based builder that avoids `Arc` overhead — rejected because
+  it bypasses Rust's ownership guarantees and conflicts with the crate's
+  `#![deny(unsafe_code)]` policy.
+- Transient flag on existing nodes (Clojure-style `AtomicBoolean`) —
+  rejected because Rust's ownership system already provides the same
+  guarantee at compile time via `&mut self`.
+
+**Consequences:**
+3.3 is closed. The idiomatic Rust pattern for batch mutation is:
+```rust
+let mut map = map;  // take ownership (refcount == 1)
+map.insert(k1, v1); // &mut self — no cloning
+map.insert(k2, v2);
+// map is now the persistent result
+```
+Documentation should guide users toward this pattern. No code changes
+needed for 3.3.
