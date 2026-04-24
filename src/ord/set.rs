@@ -751,34 +751,6 @@ where
 
     /// Construct the symmetric difference between two sets.
     ///
-    /// This is an alias for the
-    /// [`symmetric_difference`][symmetric_difference] method.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate pds;
-    /// # use pds::ordset::OrdSet;
-    /// let set1 = ordset!{1, 2};
-    /// let set2 = ordset!{2, 3};
-    /// let expected = ordset!{1, 3};
-    /// assert_eq!(expected, set1.difference(set2));
-    /// ```
-    ///
-    /// [symmetric_difference]: #method.symmetric_difference
-    #[deprecated(
-        since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and pds, the `difference` alias for `symmetric_difference` will be removed."
-    )]
-    #[must_use]
-    pub fn difference(self, other: Self) -> Self {
-        self.symmetric_difference(other)
-    }
-
-    /// Construct the symmetric difference between two sets.
-    ///
     /// Time: O(n log n)
     ///
     /// # Examples
@@ -1675,14 +1647,6 @@ mod test {
         // Empty iterator
         let empty: Vec<OrdSet<i32>> = vec![];
         assert_eq!(OrdSet::unions(empty), OrdSet::new());
-    }
-
-    #[test]
-    fn difference_basic() {
-        // Note: OrdSet::difference is symmetric difference, not set-minus
-        let a = ordset![1, 2, 3];
-        let b = ordset![2, 3, 4];
-        assert_eq!(a.difference(b), ordset![1, 4]);
     }
 
     #[test]

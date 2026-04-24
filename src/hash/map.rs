@@ -1565,8 +1565,8 @@ where
     ///
     /// Each closure returns `Option<V3>` — returning `None` excludes
     /// the key from the result. This subsumes `union_with`,
-    /// `intersection_with`, `difference_with`, and
-    /// `symmetric_difference_with` as special cases.
+    /// `intersection_with`, and `symmetric_difference_with` as special
+    /// cases.
     ///
     /// # Examples
     ///
@@ -1837,36 +1837,6 @@ where
     /// Construct the symmetric difference between two maps by discarding keys
     /// which occur in both maps.
     ///
-    /// This is an alias for the
-    /// [`symmetric_difference`][symmetric_difference] method.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate pds;
-    /// # use pds::hashmap::HashMap;
-    /// let map1 = hashmap!{1 => 1, 3 => 4};
-    /// let map2 = hashmap!{2 => 2, 3 => 5};
-    /// let expected = hashmap!{1 => 1, 2 => 2};
-    /// assert_eq!(expected, map1.difference(map2));
-    /// ```
-    ///
-    /// [symmetric_difference]: #method.symmetric_difference
-    #[deprecated(
-        since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and pds, the `difference` alias for `symmetric_difference` will be removed."
-    )]
-    #[inline]
-    #[must_use]
-    pub fn difference(self, other: Self) -> Self {
-        self.symmetric_difference(other)
-    }
-
-    /// Construct the symmetric difference between two maps by discarding keys
-    /// which occur in both maps.
-    ///
     /// Time: O(n log n)
     ///
     /// # Examples
@@ -1888,28 +1858,6 @@ where
     /// Construct the symmetric difference between two maps by using a function
     /// to decide what to do if a key occurs in both.
     ///
-    /// This is an alias for the
-    /// [`symmetric_difference_with`][symmetric_difference_with] method.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// [symmetric_difference_with]: #method.symmetric_difference_with
-    #[deprecated(
-        since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and pds, the `difference_with` alias for `symmetric_difference_with` will be removed."
-    )]
-    #[inline]
-    #[must_use]
-    pub fn difference_with<F>(self, other: Self, f: F) -> Self
-    where
-        F: FnMut(V, V) -> Option<V>,
-    {
-        self.symmetric_difference_with(other, f)
-    }
-
-    /// Construct the symmetric difference between two maps by using a function
-    /// to decide what to do if a key occurs in both.
-    ///
     /// Time: O(n log n)
     #[inline]
     #[must_use]
@@ -1918,43 +1866,6 @@ where
         F: FnMut(V, V) -> Option<V>,
     {
         self.symmetric_difference_with_key(other, |_, a, b| f(a, b))
-    }
-
-    /// Construct the symmetric difference between two maps by using a function
-    /// to decide what to do if a key occurs in both. The function
-    /// receives the key as well as both values.
-    ///
-    /// This is an alias for the
-    /// [`symmetric_difference_with_key`][symmetric_difference_with_key]
-    /// method.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate pds;
-    /// # use pds::hashmap::HashMap;
-    /// let map1 = hashmap!{1 => 1, 3 => 4};
-    /// let map2 = hashmap!{2 => 2, 3 => 5};
-    /// let expected = hashmap!{1 => 1, 2 => 2, 3 => 9};
-    /// assert_eq!(expected, map1.difference_with_key(
-    ///     map2,
-    ///     |key, left, right| Some(left + right)
-    /// ));
-    /// ```
-    ///
-    /// [symmetric_difference_with_key]: #method.symmetric_difference_with_key
-    #[deprecated(
-        since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and pds, the `difference_with_key` alias for `symmetric_difference_with_key` will be removed."
-    )]
-    #[must_use]
-    pub fn difference_with_key<F>(self, other: Self, f: F) -> Self
-    where
-        F: FnMut(&K, V, V) -> Option<V>,
-    {
-        self.symmetric_difference_with_key(other, f)
     }
 
     /// Construct the symmetric difference between two maps by using a function

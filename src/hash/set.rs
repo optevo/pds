@@ -637,34 +637,6 @@ where
 
     /// Construct the symmetric difference between two sets.
     ///
-    /// This is an alias for the
-    /// [`symmetric_difference`][symmetric_difference] method.
-    ///
-    /// Time: O(n log n)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # #[macro_use] extern crate pds;
-    /// # use pds::hashset::HashSet;
-    /// let set1 = hashset!{1, 2};
-    /// let set2 = hashset!{2, 3};
-    /// let expected = hashset!{1, 3};
-    /// assert_eq!(expected, set1.difference(set2));
-    /// ```
-    ///
-    /// [symmetric_difference]: #method.symmetric_difference
-    #[deprecated(
-        since = "2.0.1",
-        note = "to avoid conflicting behaviors between std and pds, the `difference` alias for `symmetric_difference` will be removed."
-    )]
-    #[must_use]
-    pub fn difference(self, other: Self) -> Self {
-        self.symmetric_difference(other)
-    }
-
-    /// Construct the symmetric difference between two sets.
-    ///
     /// Time: O(n log n)
     ///
     /// # Examples
@@ -1795,18 +1767,6 @@ mod test {
 
         let empty: Vec<HashSet<i32>> = vec![];
         assert!(HashSet::unions(empty).is_empty());
-    }
-
-    #[test]
-    fn difference_basic() {
-        // Note: HashSet::difference is symmetric difference, not set-minus.
-        // Use relative_complement for set-minus.
-        let a = hashset! {1, 2, 3};
-        let b = hashset! {2, 3, 4};
-        let d = a.difference(b);
-        assert_eq!(d.len(), 2);
-        assert!(d.contains(&1));
-        assert!(d.contains(&4));
     }
 
     #[test]
