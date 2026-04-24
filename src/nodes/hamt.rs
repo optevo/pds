@@ -7,7 +7,7 @@ use std::hash::{BuildHasher, Hash};
 use std::iter::FusedIterator;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
-use std::{fmt, mem, ptr};
+use std::{fmt, mem};
 
 use archery::{SharedPointer, SharedPointerKind};
 use bitmaps::{Bits, BitsImpl};
@@ -56,13 +56,23 @@ fn group_find(control: &SimdGroup, value: u8) -> GroupBitmap {
     GroupBitmap::from_value(mask as _)
 }
 
-/// Special constructor to allow initializing Nodes w/o incurring multiple memory copies.
-/// These copies really slow things down once Node crosses a certain size threshold and copies become calls to memcopy.
+/// Construct a node directly inside a SharedPointer allocation to avoid memcpy.
+/// Nodes can be large (SparseChunk with SIMD control bytes), and the safe path
+/// (construct on stack → clone into Arc) measurably slows down insert-heavy workloads.
 #[inline]
 fn node_with<T, P: SharedPointerKind>(with: impl FnOnce(&mut T)) -> SharedPointer<T, P>
 where
     T: Default,
 {
+    // SAFETY: We allocate a SharedPointer<UnsafeCell<MaybeUninit<T>>> to get a
+    // heap-allocated slot, write T::default() into it, let the callback mutate it,
+    // then transmute the pointer type from UnsafeCell<MaybeUninit<T>> to T.
+    // This is sound because:
+    // - UnsafeCell<MaybeUninit<T>> and T have identical layout (UnsafeCell and
+    //   MaybeUninit are both #[repr(transparent)])
+    // - The value is fully initialised before the transmute (write + callback)
+    // - ManuallyDrop prevents double-free of the source pointer
+    // - The SharedPointer refcount is 1 (just created), so no aliasing concerns
     let result: SharedPointer<UnsafeCell<mem::MaybeUninit<T>>, P> =
         SharedPointer::new(UnsafeCell::new(mem::MaybeUninit::uninit()));
     #[allow(unsafe_code)]
@@ -223,19 +233,24 @@ where
         None
     }
 
+    #[allow(unsafe_code)]
     pub(crate) fn get_mut<Q>(&mut self, hash: HashBits, key: &Q) -> Option<&mut A>
     where
         Q: Equivalent<A::Key> + ?Sized,
     {
         let (search, group) = Self::ctrl_hash_and_group(hash);
         let mut bitmap = group_find(&self.control[group], search);
+        // SAFETY: The loop needs to re-borrow self.data on each iteration, but
+        // the returned &mut A extends the borrow of self.data beyond the loop.
+        // The borrow checker cannot express this (the returned reference is to a
+        // single slot, not the whole chunk). The raw pointer breaks the borrow
+        // chain while preserving the guarantee that only one &mut A is returned.
         let this = self as *mut Self;
         #[allow(dropping_references)]
         drop(self);
 
         while let Some(offset) = bitmap.first_index() {
             let index = group * GROUP_WIDTH + offset;
-            #[allow(unsafe_code)]
             let this = unsafe { &mut *this };
             let (ref mut value, value_hash) = this.data.get_mut(index).unwrap();
             if hash_may_eq::<A>(hash, *value_hash) && key.equivalent(value.extract_key()) {
@@ -493,7 +508,6 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
         Entry::SmallSimdNode(small_node)
     }
 
-    #[allow(unsafe_code)]
     pub(crate) fn insert(&mut self, hash: HashBits, shift: usize, value: A) -> Option<A>
     where
         A: Clone,
@@ -546,10 +560,9 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
             }
         }
 
-        // If we get here, we're inserting a value over an existing value (collision).
-        // We're going to be unsafe and pry it out of the reference, trusting
-        // that we overwrite it with the merged node.
-        let Entry::Value(old_value, old_hash) = (unsafe { ptr::read(entry) }) else {
+        // If we get here, we're inserting a value that collides with an existing Value entry.
+        // Remove the old entry, build the merged node, and insert it back.
+        let Entry::Value(old_value, old_hash) = self.data.remove(index).unwrap() else {
             unreachable!()
         };
         let new_entry = if shift + HASH_SHIFT >= HASH_WIDTH {
@@ -558,7 +571,7 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
         } else {
             Self::merge_values(old_value, old_hash, value, hash)
         };
-        unsafe { ptr::write(entry, new_entry) };
+        self.data.insert(index, new_entry);
         None
     }
 
