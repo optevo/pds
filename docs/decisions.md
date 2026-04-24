@@ -207,3 +207,57 @@ equivalent of Scala 2.13's improved structure.
 **Consequences:**
 4.1 is closed. No code changes needed. The existing 4-buffer structure
 is documented in docs/architecture.md.
+
+---
+
+## DEC-006: 4.5 SharedPointer-wrapped hasher — keep despite i64 regression
+
+**Date:** 2026-04-24
+**Status:** Accepted
+
+**Context:**
+After 5.2 (Clone bounds cleanup), `S: Clone` remained on ~20 persistent
+methods (`update`, `without`, `union`, `intersection`, `entry`, etc.)
+because the hasher was stored bare in `GenericHashMap` and `self.clone()`
+clones it. Item 4.5 proposed wrapping the hasher in `SharedPointer<S, P>`
+so cloning the map bumps a refcount instead of cloning the hasher.
+
+Benchmark results (criterion, `target-cpu=native`, exclusive CPU):
+- i64 lookups: 3-5% regression (hash time ~2ns, pointer deref ~1ns is
+  proportionally significant)
+- String lookups: 0-2% (hash time dominates, deref is noise)
+- Mutations (insert/remove): 0-2% (mutation cost dominates)
+- Iteration: no measurable change
+
+**Decision:**
+Keep the change. The regression is confined to the narrowest case
+(tiny keys where hash computation is ~2ns). Three factors justify it:
+
+1. **API simplification.** ~50 `S: Clone` bounds removed from the
+   HashMap/HashSet API. This cascades to all downstream consumers —
+   any generic struct wrapping these collections no longer needs
+   `S: Clone` in its own `Clone` impl.
+2. **Philosophy alignment.** imbl is a structural sharing library.
+   Every other component is already behind a shared pointer. Storing
+   the hasher bare was the odd one out.
+3. **Downstream ergonomics.** Users with custom hashers that have
+   non-trivial clone costs get a real performance win. Users with
+   `RandomState` (the common case) see negligible impact outside the
+   i64 micro-benchmark.
+
+**Alternatives considered:**
+- Revert and accept `S: Clone` on persistent methods — rejected because
+  the bound propagation burden on downstream code is the larger cost.
+- Use `Cow<'static, S>` or similar to avoid the allocation — rejected
+  because `SharedPointer` already provides the right abstraction and
+  `Cow` doesn't support runtime-constructed hashers.
+- Specialise: inline for `RandomState`, shared for custom hashers —
+  rejected as over-engineered; Rust lacks specialisation on stable.
+
+**Consequences:**
+`S: Clone` is completely eliminated from the HashMap/HashSet API.
+The hasher field is `SharedPointer<S, P>` in both `GenericHashMap` and
+`GenericHashSet`. Internal hasher access uses `&*self.hasher` (explicit
+deref) for generic function calls and `&self.hasher` (auto-deref) for
+return types. The `Clone` impl for both types no longer requires
+`K: Clone`, `V: Clone`, or `S: Clone` — only `P: SharedPointerKind`.

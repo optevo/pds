@@ -64,6 +64,17 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 4.5: SharedPointer-wrapped hasher.** Wrapped the hasher
+  in `SharedPointer<S, P>` in both `GenericHashMap` and `GenericHashSet`.
+  Cloning the map now bumps a refcount instead of cloning the hasher,
+  eliminating `S: Clone` from the entire HashMap/HashSet API (~50 bounds
+  removed). Benchmark results: 3-5% regression on i64 lookups (where hash
+  time ~2ns makes the pointer deref proportionally visible), 0-2% for
+  string keys and mutations (hash time dominates). Decision: keep the
+  change — the regression is confined to the narrowest case, the API
+  simplification cascades to all downstream consumers, and sharing the
+  hasher aligns with the library's structural sharing philosophy.
+
 - **[2026-04-24] 5.2: Remove unnecessary Clone bounds.** Audited Clone
   dependencies across HashMap, HashSet, OrdMap, and OrdSet. Split impl
   blocks by actual Clone requirements. HashMap: removed `S: Clone` from
@@ -304,24 +315,22 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-5.2 (Clone bounds cleanup) complete. Agreed sequencing for remaining
-work:
+5.2 (Clone bounds cleanup) and 4.5 (SharedPointer-wrapped hasher)
+complete. Agreed sequencing for remaining work:
 
-1. **4.5 SharedPointer-wrapped hasher PoC** — benchmark whether wrapping
-   the hasher in SharedPointer regresses lookups. If <5% regression,
-   eliminates S: Clone from the entire HashMap/HashSet API.
-2. **4.2 CHAMP prototype** — standalone research benchmark against
+1. **4.2 CHAMP prototype** — standalone research benchmark against
    current SIMD HAMT. Go/no-go gate for 4.3.
-3. **3.3 Owned-node construction** — targets whichever node layout wins
+2. **3.3 Owned-node construction** — targets whichever node layout wins
    (current SIMD HAMT or CHAMP).
-4. **4.4 Merkle caching** — layered on after node layout is settled.
+3. **4.4 Merkle caching** — layered on after node layout is settled.
 
 Phase 3 status: 3.1 resolved (DEC-004). 3.2 complete. 3.4 partially
 complete (par_iter/FromParallelIterator/ParallelExtend done for all
 hash/ord types; par_iter_mut for HashMap; par_sort for Vector; parallel
 bulk ops deferred to Phase 6 — needs tree-level parallelism). 3.5
 complete. 3.6 complete. 3.3 deferred pending node layout decision.
-Phase 4: 4.1 resolved (4-buffer structure already symmetric).
+Phase 4: 4.1 resolved (4-buffer structure already symmetric). 4.5
+complete (hasher behind SharedPointer, S: Clone eliminated).
 
 ---
 
@@ -1406,61 +1415,21 @@ storage; immer `persist` module; xxHash3 (github.com/Cyan4973/xxHash).
 
 ---
 
-### 4.5 SharedPointer-wrapped hasher PoC
+### 4.5 SharedPointer-wrapped hasher PoC — DONE
 
-**What:** Wrap the hasher in `SharedPointer<S, P>` instead of storing it
-bare in `GenericHashMap`. This makes "cloning the hasher" a refcount bump
-rather than a real clone, eliminating `S: Clone` from the entire HashMap
-and HashSet API — including persistent methods (`update`, `without`,
-`union`, `intersection`, `entry`, etc.) that currently require it because
-they call `self.clone()`.
+**Status:** Complete. See Done section for details.
 
-**Current state:** After 5.2, `S: Clone` remains on ~20 methods that
-clone the entire map (which clones the hasher). The root cause is that
-`GenericHashMap` stores `hasher: S` directly.
-
-**Proposed change:**
-```rust
-// Before
-pub struct GenericHashMap<K, V, S, P: SharedPointerKind> {
-    hasher: S,
-    root: ...,
-}
-
-// After
-pub struct GenericHashMap<K, V, S, P: SharedPointerKind> {
-    hasher: SharedPointer<S, P>,
-    root: ...,
-}
-```
-
-**Trade-offs to measure:**
-- **Lookup overhead:** Every `hash_key()` call adds a pointer deref
-  through the SharedPointer. On hot lookup paths this is measurable.
-- **Construction overhead:** Creating a new map allocates the hasher
-  behind a SharedPointer (one extra allocation vs inline storage).
-- **Persistent operation benefit:** All derived maps (update, without,
-  union, etc.) share the hasher allocation — amortises well for the
-  persistent use pattern.
-- **Entry API:** The Entry type's `S: Clone` constraint can be removed
-  entirely, which cascades to methods using Entry (union, etc.).
-
-**Go/no-go question:** Does the pointer indirection on hash_key()
-regress lookup benchmarks by more than 5%? If yes, the memory density
-and API ergonomics may not justify the overhead.
-
-**PoC scope:** Modify GenericHashMap to use `SharedPointer<S, P>`,
-update all internal hasher access, remove all `S: Clone` bounds,
-benchmark lookup/insert/remove/iteration at 100/1K/10K/100K against
-current implementation.
-
-**Complexity:** Low-moderate. Mechanical change to hasher storage +
-benchmark comparison.
+**What was done:** Wrapped the hasher in `SharedPointer<S, P>` in both
+`GenericHashMap` and `GenericHashSet`. Eliminated `S: Clone` from the
+entire HashMap/HashSet API (~50 bounds). Benchmark showed 3-5% i64
+lookup regression (acceptable — hash time ~2ns makes pointer deref
+proportionally visible), 0-2% for string keys and mutations. Decision:
+keep — API simplification cascades to all downstream consumers and
+aligns with structural sharing philosophy.
 
 **Affects:** `HashMap<K, V, S>`, `HashSet<A, S>`.
 
-**Prerequisites:** 5.2 (Clone bounds audit — completed, identifies
-exactly which methods still need S: Clone and why).
+**Prerequisites:** 5.2 (Clone bounds audit — completed).
 
 ---
 
@@ -1787,7 +1756,7 @@ Phase 4 (internals)                │                                      │
   4.2 CHAMP prototype ◄── 0.3, 0.5                                        │
   4.3 CHAMP integration ◄── 4.2, 0.1, 0.2 (only if benchmarks justify)   │
   4.4 Merkle hash caching ◄── 0.3, 0.5                                    │
-  4.5 SharedPointer hasher PoC ◄── 5.2                                    │
+  4.5 SharedPointer hasher PoC ◄── 5.2  ✓ DONE                                    │
                                    │                                      │
 Phase 5 (breaking — v8.0.0)        │                                      │
   5.1 triomphe default ◄── 0.3, 0.4                                       │
@@ -1811,7 +1780,7 @@ parallel:
 
 1. **Vector track:** 2.1 → 4.1
 2. **Hash track:** 4.2 → (4.3 if justified) → 5.3, 5.4
-3. **Mutation track:** 3.1 → 3.2, 3.3 → 5.2 ✓ → 4.5 (hasher PoC)
+3. **Mutation track:** 3.1 → 3.2, 3.3 → 5.2 ✓ → 4.5 ✓
 4. **Parallel track:** 3.4 (HashMap/HashSet par_iter first, then
    OrdMap/OrdSet, then bulk ops and parallel sort). Benefits from but
    does not block on 3.1/3.3.
