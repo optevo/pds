@@ -1332,6 +1332,77 @@ where
         out
     }
 
+    /// Merge two maps with different value types using three closures:
+    /// one for keys present only in `self`, one for keys in both maps,
+    /// and one for keys present only in `other`.
+    ///
+    /// Each closure returns `Option<V3>` — returning `None` excludes
+    /// the key from the result. This subsumes `union_with`,
+    /// `intersection_with`, `difference_with`, and
+    /// `symmetric_difference_with` as special cases.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let left = hashmap!{1 => "a", 2 => "b", 3 => "c"};
+    /// let right = hashmap!{2 => 10, 3 => 20, 4 => 30};
+    /// let merged: HashMap<i32, String> = left.merge_with(
+    ///     &right,
+    ///     |_k, v| Some(v.to_string()),           // left only
+    ///     |_k, l, r| Some(format!("{l}:{r}")),    // both
+    ///     |_k, v| Some(v.to_string()),            // right only
+    /// );
+    /// assert_eq!(merged.len(), 4);
+    /// assert_eq!(merged[&1], "a");
+    /// assert_eq!(merged[&2], "b:10");
+    /// assert_eq!(merged[&3], "c:20");
+    /// assert_eq!(merged[&4], "30");
+    /// ```
+    #[must_use]
+    pub fn merge_with<V2, V3, FL, FB, FR>(
+        &self,
+        other: &GenericHashMap<K, V2, S, P>,
+        mut left_only: FL,
+        mut both: FB,
+        mut right_only: FR,
+    ) -> GenericHashMap<K, V3, S, P>
+    where
+        V2: Clone,
+        V3: Clone,
+        S: Default,
+        FL: FnMut(&K, &V) -> Option<V3>,
+        FB: FnMut(&K, &V, &V2) -> Option<V3>,
+        FR: FnMut(&K, &V2) -> Option<V3>,
+    {
+        let mut result = GenericHashMap::new();
+        // Phase 1: iterate left, dispatch left-only and both
+        for (k, v1) in self.iter() {
+            match other.get(k) {
+                Some(v2) => {
+                    if let Some(v3) = both(k, v1, v2) {
+                        result.insert(k.clone(), v3);
+                    }
+                }
+                None => {
+                    if let Some(v3) = left_only(k, v1) {
+                        result.insert(k.clone(), v3);
+                    }
+                }
+            }
+        }
+        // Phase 2: iterate right for keys not in left
+        for (k, v2) in other.iter() {
+            if !self.contains_key(k) {
+                if let Some(v3) = right_only(k, v2) {
+                    result.insert(k.clone(), v3);
+                }
+            }
+        }
+        result
+    }
+
     /// Remove a key/value pair from a map, if it exists, and return
     /// the removed value as well as the updated map.
     ///
@@ -3238,5 +3309,87 @@ mod test {
         let keys = crate::hashset::HashSet::from_iter(vec![2, 4]);
         let reduced = map.without_keys(&keys);
         assert_eq!(reduced, hashmap! {1 => "a", 3 => "c"});
+    }
+
+    #[test]
+    fn merge_with_all_partitions() {
+        let left = hashmap! {1 => "a", 2 => "b", 3 => "c"};
+        let right = hashmap! {2 => 10, 3 => 20, 4 => 30};
+        let merged: HashMap<i32, String> = left.merge_with(
+            &right,
+            |_k, v| Some(v.to_string()),
+            |_k, l, r| Some(format!("{l}:{r}")),
+            |_k, v| Some(v.to_string()),
+        );
+        assert_eq!(merged.len(), 4);
+        assert_eq!(merged[&1], "a");
+        assert_eq!(merged[&2], "b:10");
+        assert_eq!(merged[&3], "c:20");
+        assert_eq!(merged[&4], "30");
+    }
+
+    #[test]
+    fn merge_with_as_intersection() {
+        let left = hashmap! {1 => 10, 2 => 20, 3 => 30};
+        let right = hashmap! {2 => 200, 3 => 300, 4 => 400};
+        let merged: HashMap<i32, i32> = left.merge_with(
+            &right,
+            |_, _| None,
+            |_, l, r| Some(l + r),
+            |_, _| None,
+        );
+        assert_eq!(merged, hashmap! {2 => 220, 3 => 330});
+    }
+
+    #[test]
+    fn merge_with_as_difference() {
+        let left = hashmap! {1 => "a", 2 => "b", 3 => "c"};
+        let right = hashmap! {2 => 0, 3 => 0};
+        let merged: HashMap<i32, String> = left.merge_with(
+            &right,
+            |_, v| Some(v.to_string()),
+            |_, _, _| None,
+            |_, _| None,
+        );
+        assert_eq!(merged, hashmap! {1 => "a".to_string()});
+    }
+
+    #[test]
+    fn merge_with_empty_left() {
+        let left: HashMap<i32, i32> = HashMap::new();
+        let right = hashmap! {1 => 10, 2 => 20};
+        let merged: HashMap<i32, i32> = left.merge_with(
+            &right,
+            |_, v| Some(*v),
+            |_, l, r| Some(l + r),
+            |_, v| Some(*v),
+        );
+        assert_eq!(merged, hashmap! {1 => 10, 2 => 20});
+    }
+
+    #[test]
+    fn merge_with_empty_right() {
+        let left = hashmap! {1 => 10, 2 => 20};
+        let right: HashMap<i32, i32> = HashMap::new();
+        let merged: HashMap<i32, i32> = left.merge_with(
+            &right,
+            |_, v| Some(*v),
+            |_, l, r| Some(l + r),
+            |_, v| Some(*v),
+        );
+        assert_eq!(merged, hashmap! {1 => 10, 2 => 20});
+    }
+
+    #[test]
+    fn merge_with_both_empty() {
+        let left: HashMap<i32, i32> = HashMap::new();
+        let right: HashMap<i32, i32> = HashMap::new();
+        let merged: HashMap<i32, i32> = left.merge_with(
+            &right,
+            |_, v| Some(*v),
+            |_, l, r| Some(l + r),
+            |_, v| Some(*v),
+        );
+        assert!(merged.is_empty());
     }
 }

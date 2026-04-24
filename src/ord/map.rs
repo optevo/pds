@@ -624,6 +624,98 @@ where
             }
         }
     }
+
+    /// Merge two maps with different value types using three closures:
+    /// one for keys present only in `self`, one for keys in both maps,
+    /// and one for keys present only in `other`.
+    ///
+    /// Each closure returns `Option<V3>` — returning `None` excludes
+    /// the key from the result. This subsumes `union_with`,
+    /// `intersection_with`, `difference_with`, and
+    /// `symmetric_difference_with` as special cases.
+    ///
+    /// Uses a sorted merge of both maps' iterators — O(n + m) time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let left = ordmap!{1 => "a", 2 => "b", 3 => "c"};
+    /// let right = ordmap!{2 => 10, 3 => 20, 4 => 30};
+    /// let merged: OrdMap<i32, String> = left.merge_with(
+    ///     &right,
+    ///     |_k, v| Some(v.to_string()),           // left only
+    ///     |_k, l, r| Some(format!("{l}:{r}")),    // both
+    ///     |_k, v| Some(v.to_string()),            // right only
+    /// );
+    /// assert_eq!(merged, ordmap!{
+    ///     1 => "a".to_string(),
+    ///     2 => "b:10".to_string(),
+    ///     3 => "c:20".to_string(),
+    ///     4 => "30".to_string()
+    /// });
+    /// ```
+    #[must_use]
+    pub fn merge_with<V2, V3, FL, FB, FR>(
+        &self,
+        other: &GenericOrdMap<K, V2, P>,
+        mut left_only: FL,
+        mut both: FB,
+        mut right_only: FR,
+    ) -> GenericOrdMap<K, V3, P>
+    where
+        K: Clone,
+        V3: Clone,
+        FL: FnMut(&K, &V) -> Option<V3>,
+        FB: FnMut(&K, &V, &V2) -> Option<V3>,
+        FR: FnMut(&K, &V2) -> Option<V3>,
+    {
+        let mut result = GenericOrdMap::new();
+        let mut it1 = self.iter().peekable();
+        let mut it2 = other.iter().peekable();
+
+        loop {
+            match (it1.peek(), it2.peek()) {
+                (Some(&(k1, _)), Some(&(k2, _))) => match k1.cmp(k2) {
+                    Ordering::Less => {
+                        let (k, v) = it1.next().unwrap();
+                        if let Some(v3) = left_only(k, v) {
+                            result.insert(k.clone(), v3);
+                        }
+                    }
+                    Ordering::Greater => {
+                        let (k, v) = it2.next().unwrap();
+                        if let Some(v3) = right_only(k, v) {
+                            result.insert(k.clone(), v3);
+                        }
+                    }
+                    Ordering::Equal => {
+                        let (k, v1) = it1.next().unwrap();
+                        let (_, v2) = it2.next().unwrap();
+                        if let Some(v3) = both(k, v1, v2) {
+                            result.insert(k.clone(), v3);
+                        }
+                    }
+                },
+                (Some(_), None) => {
+                    let (k, v) = it1.next().unwrap();
+                    if let Some(v3) = left_only(k, v) {
+                        result.insert(k.clone(), v3);
+                    }
+                }
+                (None, Some(_)) => {
+                    let (k, v) = it2.next().unwrap();
+                    if let Some(v3) = right_only(k, v) {
+                        result.insert(k.clone(), v3);
+                    }
+                }
+                (None, None) => break,
+            }
+        }
+
+        result
+    }
 }
 
 impl<K, V, P> GenericOrdMap<K, V, P>
@@ -3672,5 +3764,105 @@ mod test {
         let keys = crate::ordset::OrdSet::from_iter(vec![2, 4]);
         let reduced = map.without_keys(&keys);
         assert_eq!(reduced, ordmap! {1 => "a", 3 => "c"});
+    }
+
+    #[test]
+    fn merge_with_all_partitions() {
+        let left = ordmap! {1 => "a", 2 => "b", 3 => "c"};
+        let right = ordmap! {2 => 10, 3 => 20, 4 => 30};
+        let merged: OrdMap<i32, String> = left.merge_with(
+            &right,
+            |_k, v| Some(v.to_string()),
+            |_k, l, r| Some(format!("{l}:{r}")),
+            |_k, v| Some(v.to_string()),
+        );
+        assert_eq!(
+            merged,
+            ordmap! {
+                1 => "a".to_string(),
+                2 => "b:10".to_string(),
+                3 => "c:20".to_string(),
+                4 => "30".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn merge_with_as_intersection() {
+        let left = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let right = ordmap! {2 => 200, 3 => 300, 4 => 400};
+        let merged: OrdMap<i32, i32> = left.merge_with(
+            &right,
+            |_, _| None,
+            |_, l, r| Some(l + r),
+            |_, _| None,
+        );
+        assert_eq!(merged, ordmap! {2 => 220, 3 => 330});
+    }
+
+    #[test]
+    fn merge_with_as_difference() {
+        let left = ordmap! {1 => "a", 2 => "b", 3 => "c"};
+        let right = ordmap! {2 => 0, 3 => 0};
+        let merged: OrdMap<i32, String> = left.merge_with(
+            &right,
+            |_, v| Some(v.to_string()),
+            |_, _, _| None,
+            |_, _| None,
+        );
+        assert_eq!(merged, ordmap! {1 => "a".to_string()});
+    }
+
+    #[test]
+    fn merge_with_filtering() {
+        let left = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let right = ordmap! {2 => 5, 3 => 50, 4 => 40};
+        // Keep only entries where the value exceeds a threshold
+        let merged: OrdMap<i32, i32> = left.merge_with(
+            &right,
+            |_, v| if *v > 15 { Some(*v) } else { None },
+            |_, l, r| Some(l + r),
+            |_, v| if *v > 35 { Some(*v) } else { None },
+        );
+        assert_eq!(merged, ordmap! {2 => 25, 3 => 80, 4 => 40});
+    }
+
+    #[test]
+    fn merge_with_empty_left() {
+        let left: OrdMap<i32, i32> = OrdMap::new();
+        let right = ordmap! {1 => 10, 2 => 20};
+        let merged: OrdMap<i32, i32> = left.merge_with(
+            &right,
+            |_, v| Some(*v),
+            |_, l, r| Some(l + r),
+            |_, v| Some(*v),
+        );
+        assert_eq!(merged, ordmap! {1 => 10, 2 => 20});
+    }
+
+    #[test]
+    fn merge_with_empty_right() {
+        let left = ordmap! {1 => 10, 2 => 20};
+        let right: OrdMap<i32, i32> = OrdMap::new();
+        let merged: OrdMap<i32, i32> = left.merge_with(
+            &right,
+            |_, v| Some(*v),
+            |_, l, r| Some(l + r),
+            |_, v| Some(*v),
+        );
+        assert_eq!(merged, ordmap! {1 => 10, 2 => 20});
+    }
+
+    #[test]
+    fn merge_with_both_empty() {
+        let left: OrdMap<i32, i32> = OrdMap::new();
+        let right: OrdMap<i32, i32> = OrdMap::new();
+        let merged: OrdMap<i32, i32> = left.merge_with(
+            &right,
+            |_, v| Some(*v),
+            |_, l, r| Some(l + r),
+            |_, v| Some(*v),
+        );
+        assert!(merged.is_empty());
     }
 }
