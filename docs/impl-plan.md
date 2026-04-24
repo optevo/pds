@@ -64,6 +64,13 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 2.7: General merge.** Added `merge_with` to OrdMap and
+  HashMap. Takes three closures (left-only, both, right-only) each
+  returning `Option<V3>` — subsumes union_with, intersection_with,
+  difference_with as special cases. Supports different value types on
+  left and right maps. OrdMap uses sorted merge of iterators (O(n+m));
+  HashMap uses iterate-left-probe-right then iterate-right-for-unseen.
+
 - **[2026-04-24] 2.10: Vector convenience operations.** Added five methods:
   `adjust` (apply function at index returning new vector), `chunked` (split
   into fixed-size non-overlapping chunks), `patch` (replace a slice with
@@ -194,10 +201,10 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — items 2.2–2.6 complete, 2.8/2.9 substantially complete (core
-methods done, lower-priority items deferred), 2.10 complete. Remaining:
-2.1 (RRB concat fix), 2.7 (general merge), 2.11 (companion types).
-Phase 3 item 3.5 complete. Items 3.1–3.4 and 3.6 unblocked.
+Phase 2 — items 2.2–2.7, 2.10 complete, 2.8/2.9 substantially complete
+(core methods done, lower-priority items deferred). Remaining: 2.1 (RRB
+concat fix), 2.11 (companion types). Phase 3 item 3.5 complete. Items
+3.1–3.4 and 3.6 unblocked.
 
 ---
 
