@@ -18,10 +18,14 @@ use imbl_sized_chunks::inline_array::InlineArray;
 use imbl_sized_chunks::sparse_chunk::{Iter as ChunkIter, IterMut as ChunkIterMut, SparseChunk};
 
 use crate::config::HASH_LEVEL_SIZE as HASH_SHIFT;
-pub(crate) type HashBits = <BitsImpl<HASH_WIDTH> as Bits>::Store; // a uint of HASH_WIDTH bits
+pub(crate) type HashBits = u64;
 
 pub(crate) const HASH_WIDTH: usize = 2_usize.pow(HASH_SHIFT as u32);
-const ITER_STACK_CAPACITY: usize = HASH_WIDTH.div_ceil(HASH_SHIFT) + 1;
+/// Number of usable bits in `HashBits`. Distinct from `HASH_WIDTH` (the trie
+/// branching factor). With `HASH_SHIFT=5` this gives 12 usable trie levels
+/// before hash exhaustion triggers collision nodes.
+const HASH_BIT_COUNT: usize = HashBits::BITS as usize;
+const ITER_STACK_CAPACITY: usize = HASH_BIT_COUNT.div_ceil(HASH_SHIFT) + 1;
 const SMALL_NODE_WIDTH: usize = HASH_WIDTH / 2;
 const GROUP_WIDTH: usize = HASH_WIDTH / 2;
 
@@ -47,7 +51,7 @@ const _: () = {
 
 #[inline]
 pub(crate) fn hash_key<K: Hash + ?Sized, S: BuildHasher>(bh: &S, key: &K) -> HashBits {
-    bh.hash_one(key) as HashBits
+    bh.hash_one(key)
 }
 
 #[inline]
@@ -223,7 +227,6 @@ where
     }
 
     #[inline]
-    #[allow(clippy::unnecessary_cast)] // HashBits is u32 (normal) or u8 (small-chunks)
     fn ctrl_hash(hash: HashBits) -> u8 {
         ((hash >> (HashBits::BITS - 8)) as u8).max(1)
     }
@@ -646,7 +649,7 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
         let Entry::Value(old_value, old_hash) = self.data.remove(index).unwrap() else {
             unreachable!()
         };
-        let new_entry = if shift + HASH_SHIFT >= HASH_WIDTH {
+        let new_entry = if shift + HASH_SHIFT >= HASH_BIT_COUNT {
             // We're at the lowest level, need to set up a collision node.
             Entry::from(CollisionNode::new(hash, old_value, value))
         } else {
