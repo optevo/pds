@@ -1839,6 +1839,71 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
             sort::quicksort(self.focus_mut(), &cmp);
         }
     }
+
+    /// Sort a vector using the default comparator, in parallel.
+    ///
+    /// This is the parallel equivalent of [`sort`][sort]. It collects
+    /// elements into a contiguous buffer, sorts in parallel using rayon,
+    /// and rebuilds the vector.
+    ///
+    /// Requires the `rayon` feature flag.
+    ///
+    /// Time: O(n log n / p) where p is the number of available threads,
+    /// plus O(n) for collection and reconstruction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// let mut vec = vector![3, 2, 5, 4, 1];
+    /// vec.par_sort();
+    /// assert_eq!(vector![1, 2, 3, 4, 5], vec);
+    /// ```
+    ///
+    /// [sort]: #method.sort
+    #[cfg(any(test, feature = "rayon"))]
+    pub fn par_sort(&mut self)
+    where
+        A: Ord + Send,
+    {
+        self.par_sort_by(Ord::cmp)
+    }
+
+    /// Sort a vector using a comparator function, in parallel.
+    ///
+    /// This is the parallel equivalent of [`sort_by`][sort_by]. It
+    /// collects elements into a contiguous buffer, sorts in parallel
+    /// using rayon, and rebuilds the vector.
+    ///
+    /// Requires the `rayon` feature flag.
+    ///
+    /// Time: O(n log n / p) where p is the number of available threads,
+    /// plus O(n) for collection and reconstruction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// let mut vec = vector![3, 2, 5, 4, 1];
+    /// vec.par_sort_by(|left, right| left.cmp(right));
+    /// assert_eq!(vector![1, 2, 3, 4, 5], vec);
+    /// ```
+    ///
+    /// [sort_by]: #method.sort_by
+    #[cfg(any(test, feature = "rayon"))]
+    pub fn par_sort_by<F>(&mut self, cmp: F)
+    where
+        A: Send,
+        F: Fn(&A, &A) -> Ordering + Sync,
+    {
+        use ::rayon::slice::ParallelSliceMut;
+        if self.len() <= 1 {
+            return;
+        }
+        let mut vec: Vec<A> = std::mem::take(self).into_iter().collect();
+        vec.par_sort_unstable_by(|a, b| cmp(a, b));
+        *self = vec.into_iter().collect();
+    }
 }
 
 // Implementation details

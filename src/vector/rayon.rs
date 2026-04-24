@@ -218,5 +218,42 @@ mod test {
             let expected: Vector<i32> = input.clone().into_iter().map(|i| i.overflowing_add(1).0).collect();
             assert_eq!(expected, vec);
         }
+
+        #[cfg_attr(miri, ignore)]
+        #[test]
+        fn par_sort(ref input in vector(i32::ANY, 0..10000)) {
+            let mut par = input.clone();
+            let mut seq = input.clone();
+            par.par_sort();
+            seq.sort();
+            assert_eq!(par, seq);
+        }
+
+        #[cfg_attr(miri, ignore)]
+        #[test]
+        fn par_sort_by(ref input in vector(i32::ANY, 0..10000)) {
+            let mut par = input.clone();
+            let mut seq = input.clone();
+            par.par_sort_by(|a, b| b.cmp(a));
+            seq.sort_by(|a, b| b.cmp(a));
+            assert_eq!(par, seq);
+        }
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn par_sort_empty() {
+        let mut vec: Vector<i32> = Vector::new();
+        vec.par_sort();
+        assert_eq!(vec, Vector::<i32>::new());
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn par_sort_single() {
+        let mut vec: Vector<i32> = vec![42].into();
+        vec.par_sort();
+        let expected: Vector<i32> = vec![42].into();
+        assert_eq!(vec, expected);
     }
 }
