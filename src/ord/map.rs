@@ -883,6 +883,46 @@ where
         removed
     }
 
+    /// Apply a diff to produce a new map.
+    ///
+    /// Takes any iterator of [`DiffItem`] values (such as from
+    /// [`diff`][GenericOrdMap::diff]) and applies each change —
+    /// `Add` and `Update` insert entries, `Remove` removes entries.
+    ///
+    /// Time: O(d log n) where d is the number of diff items
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordmap::OrdMap;
+    /// let base = ordmap!{1 => "a", 2 => "b", 3 => "c"};
+    /// let modified = ordmap!{1 => "a", 2 => "B", 4 => "d"};
+    /// let diff: Vec<_> = base.diff(&modified).collect();
+    /// let patched = base.apply_diff(diff);
+    /// assert_eq!(patched, modified);
+    /// ```
+    #[must_use]
+    pub fn apply_diff<'a, 'b, I>(&self, diff: I) -> Self
+    where
+        I: IntoIterator<Item = DiffItem<'a, 'b, K, V>>,
+        K: 'a + 'b,
+        V: 'a + 'b,
+    {
+        let mut out = self.clone();
+        for item in diff {
+            match item {
+                DiffItem::Add(k, v) | DiffItem::Update { new: (k, v), .. } => {
+                    out.insert(k.clone(), v.clone());
+                }
+                DiffItem::Remove(k, _) => {
+                    out.remove(k);
+                }
+            }
+        }
+        out
+    }
+
     /// Construct a new map by inserting a key/value mapping into a
     /// map.
     ///
@@ -3171,5 +3211,49 @@ mod test {
         assert_eq!(it.len(), 1);
         it.next();
         assert_eq!(it.len(), 0);
+    }
+
+    #[test]
+    fn apply_diff_roundtrip() {
+        let base = ordmap! {1 => "a", 2 => "b", 3 => "c"};
+        let modified = ordmap! {1 => "a", 2 => "B", 4 => "d"};
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_empty_diff() {
+        let map = ordmap! {1 => "a", 2 => "b"};
+        let patched = map.apply_diff(vec![]);
+        assert_eq!(patched, map);
+    }
+
+    #[test]
+    fn apply_diff_from_empty() {
+        let base: OrdMap<i32, &str> = OrdMap::new();
+        let modified = ordmap! {1 => "a", 2 => "b"};
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_to_empty() {
+        let base = ordmap! {1 => "a", 2 => "b"};
+        let modified: OrdMap<i32, &str> = OrdMap::new();
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_preserves_original() {
+        let base = ordmap! {1 => "a", 2 => "b"};
+        let modified = ordmap! {1 => "a", 2 => "B", 3 => "c"};
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let _patched = base.apply_diff(diff);
+        // Original unchanged due to structural sharing
+        assert_eq!(base, ordmap! {1 => "a", 2 => "b"});
     }
 }

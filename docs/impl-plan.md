@@ -64,6 +64,17 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-24] 2.6: Patch/apply from diff.** Added `apply_diff()` to all
+  five collection types: OrdMap, OrdSet, HashMap, HashSet, Vector. Each
+  method takes any `IntoIterator<Item = DiffItem>` and produces a new
+  collection with the diff applied — `Add`/`Update` insert entries,
+  `Remove` removes entries. For Vector, `Remove` truncates at the given
+  index (matching the diff output order where removes are always at the
+  tail). All methods return a new collection (`&self -> Self`), preserving
+  the original via structural sharing. Tests cover roundtrip (diff then
+  apply recovers the modified collection), empty diffs, from/to empty,
+  and original-preservation.
+
 - **[2026-04-24] 2.4: HashMap/HashSet diff.** Added `diff()` to HashMap and
   HashSet, producing `DiffIter` iterators that yield `DiffItem` variants.
   HashMap diff yields `Add/Update/Remove` (matching OrdMap's API); HashSet
@@ -166,8 +177,9 @@ single v8.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phase 2 — items 2.2, 2.3, 2.4, 2.5 complete. Remaining: 2.1 (RRB concat
-fix), 2.6 (patch/apply — unblocked). Phase 3 item 3.5 complete. Items
+Phase 2 — items 2.2, 2.3, 2.4, 2.5, 2.6 complete. Remaining: 2.1 (RRB
+concat fix), 2.7–2.9 (map/set API completeness), 2.10 (vector
+operations), 2.11 (companion types). Phase 3 item 3.5 complete. Items
 3.1–3.4 and 3.6 unblocked.
 
 ---
@@ -600,6 +612,248 @@ exist.
 
 ---
 
+### 2.7 General merge
+
+**What:** Add a general-purpose `merge_with` that combines two maps in a
+single traversal, handling all three partitions: keys only in the left
+map, keys in both maps, keys only in the right map. Each partition gets
+its own closure.
+
+**Signature (Rust):**
+```rust
+fn merge_with<V2, V3>(
+    &self,
+    other: &Map<K, V2>,
+    both: impl FnMut(&K, &V, &V2) -> Option<V3>,
+    left_only: impl FnMut(&K, &V) -> Option<V3>,
+    right_only: impl FnMut(&K, &V2) -> Option<V3>,
+) -> Map<K, V3>
+```
+
+**Why:** This is the most powerful missing API in imbl. It subsumes
+`union_with`, `intersection_with`, `difference_with`, and
+`symmetric_difference_with` as special cases — each is just a specific
+combination of closures. More importantly, it handles mixed strategies
+(e.g. "keep left-only entries unchanged, merge both-entries with a
+custom resolver, discard right-only entries") that currently require
+multiple passes. Haskell's `Data.Map.mergeWithKey` and the
+`Data.Map.Merge.Strict` module provide equivalent functionality and are
+among the most-used map combinators in the Haskell ecosystem.
+
+**Complexity:** Moderate. Requires a simultaneous traversal of two trees
+(HAMT or B+ tree), dispatching to the appropriate closure at each node.
+The OrdMap implementation can reuse the cursor-based diff machinery.
+The HashMap implementation requires a parallel HAMT walk.
+
+**Affects:** `HashMap<K, V>`, `OrdMap<K, V>`.
+
+**Prerequisites:** 0.1 (CI). Benefits from 2.4 (HashMap diff) since both
+require parallel HAMT traversal — shared infrastructure.
+
+**References:** Haskell `Data.Map.mergeWithKey`; Haskell
+`Data.Map.Merge.Strict` (merge tactics API); Scala `merged`.
+
+---
+
+### 2.8 Map value and key transformations
+
+**What:** Add a family of map transformation methods that produce new
+maps with transformed values or keys. Currently, all such transforms
+require `iter().map().collect()`, which rebuilds the tree from scratch
+and loses structural sharing.
+
+**Methods:**
+- `map_values(&self, f: impl FnMut(&V) -> V2) -> Map<K, V2>` — transform
+  all values
+- `map_values_with_key(&self, f: impl FnMut(&K, &V) -> V2) -> Map<K, V2>`
+  — transform values with key access
+- `map_keys<K2>(&self, f: impl FnMut(&K) -> K2) -> Map<K2, V>` — transform
+  keys (may merge entries if `f` is not injective)
+- `map_keys_monotonic<K2>(&self, f: impl FnMut(&K) -> K2) -> OrdMap<K2, V>`
+  — transform keys preserving order (OrdMap only; can reuse tree structure
+  since relative ordering is unchanged)
+- `try_map_values(&self, f: impl FnMut(&K, &V) -> Result<V2, E>) -> Result<Map<K, V2>, E>`
+  — fallible value transformation with early exit on first error
+- `map_accum<S, V2>(&self, init: S, f: impl FnMut(S, &K, &V) -> (S, V2)) -> (S, Map<K, V2>)`
+  — thread an accumulator through key-order traversal while transforming
+  values
+
+**Why:** `map_values` is one of the most commonly needed operations on
+maps across every language ecosystem (Haskell `fmap`/`mapWithKey`, Scala
+`transform`/`mapValues`, Clojure `update-vals`). Its absence is the
+single largest ergonomic gap in imbl's map API. `try_map_values` (Haskell's
+`traverseWithKey`) fills a critical niche for validation and parsing
+pipelines. `map_keys_monotonic` enables efficient key type conversions
+on ordered maps without rebuilding.
+
+**Complexity:** Low-moderate per method. `map_values` and
+`map_values_with_key` are straightforward tree walks. `map_keys` needs
+to rebuild (keys affect structure). `map_keys_monotonic` can reuse tree
+nodes since order is preserved. `try_map_values` adds early-exit logic.
+`map_accum` threads state through an in-order traversal.
+
+**Affects:** `HashMap<K, V>`, `OrdMap<K, V>`.
+
+**Prerequisites:** 0.1 (CI).
+
+**References:** Haskell `Data.Map.mapWithKey`, `Data.Map.mapKeys`,
+`Data.Map.mapKeysMonotonic`, `Data.Map.traverseWithKey`,
+`Data.Map.mapAccumWithKey`; Scala `transform`, `mapValues`.
+
+---
+
+### 2.9 Map/set partitioning and bulk filtering
+
+**What:** Add partitioning and bulk key-set filtering operations to maps
+and sets.
+
+**Methods:**
+- `partition(&self, f: impl FnMut(&K, &V) -> bool) -> (Self, Self)` —
+  split into entries that satisfy the predicate and entries that do not
+- `partition_map<V1, V2>(&self, f: impl FnMut(&K, &V) -> Result<V1, V2>) -> (Map<K, V1>, Map<K, V2>)`
+  — partition + transform into two differently-typed maps (Haskell's
+  `mapEither`)
+- `restrict_keys(&self, keys: &Set<K>) -> Self` — keep only entries
+  whose keys are in the given set
+- `without_keys(&self, keys: &Set<K>) -> Self` — remove all entries
+  whose keys are in the given set
+- `disjoint(&self, other: &Self) -> bool` — check whether two maps/sets
+  share no keys, with O(1) early exit on first shared key
+- `relative_complement_with<F>(&self, other: &Self, f: F) -> Self where F: FnMut(&K, &V, &V) -> Option<V>`
+  — asymmetric difference where `f` decides per-entry whether to keep,
+  modify, or discard
+- `retain` for OrdMap/OrdSet — HashMap already has `retain`, but OrdMap
+  and OrdSet do not
+
+**Why:** These are the standard vocabulary of set-theoretic operations
+on maps. `partition` appears in Haskell, Scala, and Clojure. `restrict_keys`
+/ `without_keys` enable bulk key-set operations in O(m+n) via simultaneous
+traversal (vs O(m log n) for iterating the key set and calling `remove`
+individually). `disjoint` enables O(m+n) conflict detection with early
+exit, replacing the current approach of building a full `intersection`
+and checking `is_empty`. OrdMap's missing `retain` is a straightforward
+parity gap with HashMap.
+
+**Complexity:** Low-moderate per method. Most are tree-walk-and-collect
+patterns. `restrict_keys`/`without_keys` can be optimised with
+simultaneous traversal on OrdMap.
+
+**Affects:** `HashMap<K, V>`, `HashSet<A>`, `OrdMap<K, V>`, `OrdSet<A>`.
+
+**Prerequisites:** 0.1 (CI).
+
+**References:** Haskell `Data.Map.partition`, `Data.Map.restrictKeys`,
+`Data.Map.withoutKeys`, `Data.Map.disjoint`, `Data.Map.mapEither`,
+`Data.Map.differenceWith`; Scala `partition`.
+
+---
+
+### 2.10 Vector convenience operations
+
+**What:** Add commonly-needed Vector operations found in Scala and
+Haskell's sequence libraries.
+
+**Methods:**
+- `chunked(n: usize) -> Vec<Vector<A>>` — split into non-overlapping
+  fixed-size chunks (last chunk may be smaller). Uses `split_at`
+  internally.
+- `adjust<F>(&self, index: usize, f: F) -> Self where F: FnOnce(&A) -> A`
+  — apply a function at an index, returning a new vector. Avoids the
+  `get` → transform → `set` pattern.
+- `scan_left<S>(&self, init: S, f: impl FnMut(&S, &A) -> S) -> Vector<S>`
+  — cumulative fold producing a vector of intermediate results (prefix
+  sums, running totals, state machine traces)
+- `patch(&self, from: usize, replacement: &Vector<A>, replaced: usize) -> Self`
+  — replace `replaced` elements starting at `from` with the contents of
+  `replacement`. Single operation vs `split_at` + `skip` + `append`.
+- `sliding(size: usize, step: usize) -> Vec<Vector<A>>` — overlapping
+  windows of a given size, advancing by `step`
+
+**Why:** These are the most commonly-needed vector operations identified
+across Scala 2.13 (`grouped`, `sliding`, `patch`, `scanLeft`) and
+Haskell (`adjust'`, `scanl`, `chunksOf`). Each is currently achievable
+via combinations of existing methods but requires verbose multi-step
+code. `adjust` in particular eliminates the get-modify-set pattern that
+is a frequent source of off-by-one errors and unnecessary allocations.
+
+**Complexity:** Low. All build on existing operations (`split_at`,
+`append`, `set`, iteration). `sliding` needs care to avoid O(n) per
+window (use `skip`/`take` which are O(log n) on RRB trees).
+
+**Affects:** `Vector<A>`.
+
+**Prerequisites:** 0.1 (CI). `chunked` and `patch` benefit from 2.1
+(RRB concat fix) for efficient split/append, but are not blocked by it.
+
+**References:** Scala `Vector.grouped`, `Vector.sliding`,
+`Vector.patch`, `Vector.scanLeft`; Haskell `Data.Sequence.adjust'`,
+`Data.Sequence.scanl`, `Data.Sequence.chunksOf`.
+
+---
+
+### 2.11 Companion collection types
+
+**What:** Add new collection types built on existing imbl primitives,
+filling common patterns that currently require manual composition.
+
+**Types:**
+
+1. **`Atom<T>`** — thread-safe atomic state holder for persistent
+   collections. Wraps `arc-swap` to provide `load() -> Arc<T>`,
+   `store(T)`, and `update(f: impl FnOnce(&T) -> T)` with CAS-loop
+   retry. This is the canonical way to share persistent data structures
+   across threads: readers get consistent snapshots via `load()` without
+   locking; writers apply pure functions via `update()`.
+
+   Completes the concurrency story for persistent collections. Without
+   it, users must reinvent the pattern using `ArcSwap` or
+   `RwLock<Arc<T>>` — every project does this slightly differently.
+   Clojure's `atom` and immer's `immer::atom<T>` fill the same role in
+   their ecosystems. Minimal implementation (~50 lines wrapping
+   `arc-swap`).
+
+2. **`HashMultiMap<K, V>`** — persistent multimap (key → set of values).
+   Backed by `HashMap<K, HashSet<V>>` internally. Provides `insert(k, v)`
+   (add value to key's set), `remove(k, v)` (remove single value),
+   `remove_all(k)` (remove all values for key), `get(k) -> &HashSet<V>`,
+   `contains(k, v)`, plus set operations (`union`, `intersection`).
+
+   Multimap is an extremely common pattern (tags-to-items, graph
+   adjacency lists, inverted indices). Currently requires manual inner-set
+   management for every operation. Capsule (CHAMP reference
+   implementation) provides `SetMultimap` as a first-class type.
+
+3. **`InsertionOrderMap<K, V>`** — persistent map preserving insertion
+   order. Backed by `HashMap<K, usize>` (key → insertion index) plus
+   `OrdMap<usize, (K, V)>` (index → entry). Iterates in insertion order.
+   Provides the same API as HashMap plus ordered iteration.
+
+   No persistent insertion-ordered map exists in Rust. The `indexmap`
+   crate fills this niche for mutable maps. Common for JSON object
+   representation, configuration files, and API responses where key order
+   matters. PCollections (Java) provides `OrderedPMap`.
+
+4. **`PBag<A>` (Multiset)** — persistent unordered collection with
+   duplicates, backed by `HashMap<A, usize>` (element → count). Provides
+   `insert(a)` (increment count), `remove(a)` (decrement), `count(a)`,
+   `total_count()`, plus multiset operations (sum, intersection,
+   difference). Trivial wrapper — ~100 lines.
+
+**Complexity:** Low per type. All delegate to existing collection
+implementations. `Atom<T>` adds `arc-swap` as an optional dependency
+behind a feature flag.
+
+**Affects:** New types; no changes to existing collections.
+
+**Prerequisites:** 0.1 (CI). `Atom<T>` requires `arc-swap` crate
+approval (see dependency evaluation process in directives).
+
+**References:** Clojure `atom`; immer `immer::atom<T>`;
+Capsule `SetMultimap`, `BinaryRelation`; PCollections `OrderedPMap`,
+`PBag`; `arc-swap` crate (docs.rs/arc-swap); `indexmap` crate.
+
+---
+
 ## Phase 3 — Mutation & parallel performance {#phase-3}
 
 The core performance track. 3.1 is the foundation, 3.2 validates safety,
@@ -965,6 +1219,52 @@ landed first, CHAMP would need to be generic from day one.
 
 ---
 
+### 4.4 Merkle hash caching
+
+**What:** Add a `u64` hash field to each internal tree node, computed as
+a Merkle-style fingerprint: `hash(children_hashes, own_data)`. The hash
+is maintained incrementally — only nodes on the mutation path recompute
+(O(tree_depth) per mutation, same as the structural copy-on-write cost).
+
+**Why:** Pointer equality (3.5, 3.6) catches the common case where two
+subtrees share lineage (one was cloned from the other). But two
+independently-constructed subtrees can contain identical data without
+being pointer-equal. The Merkle hash provides a fast negative check: if
+hashes differ, the subtrees definitely differ (skip deep comparison). If
+hashes match, the subtrees are almost certainly equal (structural verify
+or trust depending on collision tolerance). This makes diff and equality
+O(changes) even for collections with no shared lineage — a significant
+improvement for merge-heavy workloads where branches diverge and
+reconverge.
+
+**Design:**
+- Each node struct gains a `u64` field (xxHash3 or similar fast hash)
+- On node creation/mutation, compute `hash = hash_combine(child_hashes, leaf_data)`
+- Diff (3.6) checks: `ptr_eq` first (O(1)), then hash comparison (O(1)),
+  then structural descent only if both fail
+- PartialEq: same layered check — ptr_eq → hash → structural
+- The hash can be exposed via a public `content_hash(&self) -> u64`
+  method for use in application-level caching and change detection
+
+**Cost:** One `u64` per node (~1-3% memory overhead depending on node
+size). Hash computation uses the same O(log n) path as copy-on-write, so
+it does not change the asymptotic cost of mutations.
+
+**Complexity:** Moderate. Requires threading hash computation through all
+mutation paths for all three data structure types (HAMT, RRB, B+ tree).
+The hash function choice affects performance — must benchmark.
+
+**Affects:** All five collection types.
+
+**Prerequisites:** 0.3 (benchmarks for before/after), 0.5 (architecture
+docs for all node types). Benefits from 3.5 and 3.6 being in place (the
+hash check layers between ptr_eq and structural comparison).
+
+**References:** Merkle trees (Merkle, 1987); git content-addressable
+storage; immer `persist` module; xxHash3 (github.com/Cyan4973/xxHash).
+
+---
+
 ## Phase 5 — Breaking API changes (v8.0.0) {#phase-5}
 
 All items in this phase are breaking changes. They must be batched into a
@@ -1158,6 +1458,100 @@ length array behind a single thin pointer). Saves 8 bytes per pointer.
 
 ---
 
+### 6.5 Hash consing / interning (compile-time feature)
+
+**What:** An opt-in compile-time feature (`hash-intern`) that adds a
+global intern table for tree nodes. When creating a new node, look up
+its Merkle hash (from 4.4) in the table — if a live node with the same
+hash exists, return the existing `Arc` instead of allocating. This makes
+independently-constructed subtrees with identical content pointer-equal
+by construction.
+
+**Design:**
+- Gated by `#[cfg(feature = "hash-intern")]` — when disabled, zero
+  overhead (no hash field, no table, no code generated)
+- Intern table: `HashMap<u64, Weak<Node>>` — `Weak` references ensure
+  unused nodes are still collected by normal `Arc` drop
+- Thread-local tables by default (zero contention). Optional sharded
+  global table (`DashMap`-style) behind a sub-feature for cross-thread
+  deduplication
+- On node creation: compute Merkle hash (reuses 4.4 infrastructure),
+  check table, return existing `Arc` or insert new entry
+- All `ptr_eq` checks (3.5, 3.6) automatically benefit because interning
+  makes independently-equal subtrees the same pointer
+
+**Why:** Completes the equality/deduplication story. Pointer equality
+(3.5, 3.6) handles shared-lineage subtrees. Merkle hashing (4.4) handles
+independently-equal subtrees via hash comparison. Interning goes further:
+it physically deduplicates them so all future operations (diff, equality,
+memory) benefit permanently. This is how git and content-addressable
+storage work. Particularly valuable for workloads with many similar
+collections (version history, branch-heavy workflows, caches of derived
+data).
+
+**Trade-offs:**
+- Intern table lookup on every node creation (~10-30ns per lookup with
+  a good hash table)
+- `Weak` reference overhead per interned node
+- Thread-local tables don't deduplicate across threads
+- Hash collisions (vanishingly rare with 64-bit hash but non-zero risk)
+
+**Complexity:** Moderate. The intern table and `intern_or_alloc()` wrapper
+are straightforward. The complexity is in threading it through all node
+creation paths and ensuring the `Weak` cleanup is correct.
+
+**Affects:** All five collection types (internal node allocation).
+
+**Prerequisites:** 4.4 (Merkle hash caching — provides the hash
+infrastructure that interning builds on).
+
+**References:** Hash consing (Goto, 1974; Filliâtre and Conchon, 2006);
+git content-addressable object store; immer memory policies.
+
+---
+
+### 6.6 Structural-sharing-preserving serialisation
+
+**What:** A serialisation format that preserves the internal tree
+topology, so that two collections sharing structure are serialised
+without duplicating the shared nodes.
+
+**Design:** Use a "pool" approach (inspired by immer's `persist` module):
+1. **Serialise:** walk the tree, assign each unique node an ID,
+   serialise each node once with references to child IDs. Shared nodes
+   (same `Arc` pointer) naturally get the same ID.
+2. **Deserialise:** reconstruct nodes from the pool, restoring `Arc`
+   sharing by reusing the same node for all references to the same ID.
+3. Custom serde layer or standalone serialisation module (the standard
+   serde `Serialize`/`Deserialize` model does not support shared
+   references).
+
+**Why:** Without this, serialising two `HashMap`s that share 99% of
+their structure writes the full data twice. With it, shared nodes are
+written once. Critical for:
+- Checkpointing application state (undo/redo, save/load)
+- Distributing persistent collections over the network
+- Persisting version history where successive versions share structure
+- Any application where serialised size matters and collections share
+  lineage
+
+**Complexity:** High. Requires exposing internal node identity, building
+a deduplication table during serialisation, and reconstructing the
+sharing graph on deserialisation. The serde model (sequential
+serialize/deserialize) does not naturally support this — needs a custom
+serialisation layer or a wrapper that manages node pools.
+
+**Affects:** All five collection types.
+
+**Prerequisites:** 0.5 (architecture docs for understanding node
+structure and pointer layout).
+
+**References:** immer `extra/persist.hpp` (pool-based serialisation);
+Cap'n Proto (shared subobject references); FlatBuffers (DAG
+serialisation).
+
+---
+
 ## Dependency map {#dependency-map}
 
 ```
@@ -1181,6 +1575,11 @@ Phase 2 (correctness + API)                                               │
   2.4 HashMap/HashSet diff ◄── 0.1, 0.3                                   │
   2.5 Vector diff ◄── 0.1                                                 │
   2.6 patch/apply ◄── 2.4, 2.5                                            │
+  2.7 general merge ◄── 0.1                                               │
+  2.8 map value/key transforms ◄── 0.1                                    │
+  2.9 partitioning + bulk filter ◄── 0.1                                  │
+  2.10 vector convenience ops ◄── 0.1                                     │
+  2.11 companion types ◄── 0.1                                            │
                                    │                                      │
 Phase 3 (mutation + parallel perf)  │                                      │
   3.1 Arc::get_mut ◄── 0.1, 0.3, 0.5                                     │
@@ -1194,6 +1593,7 @@ Phase 4 (internals)                │                                      │
   4.1 prefix buffer ◄── 2.1                                               │
   4.2 CHAMP prototype ◄── 0.3, 0.5                                        │
   4.3 CHAMP integration ◄── 4.2, 0.1, 0.2 (only if benchmarks justify)   │
+  4.4 Merkle hash caching ◄── 0.3, 0.5                                    │
                                    │                                      │
 Phase 5 (breaking — v8.0.0)        │                                      │
   5.1 triomphe default ◄── 0.3, 0.4                                       │
@@ -1206,22 +1606,38 @@ Phase 6 (research)                 │                                      │
   6.2 HHAMT inline ◄── 4.3                                                │
   6.3 ThinArc ◄── 5.1                                                     │
   6.4 Dupe trait ◄── (none)                                                │
+  6.5 hash consing/interning ◄── 4.4                                      │
+  6.6 sharing-preserving serialisation ◄── 0.5                             │
 ```
 
 ### Parallel tracks
 
-Once Phase 0 is complete, five independent tracks can proceed in parallel:
+Once Phase 0 is complete, eight independent tracks can proceed in
+parallel:
 
 1. **Vector track:** 2.1 → 4.1
 2. **Hash track:** 4.2 → (4.3 if justified) → 5.3, 5.4
 3. **Mutation track:** 3.1 → 3.2, 3.3 → 5.2
-4. **Parallel track:** 3.4 (HashMap/HashSet par_iter first, then OrdMap/OrdSet,
-   then bulk ops and parallel sort). Benefits from but does not block on 3.1/3.3.
-5. **Diff track:** 2.4, 2.5 (independent of each other) → 2.6 → 3.6. Item 3.5
-   (PartialEq fast paths) is independent and can land at any time after 0.1.
+4. **Parallel track:** 3.4 (HashMap/HashSet par_iter first, then
+   OrdMap/OrdSet, then bulk ops and parallel sort). Benefits from but
+   does not block on 3.1/3.3.
+5. **Diff track:** 2.4, 2.5 (independent of each other) → 2.6 → 3.6.
+   Item 3.5 (PartialEq fast paths) is independent and can land at any
+   time after 0.1.
+6. **Map API track:** 2.7, 2.8, 2.9 (independent of each other and of
+   all other tracks). 2.7 (general merge) shares HAMT traversal
+   infrastructure with 2.4 (HashMap diff) — co-development is efficient
+   but not required.
+7. **Hash integrity track:** 4.4 (Merkle hash caching) → 6.5 (hash
+   consing/interning). Independent of CHAMP (4.2/4.3) — works with
+   whatever node architecture exists. Benefits from 3.5/3.6 being in
+   place (layered equality: ptr_eq → hash → structural).
+8. **Serialisation track:** 6.6 (sharing-preserving serialisation).
+   Independent but benefits from 4.4 (Merkle hashes enable
+   content-addressed node pools).
 
-Items 2.2, 2.3, 1.x, and 6.4 are independent and can be done at any time
-after their prerequisites.
+Items 2.2, 2.3, 2.10, 2.11, 1.x, and 6.4 are independent and can be
+done at any time after their prerequisites.
 
 ---
 

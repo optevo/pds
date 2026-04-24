@@ -728,6 +728,46 @@ where
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
+    /// Apply a diff to produce a new map.
+    ///
+    /// Takes any iterator of [`DiffItem`] values (such as from
+    /// [`diff`][GenericHashMap::diff]) and applies each change —
+    /// `Add` and `Update` insert entries, `Remove` removes entries.
+    ///
+    /// Time: O(d log n) where d is the number of diff items
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashmap::HashMap;
+    /// let base = hashmap!{1 => "a", 2 => "b", 3 => "c"};
+    /// let modified = hashmap!{1 => "a", 2 => "B", 4 => "d"};
+    /// let diff: Vec<_> = base.diff(&modified).collect();
+    /// let patched = base.apply_diff(diff);
+    /// assert_eq!(patched, modified);
+    /// ```
+    #[must_use]
+    pub fn apply_diff<'a, 'b, I>(&self, diff: I) -> Self
+    where
+        I: IntoIterator<Item = DiffItem<'a, 'b, K, V>>,
+        K: 'a + 'b,
+        V: 'a + 'b,
+    {
+        let mut out = self.clone();
+        for item in diff {
+            match item {
+                DiffItem::Add(k, v) | DiffItem::Update { new: (k, v), .. } => {
+                    out.insert(k.clone(), v.clone());
+                }
+                DiffItem::Remove(k, _) => {
+                    out.remove(k);
+                }
+            }
+        }
+        out
+    }
+
     /// Get a mutable iterator over the values of a hash map.
     ///
     /// Please note that the order is consistent between maps using
@@ -2851,5 +2891,48 @@ mod test {
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn apply_diff_roundtrip() {
+        let base = hashmap! {1 => "a", 2 => "b", 3 => "c"};
+        let modified = hashmap! {1 => "a", 2 => "B", 4 => "d"};
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_empty_diff() {
+        let map = hashmap! {1 => "a", 2 => "b"};
+        let patched = map.apply_diff(vec![]);
+        assert_eq!(patched, map);
+    }
+
+    #[test]
+    fn apply_diff_from_empty() {
+        let base: HashMap<i32, &str> = HashMap::new();
+        let modified = hashmap! {1 => "a", 2 => "b"};
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_to_empty() {
+        let base = hashmap! {1 => "a", 2 => "b"};
+        let modified: HashMap<i32, &str> = HashMap::new();
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_preserves_original() {
+        let base = hashmap! {1 => "a", 2 => "b"};
+        let modified = hashmap! {1 => "a", 2 => "B", 3 => "c"};
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let _patched = base.apply_diff(diff);
+        assert_eq!(base, hashmap! {1 => "a", 2 => "b"});
     }
 }

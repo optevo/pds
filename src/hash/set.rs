@@ -434,6 +434,45 @@ where
         result.map(|v| v.0)
     }
 
+    /// Apply a diff to produce a new set.
+    ///
+    /// Takes any iterator of [`DiffItem`] values (such as from
+    /// [`diff`][GenericHashSet::diff]) and applies each change —
+    /// `Add` inserts values, `Remove` removes values.
+    ///
+    /// Time: O(d log n) where d is the number of diff items
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::hashset::HashSet;
+    /// let base = hashset!{1, 2, 3};
+    /// let modified = hashset!{2, 3, 4};
+    /// let diff: Vec<_> = base.diff(&modified).collect();
+    /// let patched = base.apply_diff(diff);
+    /// assert_eq!(patched, modified);
+    /// ```
+    #[must_use]
+    pub fn apply_diff<'a, 'b, I>(&self, diff: I) -> Self
+    where
+        I: IntoIterator<Item = DiffItem<'a, 'b, A>>,
+        A: 'a + 'b,
+    {
+        let mut out = self.clone();
+        for item in diff {
+            match item {
+                DiffItem::Add(a) => {
+                    out.insert(a.clone());
+                }
+                DiffItem::Remove(a) => {
+                    out.remove(a);
+                }
+            }
+        }
+        out
+    }
+
     /// Construct a new set from the current set with the given value
     /// added.
     ///
@@ -1301,6 +1340,40 @@ mod test {
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn apply_diff_roundtrip() {
+        let base = hashset! {1, 2, 3};
+        let modified = hashset! {2, 3, 4};
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_empty_diff() {
+        let set = hashset! {1, 2, 3};
+        let patched = set.apply_diff(vec![]);
+        assert_eq!(patched, set);
+    }
+
+    #[test]
+    fn apply_diff_from_empty() {
+        let base: HashSet<i32> = HashSet::new();
+        let modified = hashset! {1, 2, 3};
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_to_empty() {
+        let base = hashset! {1, 2, 3};
+        let modified: HashSet<i32> = HashSet::new();
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
     }
 
     proptest! {

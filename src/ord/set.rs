@@ -474,6 +474,45 @@ where
         self.map.remove_with_key(value).map(|(k, _)| k)
     }
 
+    /// Apply a diff to produce a new set.
+    ///
+    /// Takes any iterator of [`DiffItem`] values (such as from
+    /// [`diff`][GenericOrdSet::diff]) and applies each change —
+    /// `Add` inserts values, `Remove` removes values.
+    ///
+    /// Time: O(d log n) where d is the number of diff items
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// # use imbl::ordset::OrdSet;
+    /// let base = ordset!{1, 2, 3};
+    /// let modified = ordset!{2, 3, 4};
+    /// let diff: Vec<_> = base.diff(&modified).collect();
+    /// let patched = base.apply_diff(diff);
+    /// assert_eq!(patched, modified);
+    /// ```
+    #[must_use]
+    pub fn apply_diff<'a, 'b, I>(&self, diff: I) -> Self
+    where
+        I: IntoIterator<Item = DiffItem<'a, 'b, A>>,
+        A: 'a + 'b,
+    {
+        let mut out = self.clone();
+        for item in diff {
+            match item {
+                DiffItem::Add(a) => {
+                    out.insert(a.clone());
+                }
+                DiffItem::Remove(a) => {
+                    out.remove(a);
+                }
+            }
+        }
+        out
+    }
+
     /// Remove the smallest value from a set.
     ///
     /// Time: O(log n)
@@ -1267,5 +1306,39 @@ mod test {
         let empty: OrdSet<i32> = OrdSet::new();
         assert_eq!(empty.get_prev_exclusive(&5), None);
         assert_eq!(empty.get_next_exclusive(&5), None);
+    }
+
+    #[test]
+    fn apply_diff_roundtrip() {
+        let base = ordset![1, 2, 3];
+        let modified = ordset![2, 3, 4];
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_empty_diff() {
+        let set = ordset![1, 2, 3];
+        let patched = set.apply_diff(vec![]);
+        assert_eq!(patched, set);
+    }
+
+    #[test]
+    fn apply_diff_from_empty() {
+        let base: OrdSet<i32> = OrdSet::new();
+        let modified = ordset![1, 2, 3];
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_to_empty() {
+        let base = ordset![1, 2, 3];
+        let modified: OrdSet<i32> = OrdSet::new();
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
     }
 }

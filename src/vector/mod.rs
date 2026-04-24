@@ -948,6 +948,54 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
+    /// Apply a diff to produce a new vector.
+    ///
+    /// Takes any iterator of [`DiffItem`] values (such as from
+    /// [`diff`][GenericVector::diff]) and applies each change —
+    /// `Update` replaces the element at the given index, `Add`
+    /// appends an element, and `Remove` truncates at that index.
+    ///
+    /// The diff items should be in the order produced by
+    /// [`diff`][GenericVector::diff]: updates at shared indices,
+    /// followed by either additions (appended to the end) or
+    /// removals (truncated from the end).
+    ///
+    /// Time: O(d log n) where d is the number of diff items
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate imbl;
+    /// let base = vector![1, 2, 3, 4];
+    /// let modified = vector![1, 20, 30, 4, 5];
+    /// let diff: Vec<_> = base.diff(&modified).collect();
+    /// let patched = base.apply_diff(diff);
+    /// assert_eq!(patched, modified);
+    /// ```
+    #[must_use]
+    pub fn apply_diff<'a, 'b, I>(&self, diff: I) -> Self
+    where
+        I: IntoIterator<Item = DiffItem<'a, 'b, A>>,
+        A: PartialEq + 'a + 'b,
+    {
+        let mut out = self.clone();
+        for item in diff {
+            match item {
+                DiffItem::Update { index, new, .. } => {
+                    out.set(index, new.clone());
+                }
+                DiffItem::Add(_, value) => {
+                    out.push_back(value.clone());
+                }
+                DiffItem::Remove(index, _) => {
+                    out.truncate(index);
+                    break;
+                }
+            }
+        }
+        out
+    }
+
     /// Remove the first element from a vector and return it.
     ///
     /// Time: O(1)*
@@ -2894,6 +2942,76 @@ mod test {
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn apply_diff_roundtrip_updates() {
+        let base = vector![1, 2, 3, 4];
+        let modified = vector![1, 20, 30, 4];
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_roundtrip_additions() {
+        let base = vector![1, 2, 3];
+        let modified = vector![1, 2, 3, 4, 5];
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_roundtrip_removals() {
+        let base = vector![1, 2, 3, 4, 5];
+        let modified = vector![1, 2, 3];
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_roundtrip_mixed() {
+        let base = vector![1, 2, 3, 4, 5];
+        let modified = vector![1, 20, 30, 4, 5, 6, 7];
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_empty_diff() {
+        let v = vector![1, 2, 3];
+        let patched = v.apply_diff(vec![]);
+        assert_eq!(patched, v);
+    }
+
+    #[test]
+    fn apply_diff_from_empty() {
+        let base: Vector<i32> = Vector::new();
+        let modified = vector![1, 2, 3];
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_to_empty() {
+        let base = vector![1, 2, 3];
+        let modified: Vector<i32> = Vector::new();
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let patched = base.apply_diff(diff);
+        assert_eq!(patched, modified);
+    }
+
+    #[test]
+    fn apply_diff_preserves_original() {
+        let base = vector![1, 2, 3];
+        let modified = vector![1, 20, 30, 4];
+        let diff: Vec<_> = base.diff(&modified).collect();
+        let _patched = base.apply_diff(diff);
+        assert_eq!(base, vector![1, 2, 3]);
     }
 
     #[test]
