@@ -372,10 +372,13 @@ pub mod quickcheck;
 
 pub mod shared_ptr;
 
+pub mod pbag;
+
 pub use crate::hashmap::{GenericHashMap, HashMap};
 pub use crate::hashset::{GenericHashSet, HashSet};
 pub use crate::ordmap::{GenericOrdMap, OrdMap};
 pub use crate::ordset::{GenericOrdSet, OrdSet};
+pub use crate::pbag::{GenericPBag, PBag};
 #[doc(inline)]
 pub use crate::vector::{GenericVector, Vector};
 
