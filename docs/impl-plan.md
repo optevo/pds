@@ -64,6 +64,11 @@ single v8.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] Merkle negative check for HashSet PartialEq.** HashSet
+  now short-circuits equality to false when root Merkle hashes differ
+  (HashMap already had this). Test deduplication: removed 3 redundant
+  tests in ord/map.rs. Fixed unused import warning in hash/set.rs.
+
 - **[2026-04-25] 4.7 Stage 1: Widen HashBits from u32 to u64.** Eliminated
   truncation of BuildHasher output. 12 usable trie levels (up from 6).
   Collision nodes virtually eliminated for collections under ~4B entries.
@@ -412,8 +417,18 @@ items killed (6.3, 6.7, and 6.2 by inheritance), one deprioritised (6.1).
    inherent to HAMT structure.
 2. [x] 4.7 Stage 1 — **DONE.** HashBits widened to u64. Performance
    neutral at tested sizes. Stage 2 (configurable width via trait) next.
-3. [ ] 6.9 Persistent trie — to be explored (research + PoC gate)
-4. [ ] 4.6 Vector Merkle hash caching — PoC gate needed (overhead vs gain)
+3. [ ] 4.7 Stage 2 — Configurable hash width via `HashWidth` trait.
+   Default u64, support u128 for UUID/content-addressed keys. Breaking
+   change (adds type parameter to GenericHashMap). Large refactor (~80
+   impl blocks across 7 files).
+4. [ ] 6.9 Persistent trie — start as derived structure wrapping HashMap
+   (keys = path segments). Specialise only if profiling shows need.
+5. [ ] 4.6 Vector Merkle hash caching — lazy evaluation: compute on
+   equality check, cache on node, invalidate on mutation. Avoids
+   per-insert overhead that makes eager caching questionable.
+6. [ ] Probabilistic equality (`probably_eq()`) — Merkle match + size
+   match + first/middle/last element sampling. False positive rate ~2^-64.
+   Separate API from `PartialEq` (which must be deterministic).
 5. [x] Test coverage gaps — **DONE.** ord/set.rs 58%→96%, ord/map.rs
    72%→95%, hash/set.rs 72%→92%. Crate total 90.1% lines. Demotion
    edge cases covered via LolHasher tests in hash/map.rs.
