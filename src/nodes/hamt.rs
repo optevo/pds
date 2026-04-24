@@ -90,7 +90,7 @@ where
     BitsImpl<WIDTH>: Bits,
 {
     /// Stores value-hash pairs directly (leaf-only)
-    data: SparseChunk<(A, HashBits), WIDTH>,
+    pub(crate) data: SparseChunk<(A, HashBits), WIDTH>,
 
     /// SIMD control bytes for fast parallel lookup.
     /// Each byte corresponds to the u8 suffix of the hash.
@@ -105,7 +105,7 @@ where
     BitsImpl<HASH_WIDTH>: Bits,
 {
     /// Stores Entry enum which can contain values, collision nodes, or child nodes
-    data: SparseChunk<Entry<A, P>, HASH_WIDTH>,
+    pub(crate) data: SparseChunk<Entry<A, P>, HASH_WIDTH>,
 }
 
 impl<A: Clone, const WIDTH: usize, const GROUPS: usize> Clone for GenericSimdNode<A, WIDTH, GROUPS>
@@ -610,8 +610,8 @@ impl<A: HashValue, P: SharedPointerKind> HamtNode<A, P> {
 
 #[derive(Clone)]
 pub(crate) struct CollisionNode<A> {
-    hash: HashBits,
-    data: Vec<A>,
+    pub(crate) hash: HashBits,
+    pub(crate) data: Vec<A>,
 }
 
 pub(crate) enum Entry<A, P: SharedPointerKind> {

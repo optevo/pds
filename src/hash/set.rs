@@ -98,13 +98,13 @@ pub type HashSet<A> = GenericHashSet<A, RandomState, DefaultSharedPtr>;
 /// [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html
 /// [std::collections::hash_map::RandomState]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
 pub struct GenericHashSet<A, S, P: SharedPointerKind> {
-    hasher: S,
-    root: Option<SharedPointer<Node<Value<A>, P>, P>>,
-    size: usize,
+    pub(crate) hasher: S,
+    pub(crate) root: Option<SharedPointer<Node<Value<A>, P>, P>>,
+    pub(crate) size: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-struct Value<A>(A);
+pub(crate) struct Value<A>(pub(crate) A);
 
 impl<A> Deref for Value<A> {
     type Target = A;
