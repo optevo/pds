@@ -117,9 +117,12 @@ caught by review. They are listed because they recur in AI-assisted development.
   instruction. If lifetimes are difficult, find the safe abstraction; do not
   use `unsafe` to paper over borrow checker errors. Existing unsafe code
   should be removed unless there is a measured performance reason to keep
-  it. When touching code near an unsafe block, check whether the safe
-  alternative is viable — if it is, replace the unsafe and verify with
-  tests. Unsafe blocks that must remain require a `// SAFETY:` comment
+  it. When evaluating an unsafe block for removal, always write the safe
+  alternative and benchmark both versions — if the safe version shows no
+  meaningful regression, replace the unsafe. Do not assume unsafe is
+  faster without measurement. When touching code near an unsafe block,
+  check whether the safe alternative is viable — if it is, replace the
+  unsafe and verify with tests. Unsafe blocks that must remain require a `// SAFETY:` comment
   documenting the invariant and a `debug_assert!` checking the
   precondition where feasible (e.g. pointer non-null, index in-bounds).
   Debug assertions compile to nothing in release builds, so they do not
