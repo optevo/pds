@@ -1,25 +1,24 @@
 # pds — Implementation Plan
 
-Sequenced implementation plan for improvements to the
-[imbl](https://github.com/jneem/imbl) Rust crate (persistent/immutable
-collections with structural sharing).
+Sequenced implementation plan for pds (persistent data structures for
+Rust). Forked from [imbl](https://github.com/jneem/imbl) with different
+design priorities: performance over compatibility, Merkle hashing, SIMD
+HAMT nodes, and no_std support.
 
-**Current state (Apr 2026):** v7.0.0, ~12K lines of Rust, 5 core types
-(Vector, HashMap, HashSet, OrdMap, OrdSet). Maintained reactively by jneem —
-explicitly welcoming PRs but not driving a roadmap. Used in production by
-Matrix SDK, Fedimint, ~280 downstream crates.
+**Current state (Apr 2026):** v1.0.0, ~12K lines of Rust, 9 collection
+types (Vector, HashMap, HashSet, OrdMap, OrdSet, PBag, HashMultiMap,
+InsertionOrderMap, Trie). SIMD HAMT, Merkle hashing, and no_std support
+implemented.
 
 ---
 
 ## Principles
 
-### Upstream-first
+### Change discipline
 
-This is a fork of jneem/imbl. Every change should be structured as an
-independent, upstreamable PR: small, focused, well-tested, with a clear
-commit message. Avoid coupling unrelated changes. Breaking changes need
-strong justification. Batch breaking changes into a single major version
-bump (v2.0.0) to avoid churn for downstream users.
+pds is an independent fork of jneem/imbl. Changes should be small,
+focused, and well-tested with clear commit messages. Breaking changes
+are batched into v2.0.0 to avoid churn.
 
 ### Document as you go
 
@@ -37,7 +36,7 @@ structural change lands without fuzz/miri validation. Preparation steps
 
 ### Semver discipline
 
-Items are grouped by semver impact. Non-breaking changes can ship as v7.x
+Items are grouped by semver impact. Non-breaking changes can ship as v1.x
 point releases. Breaking changes (5.1, 5.2, 5.3, 5.4) are batched into a
 single v2.0.0 release in Phase 5.
 
@@ -63,6 +62,16 @@ single v2.0.0 release in Phase 5.
 ## Done {#done}
 
 *Newest first.*
+
+- **[2026-04-25] README comparison table.** Added side-by-side feature matrix
+  comparing pds with rpds, im, and imbl — collections, backing structures,
+  SIMD, Merkle hashing, no_std, and ecosystem features.
+
+- **[2026-04-25] Remove deprecated difference aliases.** Removed
+  `difference`, `difference_with`, `difference_with_key` from HashMap,
+  HashSet, OrdMap, OrdSet. These were deprecated aliases for the
+  `symmetric_difference*` methods inherited from imbl. No downstream users
+  at v1.0.0, so removed rather than carrying the deprecation forward.
 
 - **[2026-04-25] Rename crate from imbl to pds.** Version reset to 1.0.0.
   All internal references updated. imbl-sized-chunks dependency unchanged.
