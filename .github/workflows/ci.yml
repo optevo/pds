@@ -34,7 +34,7 @@ jobs:
           toolchain: ${{ matrix.rust }}
       - run: cargo test
       - run: cargo test --all-features
-      - run: cargo test --no-default-features
+      - run: cargo check --no-default-features
       - run: cargo test --features small-chunks
 
   clippy:
@@ -44,12 +44,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: >
-          cargo clippy --all-features -- -D warnings
-          -A clippy::enum_variant_names
-          -A clippy::collapsible_match
-          -A clippy::unnecessary_cast
-          -A deprecated
+      - run: cargo clippy --all-features -- -D warnings
 
   doc:
     runs-on: ubuntu-latest

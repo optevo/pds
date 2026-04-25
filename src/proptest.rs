@@ -2,9 +2,12 @@
 //!
 //! These are only available when using the `proptest` feature flag.
 
-use crate::{HashMap, HashSet, OrdMap, OrdSet, Vector};
+use crate::{OrdMap, OrdSet, Vector};
+#[cfg(any(feature = "std", feature = "foldhash"))]
+use crate::{HashMap, HashSet};
 use ::proptest::collection::vec;
 use ::proptest::strategy::{BoxedStrategy, Strategy, ValueTree};
+#[cfg(any(feature = "std", feature = "foldhash"))]
 use core::hash::Hash;
 use core::iter::FromIterator;
 use core::ops::Range;
@@ -99,6 +102,7 @@ where
         .boxed()
 }
 
+#[cfg(any(feature = "std", feature = "foldhash"))]
 /// A strategy for a [`HashMap`][HashMap] of a given size.
 ///
 /// # Examples
@@ -132,6 +136,7 @@ where
         .boxed()
 }
 
+#[cfg(any(feature = "std", feature = "foldhash"))]
 /// A strategy for a [`HashSet`][HashSet] of a given size.
 ///
 /// # Examples
