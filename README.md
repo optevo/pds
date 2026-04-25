@@ -55,6 +55,8 @@ a different collection set and design philosophy.
 | **SIMD node ops** | yes | — | — | — |
 | **`no_std`** | yes (via `foldhash`) | — | — | yes |
 | **`triomphe::Arc`** | yes | — | — | — |
+| **Hash consing** | yes (`InternPool`) | — | — | — |
+| **SSP serialisation** | yes (`HashMapPool`) | — | — | — |
 | **serde** | yes | yes | yes | yes |
 | **rayon** | yes | yes | yes | yes (hash maps only) |
 | **proptest / quickcheck** | yes | yes | yes | — |
@@ -63,6 +65,8 @@ a different collection set and design philosophy.
 - SIMD-accelerated HAMT nodes for faster hash map/set operations
 - Merkle hashing on all collections for O(1) structural equality checks
 - Six additional collection types (Bag, HashMultiMap, InsertionOrderMap, BiMap, SymMap, Trie)
+- Hash consing via `InternPool` — deduplicates identical HAMT subtrees across collections
+- Structural-sharing-preserving serialisation via `HashMapPool` — serialises/deserialises trees with node deduplication and cross-session interning
 - `no_std` support via the `foldhash` feature flag
 - `triomphe::Arc` support (no weak count, 8 bytes smaller per node)
 - Deprecated API aliases removed; breaking changes for correctness accepted
@@ -88,6 +92,8 @@ a different collection set and design philosophy.
 | `foldhash` | Enables `HashMap`/`HashSet`/etc. type aliases in `no_std` via `foldhash::fast::RandomState` |
 | `arbitrary` | `Arbitrary` implementations for fuzzing |
 | `atom` | Thread-safe atomic state holder via `arc-swap` (requires `std`) |
+| `hash-intern` | Hash consing / node interning for HAMT collections via `InternPool` — deduplicates identical subtrees for memory savings and O(1) pointer equality |
+| `persist` | Structural-sharing-preserving serialisation via `HashMapPool` — serialises HAMT trees with node deduplication, reconstructs with hash consing. Requires `hash-intern` |
 
 ## Building
 

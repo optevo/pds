@@ -342,6 +342,8 @@
 //! | [`arbitrary`](https://crates.io/crates/arbitrary/) | No | [`arbitrary::Arbitrary`](https://docs.rs/arbitrary/latest/arbitrary/trait.Arbitrary.html) implementations for all `pds` datatypes |
 //! | [`foldhash`](https://crates.io/crates/foldhash/) | No | Enables `HashMap`, `HashSet`, etc. type aliases in `no_std` environments using `foldhash::fast::RandomState` as the default hasher. |
 //! | [`atom`](https://crates.io/crates/arc-swap/) | No | Thread-safe shared values via `arc-swap` (requires `std`) |
+//! | `hash-intern` | No | Hash consing / node interning for HAMT collections via `InternPool`. Deduplicates structurally identical subtrees to save memory and enable O(1) equality via pointer comparison. Requires `std`. |
+//! | `persist` | No | Structural-sharing-preserving serialisation via `HashMapPool`. Serialises HAMT node trees with deduplication and reconstructs with hash consing on deserialisation. Requires `std` and `hash-intern`. |
 //!
 //! [rrb-tree]: https://infoscience.epfl.ch/record/213452/files/rrbvector.pdf
 //! [hamt]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
