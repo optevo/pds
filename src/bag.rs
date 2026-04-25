@@ -533,6 +533,9 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use static_assertions::assert_impl_all;
+
+    assert_impl_all!(crate::Bag<i32>: Send, Sync);
 
     #[test]
     fn new_bag_is_empty() {

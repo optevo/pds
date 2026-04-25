@@ -9,6 +9,8 @@ use core::fmt;
 use core::hash::{BuildHasher, Hash};
 use core::marker::PhantomData;
 
+use crate::bag::GenericBag;
+use crate::bimap::GenericBiMap;
 use crate::hash_multimap::GenericHashMultiMap;
 use crate::hash_width::HashWidth;
 use crate::hashmap::GenericHashMap;
@@ -16,9 +18,8 @@ use crate::hashset::GenericHashSet;
 use crate::insertion_order_map::GenericInsertionOrderMap;
 use crate::ordmap::GenericOrdMap;
 use crate::ordset::GenericOrdSet;
-use crate::bag::GenericBag;
-use crate::bimap::GenericBiMap;
 use crate::symmap::GenericSymMap;
+use crate::trie::GenericTrie;
 use crate::vector::GenericVector;
 
 struct SeqVisitor<'de, S, A> {
@@ -434,6 +435,44 @@ where
         let mut s = ser.serialize_seq(Some(self.len()))?;
         for (a, b) in self.iter() {
             s.serialize_element(&(a, b))?;
+        }
+        s.end()
+    }
+}
+
+// Trie — serialises as a sequence of (path, value) pairs.
+
+impl<'de, K, V, S, P> Deserialize<'de> for GenericTrie<K, V, S, P>
+where
+    K: Deserialize<'de> + Hash + Eq + Clone,
+    V: Deserialize<'de> + Clone,
+    S: BuildHasher + Default + Clone,
+    P: SharedPointerKind,
+{
+    fn deserialize<D>(des: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        des.deserialize_seq(
+            SeqVisitor::<'de, GenericTrie<K, V, S, P>, (Vec<K>, V)>::new(),
+        )
+    }
+}
+
+impl<K, V, S, P> Serialize for GenericTrie<K, V, S, P>
+where
+    K: Serialize + Hash + Eq + Clone,
+    V: Serialize + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn serialize<Ser>(&self, ser: Ser) -> Result<Ser::Ok, Ser::Error>
+    where
+        Ser: Serializer,
+    {
+        let mut s = ser.serialize_seq(Some(self.len()))?;
+        for (path, v) in self.iter() {
+            s.serialize_element(&(path, v))?;
         }
         s.end()
     }

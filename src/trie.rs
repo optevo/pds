@@ -28,7 +28,9 @@
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
-use core::hash::{BuildHasher, Hash};
+use core::hash::{BuildHasher, Hash, Hasher};
+use core::iter::{FromIterator, Sum};
+use core::ops::Add;
 
 use archery::SharedPointerKind;
 
@@ -366,6 +368,136 @@ where
     }
 }
 
+impl<K, V, S, P> Hash for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq,
+    V: Hash,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.value.hash(state);
+        // children's Hash impl is order-independent (XOR-combines per-entry
+        // hashes), consistent with PartialEq's structural comparison.
+        self.children.hash(state);
+    }
+}
+
+impl<K, V, S, P> Extend<(alloc::vec::Vec<K>, V)> for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn extend<I: IntoIterator<Item = (alloc::vec::Vec<K>, V)>>(&mut self, iter: I) {
+        for (path, value) in iter {
+            self.insert(&path, value);
+        }
+    }
+}
+
+impl<K, V, S, P> FromIterator<(alloc::vec::Vec<K>, V)> for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from_iter<I: IntoIterator<Item = (alloc::vec::Vec<K>, V)>>(iter: I) -> Self {
+        let mut trie = GenericTrie {
+            value: None,
+            children: GenericHashMap::default(),
+        };
+        trie.extend(iter);
+        trie
+    }
+}
+
+impl<K, V, S, P> From<alloc::vec::Vec<(alloc::vec::Vec<K>, V)>> for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(v: alloc::vec::Vec<(alloc::vec::Vec<K>, V)>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
+impl<K, V, S, P, const N: usize> From<[(alloc::vec::Vec<K>, V); N]> for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(arr: [(alloc::vec::Vec<K>, V); N]) -> Self {
+        arr.into_iter().collect()
+    }
+}
+
+impl<'a, K, V, S, P> From<&'a [(alloc::vec::Vec<K>, V)]> for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(slice: &'a [(alloc::vec::Vec<K>, V)]) -> Self {
+        slice.iter().map(|(p, v)| (p.clone(), v.clone())).collect()
+    }
+}
+
+impl<K, V, S, P> Add for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    type Output = Self;
+
+    /// Union two tries. When a path exists in both, the right operand's value wins.
+    fn add(self, other: Self) -> Self {
+        let mut result = self;
+        for (path, value) in other {
+            result.insert(&path, value);
+        }
+        result
+    }
+}
+
+impl<K, V, S, P> Add for &GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    type Output = GenericTrie<K, V, S, P>;
+
+    fn add(self, other: Self) -> Self::Output {
+        self.clone() + other.clone()
+    }
+}
+
+impl<K, V, S, P> Sum for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(
+            GenericTrie { value: None, children: GenericHashMap::default() },
+            |a, b| a + b,
+        )
+    }
+}
+
 /// Iterator over (path, value) pairs in a trie.
 pub struct TrieIter<'a, K, V, S, P: SharedPointerKind> {
     stack: alloc::vec::Vec<(alloc::vec::Vec<&'a K>, &'a GenericTrie<K, V, S, P>)>,
@@ -397,9 +529,69 @@ where
     }
 }
 
+impl<'a, K, V, S, P> IntoIterator for &'a GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    type Item = (alloc::vec::Vec<&'a K>, &'a V);
+    type IntoIter = TrieIter<'a, K, V, S, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// Owning iterator over `(path, value)` pairs produced by consuming a trie.
+///
+/// Paths are `Vec<K>`. Produced by [`IntoIterator`] for [`GenericTrie`].
+pub struct TrieConsumingIter<K, V> {
+    // Delegate to Vec's IntoIter for O(1) amortised next().
+    inner: alloc::vec::IntoIter<(alloc::vec::Vec<K>, V)>,
+}
+
+impl<K, V> Iterator for TrieConsumingIter<K, V> {
+    type Item = (alloc::vec::Vec<K>, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<K, V, S, P> IntoIterator for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    type Item = (alloc::vec::Vec<K>, V);
+    type IntoIter = TrieConsumingIter<K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        // Eagerly collect all (path, value) pairs. A zero-copy consuming iter
+        // would require draining the recursive HashMap structure; this approach
+        // is simpler and correct. K and V are cloned once per entry.
+        let items: alloc::vec::Vec<_> = self
+            .iter()
+            .map(|(path, v)| (path.into_iter().cloned().collect(), v.clone()))
+            .collect();
+        TrieConsumingIter { inner: items.into_iter() }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use static_assertions::assert_impl_all;
+
+    assert_impl_all!(crate::Trie<i32, i32>: Send, Sync);
 
     #[test]
     fn empty_trie() {
@@ -585,5 +777,117 @@ mod test {
 
         trie.prune();
         assert!(trie.is_empty());
+    }
+
+    #[test]
+    fn hash_equal_tries_same_hash() {
+        use std::collections::hash_map::DefaultHasher;
+        use core::hash::{Hash, Hasher};
+        let mut a: Trie<&str, i32> = Trie::new();
+        a.insert(&["x", "y"], 1);
+        let mut b: Trie<&str, i32> = Trie::new();
+        b.insert(&["x", "y"], 1);
+        assert_eq!(a, b);
+        let hash = |t: &Trie<&str, i32>| {
+            let mut h = DefaultHasher::new();
+            t.hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash(&a), hash(&b));
+    }
+
+    #[test]
+    fn from_iter_and_into_iter() {
+        let entries = vec![
+            (vec!["a", "b"], 1i32),
+            (vec!["a", "c"], 2),
+            (vec!["d"], 3),
+        ];
+        let trie: Trie<&str, i32> = entries.clone().into_iter().collect();
+        assert_eq!(trie.get(&["a", "b"]), Some(&1));
+        assert_eq!(trie.get(&["a", "c"]), Some(&2));
+        assert_eq!(trie.get(&["d"]), Some(&3));
+
+        let mut out: Vec<_> = trie.into_iter().collect();
+        out.sort_by_key(|(_, v)| *v);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].1, 1);
+        assert_eq!(out[1].1, 2);
+        assert_eq!(out[2].1, 3);
+    }
+
+    #[test]
+    fn ref_into_iter() {
+        let mut trie: Trie<&str, i32> = Trie::new();
+        trie.insert(&["a"], 1);
+        trie.insert(&["b"], 2);
+        let count = (&trie).into_iter().count();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn extend() {
+        let mut trie: Trie<&str, i32> = Trie::new();
+        trie.insert(&["a"], 1);
+        trie.extend(vec![(vec!["b"], 2), (vec!["c"], 3)]);
+        assert_eq!(trie.len(), 3);
+        assert_eq!(trie.get(&["b"]), Some(&2));
+    }
+
+    #[test]
+    fn from_vec() {
+        let v = vec![(vec!["x"], 10i32), (vec!["y"], 20)];
+        let trie: Trie<&str, i32> = Trie::from(v);
+        assert_eq!(trie.get(&["x"]), Some(&10));
+        assert_eq!(trie.get(&["y"]), Some(&20));
+    }
+
+    #[test]
+    fn from_array() {
+        let trie: Trie<&str, i32> = Trie::from([(vec!["a"], 1), (vec!["b"], 2)]);
+        assert_eq!(trie.get(&["a"]), Some(&1));
+        assert_eq!(trie.get(&["b"]), Some(&2));
+    }
+
+    #[test]
+    fn from_slice() {
+        let entries = [(vec!["p"], 7i32), (vec!["q"], 8)];
+        let trie: Trie<&str, i32> = Trie::from(entries.as_slice());
+        assert_eq!(trie.get(&["p"]), Some(&7));
+        assert_eq!(trie.get(&["q"]), Some(&8));
+    }
+
+    #[test]
+    fn add_union() {
+        let mut a: Trie<&str, i32> = Trie::new();
+        a.insert(&["x"], 1);
+        let mut b: Trie<&str, i32> = Trie::new();
+        b.insert(&["y"], 2);
+        b.insert(&["x"], 99); // conflict — right wins
+        let c = a + b;
+        assert_eq!(c.get(&["x"]), Some(&99));
+        assert_eq!(c.get(&["y"]), Some(&2));
+    }
+
+    #[test]
+    fn add_ref() {
+        let mut a: Trie<&str, i32> = Trie::new();
+        a.insert(&["a"], 1);
+        let mut b: Trie<&str, i32> = Trie::new();
+        b.insert(&["b"], 2);
+        let c = &a + &b;
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn sum() {
+        let tries: Vec<Trie<&str, i32>> = vec![
+            { let mut t = Trie::new(); t.insert(&["a"], 1); t },
+            { let mut t = Trie::new(); t.insert(&["b"], 2); t },
+            { let mut t = Trie::new(); t.insert(&["c"], 3); t },
+        ];
+        let total: Trie<&str, i32> = tries.into_iter().sum();
+        assert_eq!(total.len(), 3);
+        assert_eq!(total.get(&["b"]), Some(&2));
     }
 }

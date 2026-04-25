@@ -468,6 +468,9 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use static_assertions::assert_impl_all;
+
+    assert_impl_all!(crate::InsertionOrderMap<i32, i32>: Send, Sync);
 
     #[test]
     fn new_is_empty() {
