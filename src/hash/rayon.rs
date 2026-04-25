@@ -448,6 +448,150 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// HashMap — parallel bulk operations
+// ---------------------------------------------------------------------------
+
+impl<K, V, S, P> GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone + Send + Sync,
+    V: Clone + Send + Sync,
+    S: BuildHasher + Clone + Default + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+{
+    /// Construct the union of two maps in parallel.
+    ///
+    /// Values from `self` take precedence for keys present in both maps.
+    /// Parallel speedup comes from filtering the smaller map's elements
+    /// against the larger map concurrently.
+    ///
+    /// This is the parallel equivalent of [`union`][GenericHashMap::union].
+    ///
+    /// Time: O(n log n / p) where p is the thread pool size
+    #[must_use]
+    pub fn par_union(self, other: Self) -> Self {
+        let only_in_other: Self = other
+            .par_iter()
+            .filter_map(|(k, v)| {
+                if self.contains_key(k) {
+                    None
+                } else {
+                    Some((k.clone(), v.clone()))
+                }
+            })
+            .fold(Self::default, |mut acc, (k, v)| {
+                acc.insert_invalidate_kv(k, v);
+                acc
+            })
+            .reduce(Self::default, |a, b| a.union(b));
+        self.union(only_in_other)
+    }
+
+    /// Construct the intersection of two maps in parallel, keeping
+    /// values from `self`.
+    ///
+    /// This is the parallel equivalent of
+    /// [`intersection`][GenericHashMap::intersection].
+    ///
+    /// Time: O(min(n, m) log max(n, m) / p)
+    #[must_use]
+    pub fn par_intersection(self, other: Self) -> Self {
+        if self.len() <= other.len() {
+            self.par_iter()
+                .filter_map(|(k, v)| {
+                    if other.contains_key(k) {
+                        Some((k.clone(), v.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .fold(Self::default, |mut acc, (k, v)| {
+                    acc.insert_invalidate_kv(k, v);
+                    acc
+                })
+                .reduce(Self::default, |a, b| a.union(b))
+        } else {
+            other
+                .par_iter()
+                .filter_map(|(k, _)| self.get(k).map(|v| (k.clone(), v.clone())))
+                .fold(Self::default, |mut acc, (k, v)| {
+                    acc.insert_invalidate_kv(k, v);
+                    acc
+                })
+                .reduce(Self::default, |a, b| a.union(b))
+        }
+    }
+
+    /// Construct the relative complement (self − other) in parallel:
+    /// elements in `self` whose keys are not in `other`.
+    ///
+    /// This is the parallel equivalent of
+    /// [`relative_complement`][GenericHashMap::relative_complement].
+    ///
+    /// Time: O(n log m / p)
+    #[must_use]
+    pub fn par_relative_complement(self, other: Self) -> Self {
+        self.par_iter()
+            .filter_map(|(k, v)| {
+                if other.contains_key(k) {
+                    None
+                } else {
+                    Some((k.clone(), v.clone()))
+                }
+            })
+            .fold(Self::default, |mut acc, (k, v)| {
+                acc.insert_invalidate_kv(k, v);
+                acc
+            })
+            .reduce(Self::default, |a, b| a.union(b))
+    }
+
+    /// Construct the symmetric difference of two maps in parallel:
+    /// elements present in exactly one of the two maps.
+    ///
+    /// This is the parallel equivalent of
+    /// [`symmetric_difference`][GenericHashMap::symmetric_difference].
+    ///
+    /// Time: O((n + m) log max(n, m) / p)
+    #[must_use]
+    pub fn par_symmetric_difference(self, other: Self) -> Self {
+        let (left, right) = ::rayon::join(
+            || {
+                self.par_iter()
+                    .filter_map(|(k, v)| {
+                        if other.contains_key(k) {
+                            None
+                        } else {
+                            Some((k.clone(), v.clone()))
+                        }
+                    })
+                    .fold(Self::default, |mut acc, (k, v)| {
+                        acc.insert_invalidate_kv(k, v);
+                        acc
+                    })
+                    .reduce(Self::default, |a, b| a.union(b))
+            },
+            || {
+                other
+                    .par_iter()
+                    .filter_map(|(k, v)| {
+                        if self.contains_key(k) {
+                            None
+                        } else {
+                            Some((k.clone(), v.clone()))
+                        }
+                    })
+                    .fold(Self::default, |mut acc, (k, v)| {
+                        acc.insert_invalidate_kv(k, v);
+                        acc
+                    })
+                    .reduce(Self::default, |a, b| a.union(b))
+            },
+        );
+        left.union(right)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // HashSet
 // ---------------------------------------------------------------------------
 
@@ -651,6 +795,127 @@ where
     {
         let collected: Self = par_iter.into_par_iter().collect();
         *self = core::mem::take(self).union(collected);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HashSet — parallel bulk operations
+// ---------------------------------------------------------------------------
+
+impl<A, S, P> GenericHashSet<A, S, P>
+where
+    A: Hash + Eq + Clone + Send + Sync,
+    S: BuildHasher + Clone + Default + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+{
+    /// Construct the union of two sets in parallel.
+    ///
+    /// This is the parallel equivalent of [`union`][GenericHashSet::union].
+    ///
+    /// Time: O(n log n / p)
+    #[must_use]
+    pub fn par_union(self, other: Self) -> Self {
+        let only_in_other: Self = other
+            .par_iter()
+            .filter_map(|a| {
+                if self.contains(a) {
+                    None
+                } else {
+                    Some(a.clone())
+                }
+            })
+            .fold(Self::default, |mut acc, a| {
+                acc.insert(a);
+                acc
+            })
+            .reduce(Self::default, |a, b| a.union(b));
+        self.union(only_in_other)
+    }
+
+    /// Construct the intersection of two sets in parallel.
+    ///
+    /// This is the parallel equivalent of
+    /// [`intersection`][GenericHashSet::intersection].
+    ///
+    /// Time: O(min(n, m) log max(n, m) / p)
+    #[must_use]
+    pub fn par_intersection(self, other: Self) -> Self {
+        let (smaller, larger) = if self.len() <= other.len() {
+            (&self, &other)
+        } else {
+            (&other, &self)
+        };
+        smaller
+            .par_iter()
+            .filter_map(|a| if larger.contains(a) { Some(a.clone()) } else { None })
+            .fold(Self::default, |mut acc, a| {
+                acc.insert(a);
+                acc
+            })
+            .reduce(Self::default, |a, b| a.union(b))
+    }
+
+    /// Construct the relative complement (self − other) in parallel:
+    /// elements in `self` not in `other`.
+    ///
+    /// This is the parallel equivalent of
+    /// [`relative_complement`][GenericHashSet::relative_complement].
+    ///
+    /// Time: O(n log m / p)
+    #[must_use]
+    pub fn par_relative_complement(self, other: Self) -> Self {
+        self.par_iter()
+            .filter_map(|a| if other.contains(a) { None } else { Some(a.clone()) })
+            .fold(Self::default, |mut acc, a| {
+                acc.insert(a);
+                acc
+            })
+            .reduce(Self::default, |a, b| a.union(b))
+    }
+
+    /// Construct the symmetric difference of two sets in parallel:
+    /// elements in exactly one of the two sets.
+    ///
+    /// This is the parallel equivalent of
+    /// [`symmetric_difference`][GenericHashSet::symmetric_difference].
+    ///
+    /// Time: O((n + m) log max(n, m) / p)
+    #[must_use]
+    pub fn par_symmetric_difference(self, other: Self) -> Self {
+        let (left, right) = ::rayon::join(
+            || {
+                self.par_iter()
+                    .filter_map(|a| {
+                        if other.contains(a) {
+                            None
+                        } else {
+                            Some(a.clone())
+                        }
+                    })
+                    .fold(Self::default, |mut acc, a| {
+                        acc.insert(a);
+                        acc
+                    })
+                    .reduce(Self::default, |a, b| a.union(b))
+            },
+            || {
+                other
+                    .par_iter()
+                    .filter_map(|a| {
+                        if self.contains(a) {
+                            None
+                        } else {
+                            Some(a.clone())
+                        }
+                    })
+                    .fold(Self::default, |mut acc, a| {
+                        acc.insert(a);
+                        acc
+                    })
+                    .reduce(Self::default, |a, b| a.union(b))
+            },
+        );
+        left.union(right)
     }
 }
 
@@ -915,5 +1180,104 @@ mod test {
         assert_eq!(set.len(), 1_000);
         assert!(set.contains(&0));
         assert!(set.contains(&999));
+    }
+
+    // --- Parallel bulk operations ---
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_union() {
+        let map1: HashMap<i32, i32> = (0..5_000).map(|i| (i, i)).collect();
+        let map2: HashMap<i32, i32> = (2_500..7_500).map(|i| (i, i * 10)).collect();
+        let seq = map1.clone().union(map2.clone());
+        let par = map1.par_union(map2);
+        assert_eq!(par, seq);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_intersection() {
+        let map1: HashMap<i32, i32> = (0..5_000).map(|i| (i, i)).collect();
+        let map2: HashMap<i32, i32> = (2_500..7_500).map(|i| (i, i * 10)).collect();
+        let seq = map1.clone().intersection(map2.clone());
+        let par = map1.par_intersection(map2);
+        assert_eq!(par, seq);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_relative_complement() {
+        let map1: HashMap<i32, i32> = (0..5_000).map(|i| (i, i)).collect();
+        let map2: HashMap<i32, i32> = (2_500..7_500).map(|i| (i, i * 10)).collect();
+        let seq = map1.clone().relative_complement(map2.clone());
+        let par = map1.par_relative_complement(map2);
+        assert_eq!(par, seq);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_symmetric_difference() {
+        let map1: HashMap<i32, i32> = (0..5_000).map(|i| (i, i)).collect();
+        let map2: HashMap<i32, i32> = (2_500..7_500).map(|i| (i, i * 10)).collect();
+        let seq = map1.clone().symmetric_difference(map2.clone());
+        let par = map1.par_symmetric_difference(map2);
+        assert_eq!(par, seq);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashset_par_union() {
+        let set1: HashSet<i32> = (0..5_000).collect();
+        let set2: HashSet<i32> = (2_500..7_500).collect();
+        let seq = set1.clone().union(set2.clone());
+        let par = set1.par_union(set2);
+        assert_eq!(par, seq);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashset_par_intersection() {
+        let set1: HashSet<i32> = (0..5_000).collect();
+        let set2: HashSet<i32> = (2_500..7_500).collect();
+        let seq = set1.clone().intersection(set2.clone());
+        let par = set1.par_intersection(set2);
+        assert_eq!(par, seq);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashset_par_relative_complement() {
+        let set1: HashSet<i32> = (0..5_000).collect();
+        let set2: HashSet<i32> = (2_500..7_500).collect();
+        let seq = set1.clone().relative_complement(set2.clone());
+        let par = set1.par_relative_complement(set2);
+        assert_eq!(par, seq);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashset_par_symmetric_difference() {
+        let set1: HashSet<i32> = (0..5_000).collect();
+        let set2: HashSet<i32> = (2_500..7_500).collect();
+        let seq = set1.clone().symmetric_difference(set2.clone());
+        let par = set1.par_symmetric_difference(set2);
+        assert_eq!(par, seq);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_union_empty() {
+        let map1: HashMap<i32, i32> = (0..1_000).map(|i| (i, i)).collect();
+        let map2: HashMap<i32, i32> = HashMap::new();
+        assert_eq!(map1.clone().par_union(map2.clone()), map1.clone().union(map2.clone()));
+        assert_eq!(map2.clone().par_union(map1.clone()), map2.union(map1));
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashset_par_intersection_disjoint() {
+        let set1: HashSet<i32> = (0..1_000).collect();
+        let set2: HashSet<i32> = (1_000..2_000).collect();
+        assert!(set1.par_intersection(set2).is_empty());
     }
 }

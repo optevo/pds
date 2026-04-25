@@ -876,7 +876,7 @@ where
 {
     /// Intern the internal HAMT nodes of this set into the given pool.
     ///
-    /// See [`GenericHashMap::intern`] for details on how interning works.
+    /// See [`GenericHashMap::intern`](crate::hashmap::GenericHashMap::intern) for details on how interning works.
     ///
     /// # Example
     ///
