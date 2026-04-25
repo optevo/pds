@@ -32,6 +32,7 @@ use core::iter::FromIterator;
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
 
+use crate::hash_width::HashWidth;
 use crate::hashmap::GenericHashMap;
 use crate::hashset::GenericHashSet;
 use crate::shared_ptr::DefaultSharedPtr;
@@ -54,14 +55,15 @@ pub struct GenericHashMultiMap<
     V,
     S,
     P: SharedPointerKind = DefaultSharedPtr,
+    H: HashWidth = u64,
 > {
-    map: GenericHashMap<K, GenericHashSet<V, S, P>, S, P>,
+    map: GenericHashMap<K, GenericHashSet<V, S, P, H>, S, P, H>,
     total: usize,
 }
 
 // Manual Clone — avoid derive's spurious `P: Clone` bound.
-impl<K: Clone, V: Clone, S: Clone, P: SharedPointerKind> Clone
-    for GenericHashMultiMap<K, V, S, P>
+impl<K: Clone, V: Clone, S: Clone, P: SharedPointerKind, H: HashWidth> Clone
+    for GenericHashMultiMap<K, V, S, P, H>
 {
     fn clone(&self) -> Self {
         GenericHashMultiMap {
@@ -101,7 +103,7 @@ where
     }
 }
 
-impl<K, V, S, P> GenericHashMultiMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericHashMultiMap<K, V, S, P, H>
 where
     P: SharedPointerKind,
 {
@@ -124,7 +126,7 @@ where
     }
 }
 
-impl<K, V, S, P> GenericHashMultiMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,
@@ -177,7 +179,7 @@ where
     }
 
     /// Remove all values for a key, returning the set of removed values.
-    pub fn remove_all<Q>(&mut self, key: &Q) -> GenericHashSet<V, S, P>
+    pub fn remove_all<Q>(&mut self, key: &Q) -> GenericHashSet<V, S, P, H>
     where
         Q: Hash + Equivalent<K> + ?Sized,
     {
@@ -194,7 +196,7 @@ where
     ///
     /// Returns an empty set if the key is not present.
     #[must_use]
-    pub fn get<Q>(&self, key: &Q) -> GenericHashSet<V, S, P>
+    pub fn get<Q>(&self, key: &Q) -> GenericHashSet<V, S, P, H>
     where
         Q: Hash + Equivalent<K> + ?Sized,
     {
@@ -242,7 +244,7 @@ where
     }
 
     /// Iterate over keys and their value sets.
-    pub fn iter_sets(&self) -> impl Iterator<Item = (&K, &GenericHashSet<V, S, P>)> {
+    pub fn iter_sets(&self) -> impl Iterator<Item = (&K, &GenericHashSet<V, S, P, H>)> {
         self.map.iter()
     }
 
@@ -272,7 +274,7 @@ where
     }
 }
 
-impl<K, V, S, P> PartialEq for GenericHashMultiMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> PartialEq for GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq,
     V: Hash + Eq,
@@ -284,7 +286,7 @@ where
     }
 }
 
-impl<K, V, S, P> Eq for GenericHashMultiMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Eq for GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq,
     V: Hash + Eq,
@@ -293,7 +295,7 @@ where
 {
 }
 
-impl<K, V, S, P> Debug for GenericHashMultiMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Debug for GenericHashMultiMap<K, V, S, P, H>
 where
     K: Debug + Hash + Eq + Clone,
     V: Debug + Hash + Eq + Clone,
@@ -309,7 +311,7 @@ where
     }
 }
 
-impl<K, V, S, P> FromIterator<(K, V)> for GenericHashMultiMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> FromIterator<(K, V)> for GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,
@@ -328,7 +330,7 @@ where
     }
 }
 
-impl<K, V, S, P> Extend<(K, V)> for GenericHashMultiMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Extend<(K, V)> for GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,
@@ -345,12 +347,12 @@ where
 /// A consuming iterator over the key-value pairs of a [`GenericHashMultiMap`].
 ///
 /// Yields each `(K, V)` pair, flattening the per-key value sets.
-pub struct ConsumingIter<K: Eq, V: Hash + Eq + Clone, S, P: SharedPointerKind> {
-    outer: crate::hashmap::ConsumingIter<(K, GenericHashSet<V, S, P>), P>,
-    inner: Option<(K, crate::hashset::ConsumingIter<V, P>)>,
+pub struct ConsumingIter<K: Eq, V: Hash + Eq + Clone, S, P: SharedPointerKind, H: HashWidth = u64> {
+    outer: crate::hashmap::ConsumingIter<(K, GenericHashSet<V, S, P, H>), P, H>,
+    inner: Option<(K, crate::hashset::ConsumingIter<V, P, H>)>,
 }
 
-impl<K, V, S, P> Iterator for ConsumingIter<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Iterator for ConsumingIter<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,
@@ -373,7 +375,7 @@ where
     }
 }
 
-impl<K, V, S, P> IntoIterator for GenericHashMultiMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> IntoIterator for GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,
@@ -381,7 +383,7 @@ where
     P: SharedPointerKind,
 {
     type Item = (K, V);
-    type IntoIter = ConsumingIter<K, V, S, P>;
+    type IntoIter = ConsumingIter<K, V, S, P, H>;
 
     fn into_iter(self) -> Self::IntoIter {
         ConsumingIter {
@@ -391,7 +393,7 @@ where
     }
 }
 
-impl<'a, K, V, S, P> IntoIterator for &'a GenericHashMultiMap<K, V, S, P>
+impl<'a, K, V, S, P, H: HashWidth> IntoIterator for &'a GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,

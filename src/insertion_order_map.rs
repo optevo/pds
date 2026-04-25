@@ -33,6 +33,7 @@ use core::iter::FromIterator;
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
 
+use crate::hash_width::HashWidth;
 use crate::hashmap::GenericHashMap;
 use crate::ordmap::GenericOrdMap;
 use crate::shared_ptr::DefaultSharedPtr;
@@ -58,9 +59,10 @@ pub struct GenericInsertionOrderMap<
     V,
     S,
     P: SharedPointerKind = DefaultSharedPtr,
+    H: HashWidth = u64,
 > {
     /// Key → insertion index.
-    index: GenericHashMap<K, usize, S, P>,
+    index: GenericHashMap<K, usize, S, P, H>,
     /// Insertion index → (key, value), ordered by index.
     entries: GenericOrdMap<usize, (K, V), P>,
     /// Next index to assign (monotonically increasing).
@@ -68,8 +70,8 @@ pub struct GenericInsertionOrderMap<
 }
 
 // Manual Clone.
-impl<K: Clone, V: Clone, S: Clone, P: SharedPointerKind> Clone
-    for GenericInsertionOrderMap<K, V, S, P>
+impl<K: Clone, V: Clone, S: Clone, P: SharedPointerKind, H: HashWidth> Clone
+    for GenericInsertionOrderMap<K, V, S, P, H>
 {
     fn clone(&self) -> Self {
         GenericInsertionOrderMap {
@@ -112,7 +114,7 @@ where
     }
 }
 
-impl<K, V, S, P> GenericInsertionOrderMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericInsertionOrderMap<K, V, S, P, H>
 where
     P: SharedPointerKind,
 {
@@ -129,7 +131,7 @@ where
     }
 }
 
-impl<K, V, S, P> GenericInsertionOrderMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -222,7 +224,7 @@ where
     }
 }
 
-impl<K, V, S, P> PartialEq for GenericInsertionOrderMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> PartialEq for GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: PartialEq + Clone,
@@ -241,7 +243,7 @@ where
     }
 }
 
-impl<K, V, S, P> Eq for GenericInsertionOrderMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Eq for GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Eq + Clone,
@@ -250,7 +252,7 @@ where
 {
 }
 
-impl<K, V, S, P> Debug for GenericInsertionOrderMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Debug for GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Debug + Hash + Eq + Clone,
     V: Debug + Clone,
@@ -266,7 +268,7 @@ where
     }
 }
 
-impl<K, V, S, P> FromIterator<(K, V)> for GenericInsertionOrderMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> FromIterator<(K, V)> for GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -286,7 +288,7 @@ where
     }
 }
 
-impl<K, V, S, P> Extend<(K, V)> for GenericInsertionOrderMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Extend<(K, V)> for GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -340,7 +342,7 @@ where
 {
 }
 
-impl<K, V, S, P> IntoIterator for GenericInsertionOrderMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> IntoIterator for GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -357,7 +359,7 @@ where
     }
 }
 
-impl<'a, K, V, S, P> IntoIterator for &'a GenericInsertionOrderMap<K, V, S, P>
+impl<'a, K, V, S, P, H: HashWidth> IntoIterator for &'a GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,

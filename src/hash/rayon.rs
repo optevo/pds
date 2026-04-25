@@ -125,7 +125,7 @@ enum MapIterFrame<'a, K, V, P: SharedPointerKind> {
     SmallSimd(
         imbl_sized_chunks::sparse_chunk::Iter<
             'a,
-            ((K, V), crate::nodes::hamt::HashBits),
+            ((K, V), u64),
             SMALL_NODE_WIDTH,
         >,
     ),
@@ -133,7 +133,7 @@ enum MapIterFrame<'a, K, V, P: SharedPointerKind> {
     LargeSimd(
         imbl_sized_chunks::sparse_chunk::Iter<
             'a,
-            ((K, V), crate::nodes::hamt::HashBits),
+            ((K, V), u64),
             HASH_WIDTH,
         >,
     ),
@@ -334,14 +334,14 @@ enum MapMutIterFrame<'a, K, V, P: SharedPointerKind> {
     SmallSimd(
         imbl_sized_chunks::sparse_chunk::IterMut<
             'a,
-            ((K, V), crate::nodes::hamt::HashBits),
+            ((K, V), u64),
             SMALL_NODE_WIDTH,
         >,
     ),
     LargeSimd(
         imbl_sized_chunks::sparse_chunk::IterMut<
             'a,
-            ((K, V), crate::nodes::hamt::HashBits),
+            ((K, V), u64),
             HASH_WIDTH,
         >,
     ),
@@ -543,14 +543,14 @@ enum SetIterFrame<'a, A, P: SharedPointerKind> {
     SmallSimd(
         imbl_sized_chunks::sparse_chunk::Iter<
             'a,
-            (Value<A>, crate::nodes::hamt::HashBits),
+            (Value<A>, u64),
             SMALL_NODE_WIDTH,
         >,
     ),
     LargeSimd(
         imbl_sized_chunks::sparse_chunk::Iter<
             'a,
-            (Value<A>, crate::nodes::hamt::HashBits),
+            (Value<A>, u64),
             HASH_WIDTH,
         >,
     ),

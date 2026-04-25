@@ -36,6 +36,7 @@ use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
 
 use crate::config::{MERKLE_HASH_BITS, MERKLE_POSITIVE_EQ_MIN_BITS};
+use crate::hash_width::HashWidth;
 use crate::hashmap::next_hasher_id;
 use crate::nodes::hamt::{
     hash_key, Drain as NodeDrain, Entry as NodeEntry, HashValue, Iter as NodeIter, Node,
@@ -138,11 +139,11 @@ pub type HashSet<A> = GenericHashSet<A, foldhash::fast::RandomState, DefaultShar
 /// [std::cmp::Eq]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
 /// [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html
 /// [std::collections::hash_map::RandomState]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
-pub struct GenericHashSet<A, S, P: SharedPointerKind> {
+pub struct GenericHashSet<A, S, P: SharedPointerKind, H: HashWidth = u64> {
     pub(crate) hasher: S,
     /// Identifies the hasher lineage — see GenericHashMap::hasher_id.
     pub(crate) hasher_id: u64,
-    pub(crate) root: Option<SharedPointer<Node<Value<A>, P>, P>>,
+    pub(crate) root: Option<SharedPointer<Node<Value<A>, P, H>, P>>,
     pub(crate) size: usize,
 }
 
@@ -173,7 +174,7 @@ where
     }
 }
 
-impl<A, S, P> GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Default + Clone,
@@ -197,7 +198,7 @@ where
     }
 }
 
-impl<A, S, P: SharedPointerKind> GenericHashSet<A, S, P> {
+impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
     /// Construct an empty set.
     #[must_use]
     pub fn new() -> Self
@@ -286,7 +287,7 @@ impl<A, S, P: SharedPointerKind> GenericHashSet<A, S, P> {
     /// Construct an empty hash set using the same hasher as the current hash set.
     #[inline]
     #[must_use]
-    pub fn new_from<A2>(&self) -> GenericHashSet<A2, S, P>
+    pub fn new_from<A2>(&self) -> GenericHashSet<A2, S, P, H>
     where
         A2: Hash + Eq + Clone,
         S: Clone,
@@ -328,14 +329,14 @@ impl<A, S, P: SharedPointerKind> GenericHashSet<A, S, P> {
     /// They will, however, come out in the same order every time for
     /// the same set.
     #[must_use]
-    pub fn iter(&self) -> Iter<'_, A, P> {
+    pub fn iter(&self) -> Iter<'_, A, P, H> {
         Iter {
             it: NodeIter::new(self.root.as_deref(), self.size),
         }
     }
 }
 
-impl<A, S, P> GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq,
     S: BuildHasher,
@@ -343,7 +344,7 @@ where
 {
     fn test_eq<S2: BuildHasher, P2: SharedPointerKind>(
         &self,
-        other: &GenericHashSet<A, S2, P2>,
+        other: &GenericHashSet<A, S2, P2, H>,
     ) -> bool {
         if self.len() != other.len() {
             return false;
@@ -449,7 +450,7 @@ where
     /// O(changes × tree_depth). For independently-constructed sets with
     /// different hasher states, falls back to O(n + m).
     #[must_use]
-    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, A, S, P> {
+    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, A, S, P, H> {
         let mut diffs = Vec::new();
         if !self.ptr_eq(other) {
             match (&self.root, &other.root) {
@@ -484,7 +485,7 @@ where
 }
 
 // Mutating methods that need A: Clone for copy-on-write but NOT S: Clone.
-impl<A, S, P> GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher,
@@ -679,7 +680,7 @@ where
 
 // Methods that clone self or create new sets (persistent API).
 // Previously required S: Clone; now S is behind SharedPointer so clone is free.
-impl<A, S, P> GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
@@ -809,7 +810,7 @@ where
 }
 
 // Methods that need A: Hash + Eq but not A: Clone
-impl<A, S, P> GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq,
     S: BuildHasher,
@@ -844,7 +845,7 @@ where
 
 // Core traits
 
-impl<A, S, P: SharedPointerKind> Clone for GenericHashSet<A, S, P>
+impl<A, S, P: SharedPointerKind, H: HashWidth> Clone for GenericHashSet<A, S, P, H>
 where
     S: Clone,
     P: SharedPointerKind,
@@ -863,7 +864,7 @@ where
     }
 }
 
-impl<A, S1, P1, S2, P2> PartialEq<GenericHashSet<A, S2, P2>> for GenericHashSet<A, S1, P1>
+impl<A, S1, P1, S2, P2, H: HashWidth> PartialEq<GenericHashSet<A, S2, P2, H>> for GenericHashSet<A, S1, P1, H>
 where
     A: Hash + Eq,
     S1: BuildHasher,
@@ -871,12 +872,12 @@ where
     P1: SharedPointerKind,
     P2: SharedPointerKind,
 {
-    fn eq(&self, other: &GenericHashSet<A, S2, P2>) -> bool {
+    fn eq(&self, other: &GenericHashSet<A, S2, P2, H>) -> bool {
         self.test_eq(other)
     }
 }
 
-impl<A, S, P> Eq for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> Eq for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq,
     S: BuildHasher,
@@ -884,7 +885,7 @@ where
 {
 }
 
-impl<A, S, P> Default for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> Default for GenericHashSet<A, S, P, H>
 where
     S: Default,
     P: SharedPointerKind,
@@ -899,59 +900,59 @@ where
     }
 }
 
-impl<A, S, P> Add for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> Add for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    type Output = GenericHashSet<A, S, P>;
+    type Output = GenericHashSet<A, S, P, H>;
 
     fn add(self, other: Self) -> Self::Output {
         self.union(other)
     }
 }
 
-impl<A, S, P> Mul for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> Mul for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    type Output = GenericHashSet<A, S, P>;
+    type Output = GenericHashSet<A, S, P, H>;
 
     fn mul(self, other: Self) -> Self::Output {
         self.intersection(other)
     }
 }
 
-impl<A, S, P> Add for &GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> Add for &GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    type Output = GenericHashSet<A, S, P>;
+    type Output = GenericHashSet<A, S, P, H>;
 
     fn add(self, other: Self) -> Self::Output {
         self.clone().union(other.clone())
     }
 }
 
-impl<A, S, P> Mul for &GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> Mul for &GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    type Output = GenericHashSet<A, S, P>;
+    type Output = GenericHashSet<A, S, P, H>;
 
     fn mul(self, other: Self) -> Self::Output {
         self.clone().intersection(other.clone())
     }
 }
 
-impl<A, S, P: SharedPointerKind> Sum for GenericHashSet<A, S, P>
+impl<A, S, P: SharedPointerKind, H: HashWidth> Sum for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Default + Clone,
@@ -965,7 +966,7 @@ where
     }
 }
 
-impl<A, S, R, P: SharedPointerKind> Extend<R> for GenericHashSet<A, S, P>
+impl<A, S, R, P: SharedPointerKind, H: HashWidth> Extend<R> for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone + From<R>,
     S: BuildHasher,
@@ -980,7 +981,7 @@ where
     }
 }
 
-impl<A, S, P> Debug for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> Debug for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Debug,
     S: BuildHasher,
@@ -994,12 +995,12 @@ where
 // Iterators
 
 /// An iterator over the elements of a set.
-pub struct Iter<'a, A, P: SharedPointerKind> {
-    it: NodeIter<'a, Value<A>, P>,
+pub struct Iter<'a, A, P: SharedPointerKind, H: HashWidth = u64> {
+    it: NodeIter<'a, Value<A>, P, H>,
 }
 
 // We impl Clone instead of deriving it, because we want Clone even if K and V aren't.
-impl<'a, A, P: SharedPointerKind> Clone for Iter<'a, A, P> {
+impl<'a, A, P: SharedPointerKind, H: HashWidth> Clone for Iter<'a, A, P, H> {
     fn clone(&self) -> Self {
         Iter {
             it: self.it.clone(),
@@ -1007,7 +1008,7 @@ impl<'a, A, P: SharedPointerKind> Clone for Iter<'a, A, P> {
     }
 }
 
-impl<'a, A, P> Iterator for Iter<'a, A, P>
+impl<'a, A, P, H: HashWidth> Iterator for Iter<'a, A, P, H>
 where
     A: 'a,
     P: SharedPointerKind,
@@ -1023,20 +1024,21 @@ where
     }
 }
 
-impl<'a, A, P: SharedPointerKind> ExactSizeIterator for Iter<'a, A, P> {}
+impl<'a, A, P: SharedPointerKind, H: HashWidth> ExactSizeIterator for Iter<'a, A, P, H> {}
 
-impl<'a, A, P: SharedPointerKind> FusedIterator for Iter<'a, A, P> {}
+impl<'a, A, P: SharedPointerKind, H: HashWidth> FusedIterator for Iter<'a, A, P, H> {}
 
 /// A consuming iterator over the elements of a set.
-pub struct ConsumingIter<A, P>
+pub struct ConsumingIter<A, P, H = u64>
 where
     A: Hash + Eq + Clone,
     P: SharedPointerKind,
+    H: HashWidth,
 {
-    it: NodeDrain<Value<A>, P>,
+    it: NodeDrain<Value<A>, P, H>,
 }
 
-impl<A, P> Iterator for ConsumingIter<A, P>
+impl<A, P, H: HashWidth> Iterator for ConsumingIter<A, P, H>
 where
     A: Hash + Eq + Clone,
     P: SharedPointerKind,
@@ -1052,14 +1054,14 @@ where
     }
 }
 
-impl<A, P> ExactSizeIterator for ConsumingIter<A, P>
+impl<A, P, H: HashWidth> ExactSizeIterator for ConsumingIter<A, P, H>
 where
     A: Hash + Eq + Clone,
     P: SharedPointerKind,
 {
 }
 
-impl<A, P> FusedIterator for ConsumingIter<A, P>
+impl<A, P, H: HashWidth> FusedIterator for ConsumingIter<A, P, H>
 where
     A: Hash + Eq + Clone,
     P: SharedPointerKind,
@@ -1068,7 +1070,7 @@ where
 
 // Iterator conversions
 
-impl<A, RA, S, P> FromIterator<RA> for GenericHashSet<A, S, P>
+impl<A, RA, S, P, H: HashWidth> FromIterator<RA> for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone + From<RA>,
     S: BuildHasher + Default,
@@ -1086,28 +1088,28 @@ where
     }
 }
 
-impl<'a, A, S, P> IntoIterator for &'a GenericHashSet<A, S, P>
+impl<'a, A, S, P, H: HashWidth> IntoIterator for &'a GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq,
     S: BuildHasher,
     P: SharedPointerKind,
 {
     type Item = &'a A;
-    type IntoIter = Iter<'a, A, P>;
+    type IntoIter = Iter<'a, A, P, H>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
 }
 
-impl<A, S, P> IntoIterator for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> IntoIterator for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher,
     P: SharedPointerKind,
 {
     type Item = A;
-    type IntoIter = ConsumingIter<Self::Item, P>;
+    type IntoIter = ConsumingIter<Self::Item, P, H>;
 
     fn into_iter(self) -> Self::IntoIter {
         ConsumingIter {
@@ -1118,7 +1120,7 @@ where
 
 // Conversions
 
-impl<A, OA, SA, SB, P1, P2> From<&GenericHashSet<&A, SA, P1>> for GenericHashSet<OA, SB, P2>
+impl<A, OA, SA, SB, P1, P2, H: HashWidth> From<&GenericHashSet<&A, SA, P1, H>> for GenericHashSet<OA, SB, P2, H>
 where
     A: ToOwned<Owned = OA> + Hash + Equivalent<A> + ?Sized,
     OA: Hash + Eq + Clone,
@@ -1127,12 +1129,12 @@ where
     P1: SharedPointerKind,
     P2: SharedPointerKind,
 {
-    fn from(set: &GenericHashSet<&A, SA, P1>) -> Self {
+    fn from(set: &GenericHashSet<&A, SA, P1, H>) -> Self {
         set.iter().map(|a| (*a).to_owned()).collect()
     }
 }
 
-impl<A, S, const N: usize, P> From<[A; N]> for GenericHashSet<A, S, P>
+impl<A, S, const N: usize, P, H: HashWidth> From<[A; N]> for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Default,
@@ -1143,7 +1145,7 @@ where
     }
 }
 
-impl<'a, A, S, P> From<&'a [A]> for GenericHashSet<A, S, P>
+impl<'a, A, S, P, H: HashWidth> From<&'a [A]> for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Default,
@@ -1154,7 +1156,7 @@ where
     }
 }
 
-impl<A, S, P> From<Vec<A>> for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> From<Vec<A>> for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Default,
@@ -1165,7 +1167,7 @@ where
     }
 }
 
-impl<A, S, P> From<&Vec<A>> for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> From<&Vec<A>> for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Default,
@@ -1201,7 +1203,7 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<A, S, P> From<std::collections::HashSet<A>> for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> From<std::collections::HashSet<A>> for GenericHashSet<A, S, P, H>
 where
     A: Eq + Hash + Clone,
     S: BuildHasher + Default,
@@ -1213,7 +1215,7 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<A, S, P> From<&std::collections::HashSet<A>> for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> From<&std::collections::HashSet<A>> for GenericHashSet<A, S, P, H>
 where
     A: Eq + Hash + Clone,
     S: BuildHasher + Default,
@@ -1224,7 +1226,7 @@ where
     }
 }
 
-impl<A, S, P> From<&BTreeSet<A>> for GenericHashSet<A, S, P>
+impl<A, S, P, H: HashWidth> From<&BTreeSet<A>> for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Default,
@@ -1291,9 +1293,9 @@ fn set_hashers_compatible<S: BuildHasher>(a: &S, b: &S) -> bool {
 }
 
 /// Walk two HAMT nodes for sets, collecting diffs.
-fn set_diff_hamt_nodes<'a, 'b, A, P>(
-    old_node: &'a Node<Value<A>, P>,
-    new_node: &'b Node<Value<A>, P>,
+fn set_diff_hamt_nodes<'a, 'b, A, P, H: HashWidth>(
+    old_node: &'a Node<Value<A>, P, H>,
+    new_node: &'b Node<Value<A>, P, H>,
     diffs: &mut Vec<DiffItem<'a, 'b, A>>,
 ) where
     A: Eq,
@@ -1327,9 +1329,9 @@ fn set_diff_hamt_nodes<'a, 'b, A, P>(
 }
 
 /// Compare two HAMT entries for sets.
-fn set_diff_entries<'a, 'b, A, P>(
-    old_entry: &'a NodeEntry<Value<A>, P>,
-    new_entry: &'b NodeEntry<Value<A>, P>,
+fn set_diff_entries<'a, 'b, A, P, H: HashWidth>(
+    old_entry: &'a NodeEntry<Value<A>, P, H>,
+    new_entry: &'b NodeEntry<Value<A>, P, H>,
     diffs: &mut Vec<DiffItem<'a, 'b, A>>,
 ) where
     A: Eq,
@@ -1365,9 +1367,9 @@ fn set_diff_entries<'a, 'b, A, P>(
 }
 
 /// Fallback diff using iterate-and-lookup for sets with incompatible hashers.
-fn set_diff_iterate_and_lookup<'a, 'b, A, S, P>(
-    old_set: &'a GenericHashSet<A, S, P>,
-    new_set: &'b GenericHashSet<A, S, P>,
+fn set_diff_iterate_and_lookup<'a, 'b, A, S, P, H: HashWidth>(
+    old_set: &'a GenericHashSet<A, S, P, H>,
+    new_set: &'b GenericHashSet<A, S, P, H>,
     diffs: &mut Vec<DiffItem<'a, 'b, A>>,
 ) where
     A: Hash + Eq,
@@ -1392,13 +1394,13 @@ fn set_diff_iterate_and_lookup<'a, 'b, A, S, P>(
 ///
 /// Uses a simultaneous HAMT tree walk with pointer-based subtree
 /// skipping, matching the [`HashMap`][crate::HashMap] diff strategy.
-pub struct DiffIter<'a, 'b, A, S, P: SharedPointerKind> {
+pub struct DiffIter<'a, 'b, A, S, P: SharedPointerKind, H: HashWidth = u64> {
     diffs: Vec<DiffItem<'a, 'b, A>>,
     index: usize,
-    _phantom: core::marker::PhantomData<fn(&S, &P)>,
+    _phantom: core::marker::PhantomData<fn(&S, &P, &H)>,
 }
 
-impl<'a, 'b, A, S, P> Iterator for DiffIter<'a, 'b, A, S, P>
+impl<'a, 'b, A, S, P, H: HashWidth> Iterator for DiffIter<'a, 'b, A, S, P, H>
 where
     A: Hash + Eq,
     S: BuildHasher,
@@ -1422,7 +1424,7 @@ where
     }
 }
 
-impl<A, S, P> ExactSizeIterator for DiffIter<'_, '_, A, S, P>
+impl<A, S, P, H: HashWidth> ExactSizeIterator for DiffIter<'_, '_, A, S, P, H>
 where
     A: Hash + Eq,
     S: BuildHasher,
@@ -1430,7 +1432,7 @@ where
 {
 }
 
-impl<A, S, P> FusedIterator for DiffIter<'_, '_, A, S, P>
+impl<A, S, P, H: HashWidth> FusedIterator for DiffIter<'_, '_, A, S, P, H>
 where
     A: Hash + Eq,
     S: BuildHasher,

@@ -362,6 +362,7 @@ extern crate pretty_assertions;
 mod util;
 
 mod config;
+pub mod hash_width;
 mod nodes;
 mod sort;
 mod sync;

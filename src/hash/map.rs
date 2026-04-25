@@ -39,8 +39,9 @@ use equivalent::Equivalent;
 
 use crate::config::{MERKLE_HASH_BITS, MERKLE_POSITIVE_EQ_MIN_BITS};
 use crate::hashset::GenericHashSet;
+use crate::hash_width::HashWidth;
 use crate::nodes::hamt::{
-    fmix64, hash_key, Drain as NodeDrain, Entry as NodeEntry, HashBits, HashValue,
+    fmix64, hash_key, Drain as NodeDrain, Entry as NodeEntry, HashValue,
     Iter as NodeIter, IterMut as NodeIterMut, Node, HASH_WIDTH,
 };
 #[cfg(any(feature = "std", feature = "foldhash"))]
@@ -155,9 +156,9 @@ pub type HashMap<K, V> =
 /// [std::cmp::Eq]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
 /// [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html
 /// [std::collections::hash_map::RandomState]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
-pub struct GenericHashMap<K, V, S, P: SharedPointerKind> {
+pub struct GenericHashMap<K, V, S, P: SharedPointerKind, H: HashWidth = u64> {
     pub(crate) size: usize,
-    pub(crate) root: Option<SharedPointer<Node<(K, V), P>, P>>,
+    pub(crate) root: Option<SharedPointer<Node<(K, V), P, H>, P>>,
     pub(crate) hasher: S,
     /// Identifies the hasher lineage. Maps cloned from a common ancestor
     /// share the same `hasher_id`, enabling O(1) Merkle equality checks.
@@ -166,7 +167,7 @@ pub struct GenericHashMap<K, V, S, P: SharedPointerKind> {
     /// Merkle hash of keys AND values. When valid, enables O(1) positive
     /// equality: same hasher + same size + same kv_merkle → equal with
     /// probability 1 − 2⁻⁶⁴ (below hardware error rates).
-    /// Contribution per entry: `fmix64(key_hash.wrapping_add(value_hash))`.
+    /// Contribution per entry: `fmix64(key_hash.to_u64().wrapping_add(value_hash))`.
     pub(crate) kv_merkle_hash: u64,
     /// Whether `kv_merkle_hash` is current. Invalidated by in-place
     /// mutations (`get_mut`, `index_mut`, `iter_mut`, entry API mutations)
@@ -199,7 +200,7 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<K, V, P> GenericHashMap<K, V, RandomState, P>
+impl<K, V, P, H: HashWidth> GenericHashMap<K, V, RandomState, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -220,13 +221,13 @@ where
     /// ```
     #[inline]
     #[must_use]
-    pub fn unit(k: K, v: V) -> GenericHashMap<K, V, RandomState, P> {
+    pub fn unit(k: K, v: V) -> GenericHashMap<K, V, RandomState, P, H> {
         GenericHashMap::new().update(k, v)
     }
 }
 
 #[cfg(all(not(feature = "std"), feature = "foldhash"))]
-impl<K, V, P> GenericHashMap<K, V, foldhash::fast::RandomState, P>
+impl<K, V, P, H: HashWidth> GenericHashMap<K, V, foldhash::fast::RandomState, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -235,12 +236,12 @@ where
     /// Construct a hash map with a single mapping (no_std + foldhash).
     #[inline]
     #[must_use]
-    pub fn unit(k: K, v: V) -> GenericHashMap<K, V, foldhash::fast::RandomState, P> {
+    pub fn unit(k: K, v: V) -> GenericHashMap<K, V, foldhash::fast::RandomState, P, H> {
         GenericHashMap::new().update(k, v)
     }
 }
 
-impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
+impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> {
     /// Construct an empty hash map.
     #[inline]
     #[must_use]
@@ -337,7 +338,7 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     /// current hash map.
     #[inline]
     #[must_use]
-    pub fn new_from<K1, V1>(&self) -> GenericHashMap<K1, V1, S, P>
+    pub fn new_from<K1, V1>(&self) -> GenericHashMap<K1, V1, S, P, H>
     where
         K1: Hash + Eq + Clone,
         V1: Clone,
@@ -362,7 +363,7 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     /// the same map.
     #[inline]
     #[must_use]
-    pub fn iter(&self) -> Iter<'_, K, V, P> {
+    pub fn iter(&self) -> Iter<'_, K, V, P, H> {
         Iter {
             it: NodeIter::new(self.root.as_deref(), self.size),
         }
@@ -377,7 +378,7 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     /// the same map.
     #[inline]
     #[must_use]
-    pub fn keys(&self) -> Keys<'_, K, V, P> {
+    pub fn keys(&self) -> Keys<'_, K, V, P, H> {
         Keys {
             it: NodeIter::new(self.root.as_deref(), self.size),
         }
@@ -392,7 +393,7 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     /// the same map.
     #[inline]
     #[must_use]
-    pub fn values(&self) -> Values<'_, K, V, P> {
+    pub fn values(&self) -> Values<'_, K, V, P, H> {
         Values {
             it: NodeIter::new(self.root.as_deref(), self.size),
         }
@@ -439,7 +440,7 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
             for ((_, v), key_hash) in NodeIter::new(Some(root), self.size) {
                 let value_hash = self.hasher.hash_one(v);
                 kv_merkle =
-                    kv_merkle.wrapping_add(fmix64(key_hash.wrapping_add(value_hash)));
+                    kv_merkle.wrapping_add(fmix64(key_hash.to_u64().wrapping_add(value_hash)));
             }
         }
         self.kv_merkle_hash = kv_merkle;
@@ -484,7 +485,7 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
         }
 
         let mut level_stats: Vec<LevelStats> = Vec::new();
-        let mut queue: VecDeque<(usize, SharedPointer<Node<(K, V), P>, P>)> = VecDeque::new();
+        let mut queue: VecDeque<(usize, SharedPointer<Node<(K, V), P, H>, P>)> = VecDeque::new();
         let mut max_depth = 0;
 
         // Start with root node at level 0
@@ -605,7 +606,7 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     }
 }
 
-impl<K, V, S, P> GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -613,7 +614,7 @@ where
 {
     fn test_eq<S2: BuildHasher, P2: SharedPointerKind>(
         &self,
-        other: &GenericHashMap<K, V, S2, P2>,
+        other: &GenericHashMap<K, V, S2, P2, H>,
     ) -> bool
     where
         V: PartialEq,
@@ -752,7 +753,7 @@ where
     pub fn is_submap_by<B, RM, F, P2: SharedPointerKind>(&self, other: RM, mut cmp: F) -> bool
     where
         F: FnMut(&V, &B) -> bool,
-        RM: Borrow<GenericHashMap<K, B, S, P2>>,
+        RM: Borrow<GenericHashMap<K, B, S, P2, H>>,
     {
         self.iter()
             .all(|(k, v)| other.borrow().get(k).map(|ov| cmp(v, ov)).unwrap_or(false))
@@ -770,7 +771,7 @@ where
     pub fn is_proper_submap_by<B, RM, F, P2: SharedPointerKind>(&self, other: RM, cmp: F) -> bool
     where
         F: FnMut(&V, &B) -> bool,
-        RM: Borrow<GenericHashMap<K, B, S, P2>>,
+        RM: Borrow<GenericHashMap<K, B, S, P2, H>>,
     {
         self.len() != other.borrow().len() && self.is_submap_by(other, cmp)
     }
@@ -849,7 +850,7 @@ where
     /// O(changes × tree_depth). For independently-constructed maps with
     /// different hasher states, falls back to O(n + m).
     #[must_use]
-    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, K, V, S, P>
+    pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, K, V, S, P, H>
     where
         V: PartialEq,
     {
@@ -890,7 +891,7 @@ where
     }
 }
 
-impl<K, V, S, P> GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -996,7 +997,7 @@ where
     pub fn partition_map<V1, V2, F>(
         &self,
         mut f: F,
-    ) -> (GenericHashMap<K, V1, S, P>, GenericHashMap<K, V2, S, P>)
+    ) -> (GenericHashMap<K, V1, S, P, H>, GenericHashMap<K, V2, S, P, H>)
     where
         V1: Clone,
         V2: Clone,
@@ -1064,7 +1065,7 @@ where
 
 // Internal helpers that don't require V: Hash. Used by set operations and
 // entry-based methods that go through the HAMT directly.
-impl<K, V, S, P> GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -1106,7 +1107,7 @@ where
 // Mutating methods that need K: Clone + V: Clone for copy-on-write but NOT S: Clone.
 // These use SharedPointer::make_mut (which clones the node, needing K+V Clone)
 // but never clone the hasher.
-impl<K, V, S, P> GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -1122,7 +1123,7 @@ where
     /// the same map.
     #[inline]
     #[must_use]
-    pub fn iter_mut(&mut self) -> IterMut<'_, K, V, P> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V, P, H> {
         self.kv_merkle_valid = false;
         let root = self.root.as_mut().map(|r| SharedPointer::make_mut(r));
         IterMut {
@@ -1225,14 +1226,14 @@ where
             if self.kv_merkle_valid {
                 let old_value_hash = self.hasher.hash_one(old_v);
                 self.kv_merkle_hash = self.kv_merkle_hash
-                    .wrapping_sub(fmix64(hash.wrapping_add(old_value_hash)))
-                    .wrapping_add(fmix64(hash.wrapping_add(value_hash)));
+                    .wrapping_sub(fmix64(hash.to_u64().wrapping_add(old_value_hash)))
+                    .wrapping_add(fmix64(hash.to_u64().wrapping_add(value_hash)));
             }
         } else {
             self.size += 1;
             if self.kv_merkle_valid {
                 self.kv_merkle_hash = self.kv_merkle_hash
-                    .wrapping_add(fmix64(hash.wrapping_add(value_hash)));
+                    .wrapping_add(fmix64(hash.to_u64().wrapping_add(value_hash)));
             }
         }
         result.map(|(_, v)| v)
@@ -1297,7 +1298,7 @@ where
             if self.kv_merkle_valid {
                 let value_hash = self.hasher.hash_one(v);
                 self.kv_merkle_hash = self.kv_merkle_hash
-                    .wrapping_sub(fmix64(hash.wrapping_add(value_hash)));
+                    .wrapping_sub(fmix64(hash.to_u64().wrapping_add(value_hash)));
             }
         }
         result
@@ -1342,7 +1343,7 @@ where
 
 // Methods that clone self or create new maps (persistent API).
 // Previously required S: Clone; now S is behind SharedPointer so clone is free.
-impl<K, V, S, P> GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -1355,7 +1356,7 @@ where
     ///
     /// [Entry]: enum.Entry.html
     #[must_use]
-    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, S, P> {
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, S, P, H> {
         let hash = hash_key(&self.hasher, &key);
         if self
             .root
@@ -1595,11 +1596,11 @@ where
     #[must_use]
     pub fn merge_with<V2, V3, FL, FB, FR>(
         &self,
-        other: &GenericHashMap<K, V2, S, P>,
+        other: &GenericHashMap<K, V2, S, P, H>,
         mut left_only: FL,
         mut both: FB,
         mut right_only: FR,
-    ) -> GenericHashMap<K, V3, S, P>
+    ) -> GenericHashMap<K, V3, S, P, H>
     where
         V2: Clone,
         V3: Clone,
@@ -1967,9 +1968,9 @@ where
     #[must_use]
     pub fn intersection_with<B, C, F>(
         self,
-        other: GenericHashMap<K, B, S, P>,
+        other: GenericHashMap<K, B, S, P, H>,
         mut f: F,
-    ) -> GenericHashMap<K, C, S, P>
+    ) -> GenericHashMap<K, C, S, P, H>
     where
         B: Clone,
         C: Clone,
@@ -2000,9 +2001,9 @@ where
     #[must_use]
     pub fn intersection_with_key<B, C, F>(
         mut self,
-        other: GenericHashMap<K, B, S, P>,
+        other: GenericHashMap<K, B, S, P, H>,
         mut f: F,
-    ) -> GenericHashMap<K, C, S, P>
+    ) -> GenericHashMap<K, C, S, P, H>
     where
         B: Clone,
         C: Clone,
@@ -2023,7 +2024,7 @@ where
 }
 
 // Methods that need K: Hash + Eq but not K: Clone, V: Clone, or S: Clone
-impl<K, V, S, P> GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -2057,7 +2058,7 @@ where
 }
 
 // Methods that need K: Clone but not V: Clone
-impl<K, V, S, P> GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     S: BuildHasher,
@@ -2078,7 +2079,7 @@ where
     /// assert_eq!(doubled, hashmap!{1 => 20, 2 => 40, 3 => 60});
     /// ```
     #[must_use]
-    pub fn map_values<V2, F>(&self, mut f: F) -> GenericHashMap<K, V2, S, P>
+    pub fn map_values<V2, F>(&self, mut f: F) -> GenericHashMap<K, V2, S, P, H>
     where
         V2: Clone,
         S: Default,
@@ -2106,7 +2107,7 @@ where
     /// assert_eq!(sums, hashmap!{1 => 11, 2 => 22, 3 => 33});
     /// ```
     #[must_use]
-    pub fn map_values_with_key<V2, F>(&self, mut f: F) -> GenericHashMap<K, V2, S, P>
+    pub fn map_values_with_key<V2, F>(&self, mut f: F) -> GenericHashMap<K, V2, S, P, H>
     where
         V2: Clone,
         S: Default,
@@ -2134,7 +2135,7 @@ where
     ///     map.try_map_values(|_, v| v.parse::<i32>());
     /// assert_eq!(parsed, Ok(hashmap!{1 => 10, 2 => 20, 3 => 30}));
     /// ```
-    pub fn try_map_values<V2, E, F>(&self, mut f: F) -> Result<GenericHashMap<K, V2, S, P>, E>
+    pub fn try_map_values<V2, E, F>(&self, mut f: F) -> Result<GenericHashMap<K, V2, S, P, H>, E>
     where
         V2: Clone,
         S: Default,
@@ -2170,7 +2171,7 @@ where
         &self,
         init: St,
         mut f: F,
-    ) -> (St, GenericHashMap<K, V2, S, P>)
+    ) -> (St, GenericHashMap<K, V2, S, P, H>)
     where
         V2: Clone,
         S: Default,
@@ -2188,7 +2189,7 @@ where
 }
 
 // Methods that need V: Clone but not K: Clone
-impl<K, V, S, P> GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq,
     V: Clone,
@@ -2213,7 +2214,7 @@ where
     /// assert_eq!(negated.get(&-1), Some(&"a"));
     /// ```
     #[must_use]
-    pub fn map_keys<K2, F>(&self, mut f: F) -> GenericHashMap<K2, V, S, P>
+    pub fn map_keys<K2, F>(&self, mut f: F) -> GenericHashMap<K2, V, S, P, H>
     where
         K2: Hash + Eq + Clone,
         S: Default,
@@ -2240,20 +2241,21 @@ where
 /// `Entry::or_insert()`) would need to hash the key once for the
 /// `contains_key` and again for the `insert`. The operations
 /// generally perform similarly otherwise.
-pub enum Entry<'a, K, V, S, P>
+pub enum Entry<'a, K, V, S, P, H = u64>
 where
     K: Hash + Eq + Clone,
     V: Clone,
     S: BuildHasher,
     P: SharedPointerKind,
+    H: HashWidth,
 {
     /// An entry which exists in the map.
-    Occupied(OccupiedEntry<'a, K, V, S, P>),
+    Occupied(OccupiedEntry<'a, K, V, S, P, H>),
     /// An entry which doesn't exist in the map.
-    Vacant(VacantEntry<'a, K, V, S, P>),
+    Vacant(VacantEntry<'a, K, V, S, P, H>),
 }
 
-impl<'a, K, V, S, P> Entry<'a, K, V, S, P>
+impl<'a, K, V, S, P, H: HashWidth> Entry<'a, K, V, S, P, H>
 where
     K: 'a + Hash + Eq + Clone,
     V: 'a + Clone,
@@ -2313,19 +2315,20 @@ where
 }
 
 /// An entry for a mapping that already exists in the map.
-pub struct OccupiedEntry<'a, K, V, S, P>
+pub struct OccupiedEntry<'a, K, V, S, P, H = u64>
 where
     K: Hash + Eq + Clone,
     V: Clone,
     S: BuildHasher,
     P: SharedPointerKind,
+    H: HashWidth,
 {
-    map: &'a mut GenericHashMap<K, V, S, P>,
-    hash: HashBits,
+    map: &'a mut GenericHashMap<K, V, S, P, H>,
+    hash: H,
     key: K,
 }
 
-impl<'a, K, V, S, P> OccupiedEntry<'a, K, V, S, P>
+impl<'a, K, V, S, P, H: HashWidth> OccupiedEntry<'a, K, V, S, P, H>
 where
     K: 'a + Hash + Eq + Clone,
     V: 'a + Clone,
@@ -2400,19 +2403,20 @@ where
 }
 
 /// An entry for a mapping that does not already exist in the map.
-pub struct VacantEntry<'a, K, V, S, P>
+pub struct VacantEntry<'a, K, V, S, P, H = u64>
 where
     K: Hash + Eq + Clone,
     V: Clone,
     S: BuildHasher,
     P: SharedPointerKind,
+    H: HashWidth,
 {
-    map: &'a mut GenericHashMap<K, V, S, P>,
-    hash: HashBits,
+    map: &'a mut GenericHashMap<K, V, S, P, H>,
+    hash: H,
     key: K,
 }
 
-impl<'a, K, V, S, P> VacantEntry<'a, K, V, S, P>
+impl<'a, K, V, S, P, H: HashWidth> VacantEntry<'a, K, V, S, P, H>
 where
     K: 'a + Hash + Eq + Clone,
     V: 'a + Clone,
@@ -2452,7 +2456,7 @@ where
 
 // Core traits
 
-impl<K, V, S, P> Clone for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Clone for GenericHashMap<K, V, S, P, H>
 where
     S: Clone,
     P: SharedPointerKind,
@@ -2473,7 +2477,7 @@ where
     }
 }
 
-impl<K, V, S1, S2, P1, P2> PartialEq<GenericHashMap<K, V, S2, P2>> for GenericHashMap<K, V, S1, P1>
+impl<K, V, S1, S2, P1, P2, H: HashWidth> PartialEq<GenericHashMap<K, V, S2, P2, H>> for GenericHashMap<K, V, S1, P1, H>
 where
     K: Hash + Eq,
     V: PartialEq,
@@ -2482,12 +2486,12 @@ where
     P1: SharedPointerKind,
     P2: SharedPointerKind,
 {
-    fn eq(&self, other: &GenericHashMap<K, V, S2, P2>) -> bool {
+    fn eq(&self, other: &GenericHashMap<K, V, S2, P2, H>) -> bool {
         self.test_eq(other)
     }
 }
 
-impl<K, V, S, P> Eq for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Eq for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq,
     V: Eq,
@@ -2496,7 +2500,7 @@ where
 {
 }
 
-impl<K, V, S, P> Default for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Default for GenericHashMap<K, V, S, P, H>
 where
     S: Default,
     P: SharedPointerKind,
@@ -2514,35 +2518,35 @@ where
     }
 }
 
-impl<K, V, S, P> Add for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Add for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    type Output = GenericHashMap<K, V, S, P>;
+    type Output = GenericHashMap<K, V, S, P, H>;
 
     fn add(self, other: Self) -> Self::Output {
         self.union(other)
     }
 }
 
-impl<K, V, S, P> Add for &GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Add for &GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    type Output = GenericHashMap<K, V, S, P>;
+    type Output = GenericHashMap<K, V, S, P, H>;
 
     fn add(self, other: Self) -> Self::Output {
         self.clone().union(other.clone())
     }
 }
 
-impl<K, V, S, P> Sum for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Sum for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -2557,7 +2561,7 @@ where
     }
 }
 
-impl<K, V, S, RK, RV, P> Extend<(RK, RV)> for GenericHashMap<K, V, S, P>
+impl<K, V, S, RK, RV, P, H: HashWidth> Extend<(RK, RV)> for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone + From<RK>,
     V: Clone + Hash + From<RV>,
@@ -2574,7 +2578,7 @@ where
     }
 }
 
-impl<Q, K, V, S, P> Index<&Q> for GenericHashMap<K, V, S, P>
+impl<Q, K, V, S, P, H: HashWidth> Index<&Q> for GenericHashMap<K, V, S, P, H>
 where
     Q: Hash + Equivalent<K> + ?Sized,
     K: Hash + Eq,
@@ -2591,7 +2595,7 @@ where
     }
 }
 
-impl<Q, K, V, S, P> IndexMut<&Q> for GenericHashMap<K, V, S, P>
+impl<Q, K, V, S, P, H: HashWidth> IndexMut<&Q> for GenericHashMap<K, V, S, P, H>
 where
     Q: Hash + Equivalent<K> + ?Sized,
     K: Hash + Eq + Clone,
@@ -2607,7 +2611,7 @@ where
     }
 }
 
-impl<K, V, S, P> Debug for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Debug for GenericHashMap<K, V, S, P, H>
 where
     K: Debug,
     V: Debug,
@@ -2625,12 +2629,12 @@ where
 // // Iterators
 
 /// An iterator over the elements of a map.
-pub struct Iter<'a, K, V, P: SharedPointerKind> {
-    it: NodeIter<'a, (K, V), P>,
+pub struct Iter<'a, K, V, P: SharedPointerKind, H: HashWidth = u64> {
+    it: NodeIter<'a, (K, V), P, H>,
 }
 
 // We impl Clone instead of deriving it, because we want Clone even if K and V aren't.
-impl<'a, K, V, P: SharedPointerKind> Clone for Iter<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, H: HashWidth> Clone for Iter<'a, K, V, P, H> {
     fn clone(&self) -> Self {
         Iter {
             it: self.it.clone(),
@@ -2638,7 +2642,7 @@ impl<'a, K, V, P: SharedPointerKind> Clone for Iter<'a, K, V, P> {
     }
 }
 
-impl<'a, K, V, P: SharedPointerKind> Iterator for Iter<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, H: HashWidth> Iterator for Iter<'a, K, V, P, H> {
     type Item = (&'a K, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -2650,21 +2654,22 @@ impl<'a, K, V, P: SharedPointerKind> Iterator for Iter<'a, K, V, P> {
     }
 }
 
-impl<'a, K, V, P: SharedPointerKind> ExactSizeIterator for Iter<'a, K, V, P> {}
+impl<'a, K, V, P: SharedPointerKind, H: HashWidth> ExactSizeIterator for Iter<'a, K, V, P, H> {}
 
-impl<'a, K, V, P: SharedPointerKind> FusedIterator for Iter<'a, K, V, P> {}
+impl<'a, K, V, P: SharedPointerKind, H: HashWidth> FusedIterator for Iter<'a, K, V, P, H> {}
 
 /// A mutable iterator over the elements of a map.
-pub struct IterMut<'a, K, V, P>
+pub struct IterMut<'a, K, V, P, H = u64>
 where
     K: Clone,
     V: Clone,
     P: SharedPointerKind,
+    H: HashWidth,
 {
-    it: NodeIterMut<'a, (K, V), P>,
+    it: NodeIterMut<'a, (K, V), P, H>,
 }
 
-impl<'a, K, V, P> Iterator for IterMut<'a, K, V, P>
+impl<'a, K, V, P, H: HashWidth> Iterator for IterMut<'a, K, V, P, H>
 where
     K: Clone,
     V: Clone,
@@ -2681,7 +2686,7 @@ where
     }
 }
 
-impl<'a, K, V, P> ExactSizeIterator for IterMut<'a, K, V, P>
+impl<'a, K, V, P, H: HashWidth> ExactSizeIterator for IterMut<'a, K, V, P, H>
 where
     K: Clone,
     V: Clone,
@@ -2689,7 +2694,7 @@ where
 {
 }
 
-impl<'a, K, V, P> FusedIterator for IterMut<'a, K, V, P>
+impl<'a, K, V, P, H: HashWidth> FusedIterator for IterMut<'a, K, V, P, H>
 where
     K: Clone,
     V: Clone,
@@ -2698,11 +2703,11 @@ where
 }
 
 /// A consuming iterator over the elements of a map.
-pub struct ConsumingIter<A: HashValue, P: SharedPointerKind> {
-    it: NodeDrain<A, P>,
+pub struct ConsumingIter<A: HashValue, P: SharedPointerKind, H: HashWidth = u64> {
+    it: NodeDrain<A, P, H>,
 }
 
-impl<A, P: SharedPointerKind> Iterator for ConsumingIter<A, P>
+impl<A, P: SharedPointerKind, H: HashWidth> Iterator for ConsumingIter<A, P, H>
 where
     A: HashValue + Clone,
 {
@@ -2717,14 +2722,14 @@ where
     }
 }
 
-impl<A, P> ExactSizeIterator for ConsumingIter<A, P>
+impl<A, P, H: HashWidth> ExactSizeIterator for ConsumingIter<A, P, H>
 where
     A: HashValue + Clone,
     P: SharedPointerKind,
 {
 }
 
-impl<A, P> FusedIterator for ConsumingIter<A, P>
+impl<A, P, H: HashWidth> FusedIterator for ConsumingIter<A, P, H>
 where
     A: HashValue + Clone,
     P: SharedPointerKind,
@@ -2732,11 +2737,11 @@ where
 }
 
 /// An iterator over the keys of a map.
-pub struct Keys<'a, K, V, P: SharedPointerKind> {
-    it: NodeIter<'a, (K, V), P>,
+pub struct Keys<'a, K, V, P: SharedPointerKind, H: HashWidth = u64> {
+    it: NodeIter<'a, (K, V), P, H>,
 }
 
-impl<'a, K, V, P: SharedPointerKind> Iterator for Keys<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, H: HashWidth> Iterator for Keys<'a, K, V, P, H> {
     type Item = &'a K;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -2748,16 +2753,16 @@ impl<'a, K, V, P: SharedPointerKind> Iterator for Keys<'a, K, V, P> {
     }
 }
 
-impl<'a, K, V, P: SharedPointerKind> ExactSizeIterator for Keys<'a, K, V, P> {}
+impl<'a, K, V, P: SharedPointerKind, H: HashWidth> ExactSizeIterator for Keys<'a, K, V, P, H> {}
 
-impl<'a, K, V, P: SharedPointerKind> FusedIterator for Keys<'a, K, V, P> {}
+impl<'a, K, V, P: SharedPointerKind, H: HashWidth> FusedIterator for Keys<'a, K, V, P, H> {}
 
 /// An iterator over the values of a map.
-pub struct Values<'a, K, V, P: SharedPointerKind> {
-    it: NodeIter<'a, (K, V), P>,
+pub struct Values<'a, K, V, P: SharedPointerKind, H: HashWidth = u64> {
+    it: NodeIter<'a, (K, V), P, H>,
 }
 
-impl<'a, K, V, P: SharedPointerKind> Iterator for Values<'a, K, V, P> {
+impl<'a, K, V, P: SharedPointerKind, H: HashWidth> Iterator for Values<'a, K, V, P, H> {
     type Item = &'a V;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -2769,13 +2774,13 @@ impl<'a, K, V, P: SharedPointerKind> Iterator for Values<'a, K, V, P> {
     }
 }
 
-impl<'a, K, V, P: SharedPointerKind> ExactSizeIterator for Values<'a, K, V, P> {}
+impl<'a, K, V, P: SharedPointerKind, H: HashWidth> ExactSizeIterator for Values<'a, K, V, P, H> {}
 
-impl<'a, K, V, P: SharedPointerKind> FusedIterator for Values<'a, K, V, P> {}
+impl<'a, K, V, P: SharedPointerKind, H: HashWidth> FusedIterator for Values<'a, K, V, P, H> {}
 
-impl<'a, K, V, S, P: SharedPointerKind> IntoIterator for &'a GenericHashMap<K, V, S, P> {
+impl<'a, K, V, S, P: SharedPointerKind, H: HashWidth> IntoIterator for &'a GenericHashMap<K, V, S, P, H> {
     type Item = (&'a K, &'a V);
-    type IntoIter = Iter<'a, K, V, P>;
+    type IntoIter = Iter<'a, K, V, P, H>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -2783,7 +2788,7 @@ impl<'a, K, V, S, P: SharedPointerKind> IntoIterator for &'a GenericHashMap<K, V
     }
 }
 
-impl<K, V, S, P> IntoIterator for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> IntoIterator for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -2791,7 +2796,7 @@ where
     P: SharedPointerKind,
 {
     type Item = (K, V);
-    type IntoIter = ConsumingIter<(K, V), P>;
+    type IntoIter = ConsumingIter<(K, V), P, H>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -2803,7 +2808,7 @@ where
 
 // Conversions
 
-impl<K, V, S, P> FromIterator<(K, V)> for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> FromIterator<(K, V)> for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -2822,8 +2827,8 @@ where
     }
 }
 
-impl<K, V, S, P: SharedPointerKind> AsRef<GenericHashMap<K, V, S, P>>
-    for GenericHashMap<K, V, S, P>
+impl<K, V, S, P: SharedPointerKind, H: HashWidth> AsRef<GenericHashMap<K, V, S, P, H>>
+    for GenericHashMap<K, V, S, P, H>
 {
     #[inline]
     fn as_ref(&self) -> &Self {
@@ -2831,8 +2836,8 @@ impl<K, V, S, P: SharedPointerKind> AsRef<GenericHashMap<K, V, S, P>>
     }
 }
 
-impl<K, V, OK, OV, SA, SB, P1, P2> From<&GenericHashMap<&K, &V, SA, P1>>
-    for GenericHashMap<OK, OV, SB, P2>
+impl<K, V, OK, OV, SA, SB, P1, P2, H: HashWidth> From<&GenericHashMap<&K, &V, SA, P1, H>>
+    for GenericHashMap<OK, OV, SB, P2, H>
 where
     K: Hash + Equivalent<OK> + ToOwned<Owned = OK> + ?Sized,
     V: ToOwned<Owned = OV> + ?Sized,
@@ -2843,14 +2848,14 @@ where
     P1: SharedPointerKind,
     P2: SharedPointerKind,
 {
-    fn from(m: &GenericHashMap<&K, &V, SA, P1>) -> Self {
+    fn from(m: &GenericHashMap<&K, &V, SA, P1, H>) -> Self {
         m.iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect()
     }
 }
 
-impl<'a, K, V, S, P> From<&'a [(K, V)]> for GenericHashMap<K, V, S, P>
+impl<'a, K, V, S, P, H: HashWidth> From<&'a [(K, V)]> for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -2862,7 +2867,7 @@ where
     }
 }
 
-impl<K, V, S, P> From<Vec<(K, V)>> for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> From<Vec<(K, V)>> for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -2874,7 +2879,7 @@ where
     }
 }
 
-impl<'a, K, V, S, P> From<&'a Vec<(K, V)>> for GenericHashMap<K, V, S, P>
+impl<'a, K, V, S, P, H: HashWidth> From<&'a Vec<(K, V)>> for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -2887,7 +2892,7 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<K, V, S1, S2, P> From<std::collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P>
+impl<K, V, S1, S2, P, H: HashWidth> From<std::collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -2901,7 +2906,7 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<'a, K, V, S1, S2, P> From<&'a std::collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P>
+impl<'a, K, V, S1, S2, P, H: HashWidth> From<&'a std::collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -2914,7 +2919,7 @@ where
     }
 }
 
-impl<K, V, S, P> From<BTreeMap<K, V>> for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> From<BTreeMap<K, V>> for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -2926,7 +2931,7 @@ where
     }
 }
 
-impl<'a, K, V, S, P> From<&'a BTreeMap<K, V>> for GenericHashMap<K, V, S, P>
+impl<'a, K, V, S, P, H: HashWidth> From<&'a BTreeMap<K, V>> for GenericHashMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -3004,9 +3009,9 @@ fn hashers_compatible<S: BuildHasher>(a: &S, b: &S) -> bool {
 /// Fallback diff using iterate-and-lookup for maps with incompatible hashers.
 ///
 /// O(n + m) — iterates both maps and probes the other map for each key.
-fn diff_iterate_and_lookup<'a, 'b, K, V, S, P>(
-    old_map: &'a GenericHashMap<K, V, S, P>,
-    new_map: &'b GenericHashMap<K, V, S, P>,
+fn diff_iterate_and_lookup<'a, 'b, K, V, S, P, H: HashWidth>(
+    old_map: &'a GenericHashMap<K, V, S, P, H>,
+    new_map: &'b GenericHashMap<K, V, S, P, H>,
     diffs: &mut Vec<DiffItem<'a, 'b, K, V>>,
 ) where
     K: Hash + Eq,
@@ -3046,10 +3051,10 @@ fn diff_iterate_and_lookup<'a, 'b, K, V, S, P>(
 /// `SharedPointer::ptr_eq` and skipped in O(1) — reducing diff
 /// complexity from O(n + m) to O(changes × tree_depth) for the
 /// common case.
-pub struct DiffIter<'a, 'b, K, V, S, P: SharedPointerKind> {
+pub struct DiffIter<'a, 'b, K, V, S, P: SharedPointerKind, H: HashWidth = u64> {
     diffs: Vec<DiffItem<'a, 'b, K, V>>,
     index: usize,
-    _phantom: core::marker::PhantomData<fn(&S, &P)>,
+    _phantom: core::marker::PhantomData<fn(&S, &P, &H)>,
 }
 
 /// Walk two HAMT nodes simultaneously, collecting diffs.
@@ -3060,9 +3065,9 @@ pub struct DiffIter<'a, 'b, K, V, S, P: SharedPointerKind> {
 /// - Both Value → compare keys/values directly
 /// - Mixed or leaf node types → collect values from both, compare by key
 /// - Present in one only → emit all values as Add or Remove
-fn diff_hamt_nodes<'a, 'b, K, V, P>(
-    old_node: &'a Node<(K, V), P>,
-    new_node: &'b Node<(K, V), P>,
+fn diff_hamt_nodes<'a, 'b, K, V, P, H: HashWidth>(
+    old_node: &'a Node<(K, V), P, H>,
+    new_node: &'b Node<(K, V), P, H>,
     diffs: &mut Vec<DiffItem<'a, 'b, K, V>>,
 ) where
     K: Eq,
@@ -3100,9 +3105,9 @@ fn diff_hamt_nodes<'a, 'b, K, V, P>(
 }
 
 /// Compare two HAMT entries that are not pointer-equal.
-fn diff_entries<'a, 'b, K, V, P>(
-    old_entry: &'a NodeEntry<(K, V), P>,
-    new_entry: &'b NodeEntry<(K, V), P>,
+fn diff_entries<'a, 'b, K, V, P, H: HashWidth>(
+    old_entry: &'a NodeEntry<(K, V), P, H>,
+    new_entry: &'b NodeEntry<(K, V), P, H>,
     diffs: &mut Vec<DiffItem<'a, 'b, K, V>>,
 ) where
     K: Eq,
@@ -3176,7 +3181,7 @@ fn diff_value_lists<'a, 'b, K, V>(
     }
 }
 
-impl<'a, 'b, K, V, S, P> Iterator for DiffIter<'a, 'b, K, V, S, P>
+impl<'a, 'b, K, V, S, P, H: HashWidth> Iterator for DiffIter<'a, 'b, K, V, S, P, H>
 where
     K: Hash + Eq,
     V: PartialEq,
@@ -3201,7 +3206,7 @@ where
     }
 }
 
-impl<K, V, S, P> ExactSizeIterator for DiffIter<'_, '_, K, V, S, P>
+impl<K, V, S, P, H: HashWidth> ExactSizeIterator for DiffIter<'_, '_, K, V, S, P, H>
 where
     K: Hash + Eq,
     V: PartialEq,
@@ -3210,7 +3215,7 @@ where
 {
 }
 
-impl<K, V, S, P> FusedIterator for DiffIter<'_, '_, K, V, S, P>
+impl<K, V, S, P, H: HashWidth> FusedIterator for DiffIter<'_, '_, K, V, S, P, H>
 where
     K: Hash + Eq,
     V: PartialEq,

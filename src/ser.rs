@@ -9,6 +9,7 @@ use core::fmt;
 use core::hash::{BuildHasher, Hash};
 use core::marker::PhantomData;
 
+use crate::hash_width::HashWidth;
 use crate::hashmap::GenericHashMap;
 use crate::hashset::GenericHashSet;
 use crate::ordmap::GenericOrdMap;
@@ -156,7 +157,7 @@ impl<K: Serialize + Ord, V: Serialize, P: SharedPointerKind> Serialize for Gener
 
 // HashMap
 
-impl<'de, K, V, S, P: SharedPointerKind> Deserialize<'de> for GenericHashMap<K, V, S, P>
+impl<'de, K, V, S, P: SharedPointerKind, H: HashWidth> Deserialize<'de> for GenericHashMap<K, V, S, P, H>
 where
     K: Deserialize<'de> + Hash + Eq + Clone,
     V: Deserialize<'de> + Clone + Hash,
@@ -167,11 +168,11 @@ where
     where
         D: Deserializer<'de>,
     {
-        des.deserialize_map(MapVisitor::<'de, GenericHashMap<K, V, S, P>, K, V>::new())
+        des.deserialize_map(MapVisitor::<'de, GenericHashMap<K, V, S, P, H>, K, V>::new())
     }
 }
 
-impl<K, V, S, P> Serialize for GenericHashMap<K, V, S, P>
+impl<K, V, S, P, H: HashWidth> Serialize for GenericHashMap<K, V, S, P, H>
 where
     K: Serialize + Hash + Eq,
     V: Serialize,
@@ -197,7 +198,8 @@ impl<
         A: Deserialize<'de> + Hash + Eq + Clone,
         S: BuildHasher + Default + Clone,
         P: SharedPointerKind,
-    > Deserialize<'de> for GenericHashSet<A, S, P>
+        H: HashWidth,
+    > Deserialize<'de> for GenericHashSet<A, S, P, H>
 {
     fn deserialize<D>(des: D) -> Result<Self, D::Error>
     where
@@ -207,8 +209,8 @@ impl<
     }
 }
 
-impl<A: Serialize + Hash + Eq, S: BuildHasher + Default, P: SharedPointerKind> Serialize
-    for GenericHashSet<A, S, P>
+impl<A: Serialize + Hash + Eq, S: BuildHasher + Default, P: SharedPointerKind, H: HashWidth> Serialize
+    for GenericHashSet<A, S, P, H>
 {
     fn serialize<Ser>(&self, ser: Ser) -> Result<Ser::Ok, Ser::Error>
     where
