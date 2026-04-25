@@ -266,7 +266,7 @@ where
     /// For each element, the result count is `self.count - other.count`,
     /// clamped to zero.
     #[must_use]
-    pub fn relative_complement(&self, other: &Self) -> Self
+    pub fn difference(&self, other: &Self) -> Self
     where
         S: Default,
     {
@@ -629,7 +629,7 @@ mod test {
     }
 
     #[test]
-    fn relative_complement_bags() {
+    fn difference_bags() {
         let mut a = Bag::new();
         a.insert_many("x", 5);
         a.insert_many("y", 2);
@@ -638,7 +638,7 @@ mod test {
         b.insert_many("x", 3);
         b.insert_many("y", 10);
 
-        let c = a.relative_complement(&b);
+        let c = a.difference(&b);
         assert_eq!(c.count(&"x"), 2);
         assert_eq!(c.count(&"y"), 0);
         assert_eq!(c.total_count(), 2);

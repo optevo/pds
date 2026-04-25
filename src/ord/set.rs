@@ -786,10 +786,10 @@ where
     /// let set1 = ordset!{1, 2};
     /// let set2 = ordset!{2, 3};
     /// let expected = ordset!{1};
-    /// assert_eq!(expected, set1.relative_complement(set2));
+    /// assert_eq!(expected, set1.difference(set2));
     /// ```
     #[must_use]
-    pub fn relative_complement(mut self, other: Self) -> Self {
+    pub fn difference(mut self, other: Self) -> Self {
         for value in other {
             let _ = self.remove(&value);
         }
@@ -1623,10 +1623,10 @@ mod test {
     }
 
     #[test]
-    fn relative_complement_basic() {
+    fn difference_basic() {
         let a = ordset![1, 2, 3, 4, 5];
         let b = ordset![2, 4];
-        assert_eq!(a.relative_complement(b), ordset![1, 3, 5]);
+        assert_eq!(a.difference(b), ordset![1, 3, 5]);
     }
 
     #[test]
@@ -1773,7 +1773,7 @@ mod test {
         let i = a.clone().intersection(b.clone());
         assert_eq!(i.len() as i32, n / 2);
 
-        let d = a.clone().relative_complement(b.clone());
+        let d = a.clone().difference(b.clone());
         assert_eq!(d.len() as i32, n / 2); // elements in a but not b
 
         let sd = a.clone().symmetric_difference(b.clone());

@@ -1700,5 +1700,5 @@ Remove `Add`, `Mul`, and `Sum` from all collection types. Keep `Add` on `Vector`
 - `a + b` no longer compiles for map/set/bag types. Use `a.union(b)` instead.
 - `Iterator::sum()` over a collection of maps/sets no longer works. Use
   `.reduce(|a, b| a.union(b))` or `fold(Default::default(), |a, b| a.union(b))`.
-- All collections retain their named `union()`, `relative_complement()`,
+- All collections retain their named `union()`, `difference()`,
   `intersection()`, and (where applicable) `symmetric_difference()` methods.

@@ -128,7 +128,7 @@ single v2.0.0 release in Phase 5.
   19 tests total.
 
 - **[2026-04-25] 3.4: Parallel bulk ops.** `par_union`,
-  `par_intersection`, `par_relative_complement`,
+  `par_intersection`, `par_difference`,
   `par_symmetric_difference` for HashMap and HashSet. Filter-map +
   fold/reduce pattern via rayon `par_iter()`. 10 tests.
 
@@ -337,7 +337,7 @@ single v2.0.0 release in Phase 5.
   (`update`, `without`, `entry`, `union`, `intersection`, etc.) retain
   `S: Clone`. HashSet: same split — `insert`, `remove`, `retain`,
   `partition`, `union`, `unions`, `symmetric_difference`,
-  `relative_complement` no longer need `S: Clone`. OrdMap: moved
+  `difference` no longer need `S: Clone`. OrdMap: moved
   `partition_map` from `K+V: Clone` to `K: Clone` block (only borrows V);
   `map_values`, `map_values_with_key`, `try_map_values`, `map_accum`
   moved to `K: Clone` block; `map_keys`, `map_keys_monotonic` moved to
@@ -451,7 +451,7 @@ single v2.0.0 release in Phase 5.
   iterate-smaller-probe-larger for Hash types), `restrict_keys`/`without_keys`
   (maps), `restrict` (sets, complement to existing `difference`),
   `partition_map` (partition + transform into two differently-typed maps),
-  `relative_complement_with` (asymmetric diff with per-entry resolver),
+  `difference_with` (asymmetric diff with per-entry resolver),
   `map_accum` (threaded accumulator through traversal with value transform).
 
 - **[2026-04-24] 2.6: Patch/apply from diff.** Added `apply_diff()` to all
@@ -1096,7 +1096,7 @@ and sets.
   whose keys are in the given set
 - `disjoint(&self, other: &Self) -> bool` — check whether two maps/sets
   share no keys, with O(1) early exit on first shared key
-- `relative_complement_with<F>(&self, other: &Self, f: F) -> Self where F: FnMut(&K, &V, &V) -> Option<V>`
+- `difference_with<F>(&self, other: &Self, f: F) -> Self where F: FnMut(&K, &V, &V) -> Option<V>`
   — asymmetric difference where `f` decides per-entry whether to keep,
   modify, or discard
 - `retain` for OrdMap/OrdSet — HashMap already has `retain`, but OrdMap
@@ -2344,7 +2344,7 @@ right path only when hash-randomisation is non-negotiable.
 `symmetric_difference` for HashMap/HashSet via rayon.
 
 **Status:** DONE. All parallel operations implemented:
-- `par_union`, `par_intersection`, `par_relative_complement`,
+- `par_union`, `par_intersection`, `par_difference`,
   `par_symmetric_difference` for both HashMap and HashSet.
 - Uses filter_map + fold/reduce pattern with rayon's `par_iter()`.
 - `par_symmetric_difference` uses `rayon::join` for two-way parallelism.
@@ -2491,7 +2491,7 @@ All major tracks complete. Remaining open items listed in [Residual](#residual).
    stage 3 identity hasher is residual)
 3. **Mutation track:** ✓ COMPLETE (3.1→3.2→3.3→5.2→4.5 all done)
 4. **Parallel track:** ✓ COMPLETE (3.4 par_iter/par_iter_mut/par_sort ✓;
-   parallel bulk ops — par_union/par_intersection/par_relative_complement/
+   parallel bulk ops — par_union/par_intersection/par_difference/
    par_symmetric_difference for HashMap+HashSet ✓)
 5. **Diff track:** ✓ COMPLETE (2.4→2.5→2.6→3.6, 3.5 all done)
 6. **Map API track:** ✓ COMPLETE (2.7, 2.8, 2.9, 2.10, 2.11 all done)

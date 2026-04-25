@@ -409,7 +409,7 @@ where
 {
     /// Return entries whose keys are in `self` but not in `other`.
     #[must_use]
-    pub fn relative_complement(self, other: &Self) -> Self {
+    pub fn difference(self, other: &Self) -> Self {
         self.into_iter().filter(|(k, _)| !other.contains_key(k)).collect()
     }
 
@@ -742,14 +742,14 @@ mod test {
     }
 
     #[test]
-    fn relative_complement() {
+    fn difference() {
         let mut a = InsertionOrderMap::new();
         a.insert("x", 1i32);
         a.insert("y", 2);
         a.insert("z", 3);
         let mut b = InsertionOrderMap::new();
         b.insert("y", 99);
-        let c = a.relative_complement(&b);
+        let c = a.difference(&b);
         assert_eq!(c.len(), 2);
         assert!(c.contains_key("x"));
         assert!(!c.contains_key("y"));

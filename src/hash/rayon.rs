@@ -525,11 +525,11 @@ where
     /// elements in `self` whose keys are not in `other`.
     ///
     /// This is the parallel equivalent of
-    /// [`relative_complement`][GenericHashMap::relative_complement].
+    /// [`difference`][GenericHashMap::difference].
     ///
     /// Time: O(n log m / p)
     #[must_use]
-    pub fn par_relative_complement(self, other: Self) -> Self {
+    pub fn par_difference(self, other: Self) -> Self {
         self.par_iter()
             .filter_map(|(k, v)| {
                 if other.contains_key(k) {
@@ -859,11 +859,11 @@ where
     /// elements in `self` not in `other`.
     ///
     /// This is the parallel equivalent of
-    /// [`relative_complement`][GenericHashSet::relative_complement].
+    /// [`difference`][GenericHashSet::difference].
     ///
     /// Time: O(n log m / p)
     #[must_use]
-    pub fn par_relative_complement(self, other: Self) -> Self {
+    pub fn par_difference(self, other: Self) -> Self {
         self.par_iter()
             .filter_map(|a| if other.contains(a) { None } else { Some(a.clone()) })
             .fold(Self::default, |mut acc, a| {
@@ -1206,11 +1206,11 @@ mod test {
 
     #[cfg_attr(miri, ignore)]
     #[test]
-    fn hashmap_par_relative_complement() {
+    fn hashmap_par_difference() {
         let map1: HashMap<i32, i32> = (0..5_000).map(|i| (i, i)).collect();
         let map2: HashMap<i32, i32> = (2_500..7_500).map(|i| (i, i * 10)).collect();
-        let seq = map1.clone().relative_complement(map2.clone());
-        let par = map1.par_relative_complement(map2);
+        let seq = map1.clone().difference(map2.clone());
+        let par = map1.par_difference(map2);
         assert_eq!(par, seq);
     }
 
@@ -1246,11 +1246,11 @@ mod test {
 
     #[cfg_attr(miri, ignore)]
     #[test]
-    fn hashset_par_relative_complement() {
+    fn hashset_par_difference() {
         let set1: HashSet<i32> = (0..5_000).collect();
         let set2: HashSet<i32> = (2_500..7_500).collect();
-        let seq = set1.clone().relative_complement(set2.clone());
-        let par = set1.par_relative_complement(set2);
+        let seq = set1.clone().difference(set2.clone());
+        let par = set1.par_difference(set2);
         assert_eq!(par, seq);
     }
 

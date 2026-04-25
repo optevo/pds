@@ -265,7 +265,7 @@ where
 
     /// Return entries whose keys are in `self` but not in `other`.
     #[must_use]
-    pub fn relative_complement(self, other: &Self) -> Self {
+    pub fn difference(self, other: &Self) -> Self {
         self.into_iter().filter(|(k, _)| !other.contains_key(k)).collect()
     }
 
@@ -771,12 +771,12 @@ mod test {
     }
 
     #[test]
-    fn relative_complement() {
+    fn difference() {
         let mut a = HashMultiMap::new();
         a.insert(1, "x"); a.insert(2, "y");
         let mut b = HashMultiMap::new();
         b.insert(2, "z");
-        let c = a.relative_complement(&b);
+        let c = a.difference(&b);
         assert!(c.contains_key(&1));
         assert!(!c.contains_key(&2));
     }

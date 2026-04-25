@@ -1057,7 +1057,7 @@ where
     /// # use pds::hashmap::HashMap;
     /// let a = hashmap!{1 => 10, 2 => 20, 3 => 30};
     /// let b = hashmap!{2 => 5, 3 => 50, 4 => 40};
-    /// let result = a.relative_complement_with(&b, |_k, v_self, v_other| {
+    /// let result = a.difference_with(&b, |_k, v_self, v_other| {
     ///     if v_self > v_other { Some(*v_self - *v_other) } else { None }
     /// });
     /// assert_eq!(result.len(), 2);
@@ -1065,7 +1065,7 @@ where
     /// assert_eq!(result[&2], 15);
     /// ```
     #[must_use]
-    pub fn relative_complement_with<F>(&self, other: &Self, mut f: F) -> Self
+    pub fn difference_with<F>(&self, other: &Self, mut f: F) -> Self
     where
         S: Default,
         F: FnMut(&K, &V, &V) -> Option<V>,
@@ -1952,11 +1952,11 @@ where
     /// let map1 = hashmap!{1 => 1, 3 => 4};
     /// let map2 = hashmap!{2 => 2, 3 => 5};
     /// let expected = hashmap!{1 => 1};
-    /// assert_eq!(expected, map1.relative_complement(map2));
+    /// assert_eq!(expected, map1.difference(map2));
     /// ```
     #[inline]
     #[must_use]
-    pub fn relative_complement(mut self, other: Self) -> Self {
+    pub fn difference(mut self, other: Self) -> Self {
         for (key, _) in other {
             let _ = self.remove_invalidate_kv(&key);
         }
@@ -4274,10 +4274,10 @@ mod test {
     }
 
     #[test]
-    fn relative_complement_with_basic() {
+    fn difference_with_basic() {
         let a = hashmap! {1 => 10, 2 => 20, 3 => 30};
         let b = hashmap! {2 => 5, 3 => 50, 4 => 40};
-        let result = a.relative_complement_with(&b, |_k, v_self, v_other| {
+        let result = a.difference_with(&b, |_k, v_self, v_other| {
             if v_self > v_other {
                 Some(*v_self - *v_other)
             } else {
@@ -4290,10 +4290,10 @@ mod test {
     }
 
     #[test]
-    fn relative_complement_with_no_overlap() {
+    fn difference_with_no_overlap() {
         let a = hashmap! {1 => 10, 2 => 20};
         let b = hashmap! {3 => 30, 4 => 40};
-        let result = a.relative_complement_with(&b, |_, _, _| None);
+        let result = a.difference_with(&b, |_, _, _| None);
         assert_eq!(result, a);
     }
 

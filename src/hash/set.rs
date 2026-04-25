@@ -704,10 +704,10 @@ where
     /// let set1 = hashset!{1, 2};
     /// let set2 = hashset!{2, 3};
     /// let expected = hashset!{1};
-    /// assert_eq!(expected, set1.relative_complement(set2));
+    /// assert_eq!(expected, set1.difference(set2));
     /// ```
     #[must_use]
-    pub fn relative_complement(mut self, other: Self) -> Self {
+    pub fn difference(mut self, other: Self) -> Self {
         for value in other {
             let _ = self.remove(&value);
         }
@@ -1868,10 +1868,10 @@ mod test {
     }
 
     #[test]
-    fn relative_complement_basic() {
+    fn difference_basic() {
         let a = hashset! {1, 2, 3, 4, 5};
         let b = hashset! {2, 4};
-        let rc = a.relative_complement(b);
+        let rc = a.difference(b);
         assert_eq!(rc.len(), 3);
         assert!(rc.contains(&1));
         assert!(rc.contains(&3));
@@ -1984,7 +1984,7 @@ mod test {
         let i = a.clone().intersection(b.clone());
         assert_eq!(i.len() as i32, n / 2);
 
-        let rc = a.clone().relative_complement(b.clone());
+        let rc = a.clone().difference(b.clone());
         assert_eq!(rc.len() as i32, n / 2);
 
         let sd = a.symmetric_difference(b);

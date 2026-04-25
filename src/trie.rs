@@ -329,7 +329,7 @@ where
 
     /// Return entries whose paths are in `self` but not in `other`.
     #[must_use]
-    pub fn relative_complement(self, other: &Self) -> Self {
+    pub fn difference(self, other: &Self) -> Self {
         self.into_iter()
             .filter(|(path, _)| !other.contains_path(path))
             .collect()
@@ -904,13 +904,13 @@ mod test {
     }
 
     #[test]
-    fn relative_complement() {
+    fn difference() {
         let mut a: Trie<&str, i32> = Trie::new();
         a.insert(&["x"], 1);
         a.insert(&["y"], 2);
         let mut b: Trie<&str, i32> = Trie::new();
         b.insert(&["y"], 99);
-        let c = a.relative_complement(&b);
+        let c = a.difference(&b);
         assert_eq!(c.get(&["x"]), Some(&1));
         assert!(c.get(&["y"]).is_none());
     }

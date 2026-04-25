@@ -107,7 +107,7 @@ trait coverage against this table and fill any gaps.
   arithmetic operators for set operations (`+` for union, `*` for intersection)
   is not idiomatic Rust — the standard library's `HashMap`, `HashSet`,
   `BTreeMap`, and `BTreeSet` do not do this. Use named methods instead:
-  `union()`, `intersection()`, `relative_complement()`,
+  `union()`, `intersection()`, `difference()`,
   `symmetric_difference()`. The exception is `Vector`, where `Add` is
   concatenation — analogous to `String + &str` — which is acceptable.
 
@@ -121,7 +121,7 @@ across every collection type that supports them:
 | Operation | Method name |
 |-----------|-------------|
 | All elements from both | `union()` |
-| Elements in `self` not in `other` | `relative_complement()` |
+| Elements in `self` not in `other` | `difference()` |
 | Elements in both | `intersection()` |
 | Elements in exactly one | `symmetric_difference()` |
 
