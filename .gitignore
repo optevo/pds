@@ -23,3 +23,7 @@ dhat-heap.json
 
 # Local rustdoc output
 rustdocs/
+
+# Editor directories
+.vscode/
+.idea/

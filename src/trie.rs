@@ -25,12 +25,12 @@
 //! assert_eq!(trie.get(&["usr"]), None); // no value at interior node
 //! ```
 
-#[cfg(feature = "std")]
-use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FromIterator;
 use core::ops::{Index, IndexMut};
+#[cfg(feature = "std")]
+use std::collections::hash_map::RandomState;
 
 use archery::SharedPointerKind;
 
@@ -306,10 +306,7 @@ where
     /// Iterate over all paths that share the given prefix.
     ///
     /// Returns (remaining_path, value) pairs for all values under the prefix.
-    pub fn iter_prefix<'a, Q>(
-        &'a self,
-        prefix: &[Q],
-    ) -> Option<TrieIter<'a, K, V, S, P>>
+    pub fn iter_prefix<'a, Q>(&'a self, prefix: &[Q]) -> Option<TrieIter<'a, K, V, S, P>>
     where
         Q: Hash + Eq,
         K: core::borrow::Borrow<Q>,
@@ -342,25 +339,37 @@ where
             .filter(|(path, _)| other.contains_path(path))
             .collect()
     }
-}
 
-#[cfg(feature = "std")]
-impl<K, V, P> Default for GenericTrie<K, V, RandomState, P>
-where
-    P: SharedPointerKind,
-{
-    fn default() -> Self {
-        Self::new()
+    /// Return entries whose paths are in exactly one of `self` or `other`.
+    #[must_use]
+    pub fn symmetric_difference(self, other: &Self) -> Self {
+        // Clone self before consuming it — O(1) via structural sharing — so we can
+        // check path membership for other's entries after self is consumed.
+        let self_clone = self.clone();
+        let self_diff: Self = self
+            .into_iter()
+            .filter(|(path, _)| !other.contains_path(path))
+            .collect();
+        let other_diff: Self = other
+            .clone()
+            .into_iter()
+            .filter(|(path, _)| !self_clone.contains_path(path))
+            .collect();
+        self_diff.union(other_diff)
     }
 }
 
-#[cfg(all(not(feature = "std"), feature = "foldhash"))]
-impl<K, V, P> Default for GenericTrie<K, V, foldhash::fast::RandomState, P>
+// Single generic Default impl covers both std and no_std+foldhash cases.
+impl<K, V, S, P> Default for GenericTrie<K, V, S, P>
 where
+    S: Default,
     P: SharedPointerKind,
 {
     fn default() -> Self {
-        Self::new()
+        GenericTrie {
+            value: None,
+            children: GenericHashMap::default(),
+        }
     }
 }
 
@@ -616,7 +625,9 @@ where
             .iter()
             .map(|(path, v)| (path.into_iter().cloned().collect(), v.clone()))
             .collect();
-        TrieConsumingIter { inner: items.into_iter() }
+        TrieConsumingIter {
+            inner: items.into_iter(),
+        }
     }
 }
 
@@ -815,8 +826,8 @@ mod test {
 
     #[test]
     fn hash_equal_tries_same_hash() {
-        use std::collections::hash_map::DefaultHasher;
         use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
         let mut a: Trie<&str, i32> = Trie::new();
         a.insert(&["x", "y"], 1);
         let mut b: Trie<&str, i32> = Trie::new();
@@ -832,11 +843,7 @@ mod test {
 
     #[test]
     fn from_iter_and_into_iter() {
-        let entries = vec![
-            (vec!["a", "b"], 1i32),
-            (vec!["a", "c"], 2),
-            (vec!["d"], 3),
-        ];
+        let entries = vec![(vec!["a", "b"], 1i32), (vec!["a", "c"], 2), (vec!["d"], 3)];
         let trie: Trie<&str, i32> = entries.clone().into_iter().collect();
         assert_eq!(trie.get(&["a", "b"]), Some(&1));
         assert_eq!(trie.get(&["a", "c"]), Some(&2));
@@ -930,6 +937,35 @@ mod test {
     }
 
     #[test]
+    fn symmetric_difference_method() {
+        let mut a: Trie<&str, i32> = Trie::new();
+        a.insert(&["x"], 1);
+        a.insert(&["y"], 2);
+        a.insert(&["z"], 3);
+        let mut b: Trie<&str, i32> = Trie::new();
+        b.insert(&["y"], 99); // shared — excluded
+        b.insert(&["w"], 4); // only in b
+        let c = a.symmetric_difference(&b);
+        assert_eq!(c.get(&["x"]), Some(&1)); // only in a
+        assert!(c.get(&["y"]).is_none()); // in both — excluded
+        assert_eq!(c.get(&["z"]), Some(&3)); // only in a
+        assert_eq!(c.get(&["w"]), Some(&4)); // only in b
+        assert_eq!(c.len(), 3);
+    }
+
+    #[test]
+    fn symmetric_difference_disjoint() {
+        let mut a: Trie<&str, i32> = Trie::new();
+        a.insert(&["a"], 1);
+        let mut b: Trie<&str, i32> = Trie::new();
+        b.insert(&["b"], 2);
+        let c = a.symmetric_difference(&b);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c.get(&["a"]), Some(&1));
+        assert_eq!(c.get(&["b"]), Some(&2));
+    }
+
+    #[test]
     fn get_mut_and_index_mut() {
         let mut t = Trie::new();
         t.insert(&["a", "b"], 1i32);
@@ -952,6 +988,13 @@ mod test {
     }
 
     #[test]
+    fn default_is_empty() {
+        // Exercises the generic Default impl (replaces two cfg-gated concrete impls).
+        let t: Trie<&str, i32> = Trie::default();
+        assert!(t.is_empty());
+    }
+
+    #[test]
     fn debug_format() {
         let mut t = Trie::new();
         t.insert(&["a", "b"], 1i32);
@@ -961,10 +1004,7 @@ mod test {
 
     #[test]
     fn from_vec_ref() {
-        let v: Vec<(Vec<&str>, i32)> = vec![
-            (vec!["a", "b"], 1),
-            (vec!["x"], 2),
-        ];
+        let v: Vec<(Vec<&str>, i32)> = vec![(vec!["a", "b"], 1), (vec!["x"], 2)];
         let t: Trie<&str, i32> = Trie::from(&v);
         assert_eq!(t.len(), 2);
         assert_eq!(t.get(&["a", "b"]), Some(&1));

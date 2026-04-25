@@ -25,12 +25,12 @@ use alloc::borrow::ToOwned;
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
-#[cfg(feature = "std")]
-use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator};
 use core::ops::Deref;
+#[cfg(feature = "std")]
+use std::collections::hash_map::RandomState;
 
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
@@ -39,8 +39,7 @@ use crate::config::{MERKLE_HASH_BITS, MERKLE_POSITIVE_EQ_MIN_BITS};
 use crate::hash_width::HashWidth;
 use crate::hashmap::next_hasher_id;
 use crate::nodes::hamt::{
-    hash_key, Drain as NodeDrain, Entry as NodeEntry, HashValue, Iter as NodeIter, Node,
-    HASH_WIDTH,
+    hash_key, Drain as NodeDrain, Entry as NodeEntry, HashValue, Iter as NodeIter, Node, HASH_WIDTH,
 };
 use crate::ordset::GenericOrdSet;
 #[cfg(any(feature = "std", feature = "foldhash"))]
@@ -943,7 +942,8 @@ where
     }
 }
 
-impl<A, S1, P1, S2, P2, H: HashWidth> PartialEq<GenericHashSet<A, S2, P2, H>> for GenericHashSet<A, S1, P1, H>
+impl<A, S1, P1, S2, P2, H: HashWidth> PartialEq<GenericHashSet<A, S2, P2, H>>
+    for GenericHashSet<A, S1, P1, H>
 where
     A: Hash + Eq,
     S1: BuildHasher,
@@ -1152,7 +1152,8 @@ where
 
 // Conversions
 
-impl<A, OA, SA, SB, P1, P2, H: HashWidth> From<&GenericHashSet<&A, SA, P1, H>> for GenericHashSet<OA, SB, P2, H>
+impl<A, OA, SA, SB, P1, P2, H: HashWidth> From<&GenericHashSet<&A, SA, P1, H>>
+    for GenericHashSet<OA, SB, P2, H>
 where
     A: ToOwned<Owned = OA> + Hash + Equivalent<A> + ?Sized,
     OA: Hash + Eq + Clone,
@@ -1500,8 +1501,8 @@ mod test {
     use crate::test::LolHasher;
     use ::proptest::num::i16;
     use ::proptest::proptest;
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
     use core::hash::BuildHasherDefault;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     assert_impl_all!(HashSet<i32>: Send, Sync);
     assert_not_impl_any!(HashSet<*const i32>: Send, Sync);
@@ -2011,9 +2012,13 @@ mod test {
             h.finish()
         }
         let mut a = HashSet::new();
-        a.insert(1); a.insert(2); a.insert(3);
+        a.insert(1);
+        a.insert(2);
+        a.insert(3);
         let mut b = HashSet::new();
-        b.insert(3); b.insert(1); b.insert(2); // different insertion order
+        b.insert(3);
+        b.insert(1);
+        b.insert(2); // different insertion order
         assert_eq!(hash_of(&a), hash_of(&b));
     }
 }

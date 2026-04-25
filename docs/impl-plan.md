@@ -57,6 +57,19 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-26] R.1, R.3, R.5, R.6, R.7 — Residual consistency fixes.**
+  R.1: Added all missing set operations — `symmetric_difference` to Bag, HashMultiMap,
+  InsertionOrderMap, Trie; `difference`, `intersection`, `symmetric_difference` to BiMap and SymMap.
+  Each method has ≥2 unit tests. Pre-existing no_std bug fixed: added `use alloc::vec::Vec` to
+  bag.rs, hash_multimap.rs, insertion_order_map.rs, insertion_order_set.rs, bimap.rs, symmap.rs.
+  R.3: Replaced two cfg-gated `Default` impls for `GenericTrie` with one generic `where S: Default`
+  impl, plus a `default_is_empty` test. R.5: Added `debug` feature row to lib.rs and README feature
+  tables. R.6: Rewrote test.sh — added `cargo fmt --check`, `cargo check --no-default-features`,
+  `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features`, `cargo audit`; fixed pre-existing
+  broken intra-doc links in persist.rs (`InternPool` → `crate::intern::InternPool`) and pre-existing
+  formatting drift across benches/ and vector/mod.rs. R.7: Confirmed rpds 1.2.0 in Cargo.lock —
+  README already correct, no change needed.
+
 - **[2026-04-25] Directive conformance pass 3 — From<&Vec>, #[allow] comments, missing tests.**
   `From<&Vec<A>>` added to `Bag`; `From<&Vec<(Vec<K>,V)>>` added to `Trie`. Tests added:
   `Bag` (from_vec_ref, sum_via_iterator), `BiMap` (sum, from_vec/slice/vec_ref), `SymMap`
@@ -2285,6 +2298,172 @@ target).
 ## Residual {#residual}
 
 Open items not yet completed or killed. All prerequisites met.
+
+### R.1 Missing set operations on newer collection types (HIGH) — DONE [2026-04-26]
+
+**What:** Seven methods are missing across five types — all required by the set operation
+naming rules in `directives.md`.
+
+| Type | Missing |
+|------|---------|
+| `Bag` | `symmetric_difference()` |
+| `HashMultiMap` | `symmetric_difference()` |
+| `InsertionOrderMap` | `symmetric_difference()` |
+| `Trie` | `symmetric_difference()` |
+| `BiMap` | `difference()`, `intersection()`, `symmetric_difference()` |
+| `SymMap` | `difference()`, `intersection()`, `symmetric_difference()` |
+
+**Semantics:**
+- `Bag::symmetric_difference`: multiset symmetric diff — result count = `|self_count - other_count|`,
+  elements with equal counts excluded. Requires `S: Default` (matches `difference`/`intersection`).
+- `HashMultiMap::symmetric_difference`: keys in exactly one map (their full value sets). Consuming.
+- `InsertionOrderMap::symmetric_difference`: keys in exactly one map. Consuming.
+- `Trie::symmetric_difference`: paths in exactly one trie. Consuming. Can be expressed as
+  `self.difference(other_clone).union(other.difference(self_clone))`.
+- `BiMap`/`SymMap difference/intersection/symmetric_difference`: match by key (forward direction).
+  All consuming. `S: BuildHasher + Clone + Default` block.
+
+**Why:** The directives mandate all four canonical set ops on every type that logically supports
+them. The gap was identified in the consistency audit [2026-04-25].
+
+**Complexity:** Low. Each method is ≤15 lines following the existing `difference()`/`intersection()` patterns.
+
+**Acceptance:** `test.sh` passes; each new method has ≥2 unit tests; no new methods violate
+the `Add`/`Mul`/`Sum` prohibition.
+
+---
+
+### R.2 Rayon parallel iterators for newer collection types (MEDIUM)
+
+**What:** Add rayon support (`IntoParallelIterator`, `IntoParallelRefIterator`,
+`FromParallelIterator`, `ParallelExtend`) to types added after the original 3.4 parallel work.
+
+Candidates (highest priority first):
+- `Bag` — backed by a single `GenericHashMap`; par_iter reuses HashMap's `UnindexedProducer`
+- `HashMultiMap` — similar; flat pair iteration
+- `BiMap` — backed by two `GenericHashMap`s; par_iter over the forward map
+- `SymMap` — same as BiMap
+
+InsertionOrderMap/Set: ordering concerns — `par_iter` is safe (read-only), but `FromParallelIterator`
+would lose insertion order. Implement read-only parallel iteration only, document the limitation.
+
+Update `lib.rs` and `README.md` feature claims if any type is excluded.
+
+**Why:** `lib.rs` and `README.md` currently claim rayon support for "all collection types" — this
+is inaccurate. Either implement for all, or update the claim. The consistency audit flagged this
+as a medium-priority documentation/implementation gap.
+
+**Complexity:** Low-medium. Each type ≈ 30–50 lines following `src/hash/map.rs` patterns.
+
+**Prerequisites:** R.1 (so set ops and rayon are consistent).
+
+**Acceptance:** `cargo test --features rayon` passes; claim in lib.rs/README updated to match
+actual coverage.
+
+---
+
+### R.3 Fix `Trie::default()` generic impl (MEDIUM) — DONE [2026-04-26]
+
+**What:** Replace the two concrete `Default` impls for `GenericTrie` with a single generic impl:
+
+```rust
+// Replace both cfg-gated impls (lines ~347-365 in src/trie.rs) with:
+impl<K, V, S, P> Default for GenericTrie<K, V, S, P>
+where
+    S: Default,
+    P: SharedPointerKind,
+{
+    fn default() -> Self {
+        GenericTrie { value: None, children: GenericHashMap::default() }
+    }
+}
+```
+
+The current two concrete impls (`RandomState` / `foldhash::fast::RandomState`) do not compile
+under `no_std + foldhash` if `std` is absent and `foldhash` is absent simultaneously.
+
+**Why:** Directive violation — `Default` must be generic. All other collections use the generic
+pattern. This was identified in the consistency audit.
+
+**Complexity:** Trivial (5-line change).
+
+**Acceptance:** `cargo test --no-default-features --features foldhash` and
+`cargo test` both pass. No cfg-gated `Default` impls remain for this type.
+
+---
+
+### R.4 Add code examples to legacy module docs (LOW)
+
+**What:** Five legacy module-level `//!` doc blocks lack usage examples. Add at least one
+`# Example` block to each:
+
+- `src/hash/map.rs`
+- `src/hash/set.rs`
+- `src/ord/map.rs`
+- `src/ord/set.rs`
+- `src/vector/mod.rs`
+
+**Why:** New types (Bag, HashMultiMap, etc.) all have examples; legacy types do not. Inconsistent
+first impression for API consumers. Consistency audit flagged as low-priority.
+
+**Complexity:** Low. Examples can be short `create / insert / lookup` sequences.
+
+**Acceptance:** `cargo doc --no-deps` passes with `RUSTDOCFLAGS="-D warnings"`; each module has
+≥1 doctest that `cargo test --doc` executes successfully.
+
+---
+
+### R.5 Document `debug` feature in lib.rs and README (LOW) — DONE [2026-04-26]
+
+**What:** The `debug` feature flag exists in `Cargo.toml` but is absent from both the `lib.rs`
+feature table and the `README.md` feature table. Add a row to both tables describing what the
+feature does.
+
+**Why:** Users cannot discover the feature unless they read `Cargo.toml` directly. Consistency
+audit flagged as low-priority.
+
+**Complexity:** Trivial.
+
+**Acceptance:** Both tables list `debug`; `cargo doc --no-deps` passes.
+
+---
+
+### R.6 Expand test.sh quality gate (LOW) — DONE [2026-04-26]
+
+**What:** Add the following checks to `test.sh` in the correct sequence:
+
+1. `cargo fmt --check` — before all other steps (fast, no compilation)
+2. `cargo check --no-default-features` — after `cargo test` steps (directive compliance: no_std surface)
+3. `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` — replaces the current `cargo doc` step
+4. `cargo audit` — at the end (requires network; slowest step)
+
+Note: `cargo miri test` is nightly-only and belongs in the `nightly` devShell / CI matrix, not
+in `test.sh`. Verify in CI yml that miri is already invoked there; if not, add it.
+
+**Why:** Directive lists these steps as part of the quality gate. `cargo fmt --check`, `--no-default-features`,
+`RUSTDOCFLAGS="-D warnings"`, and `cargo audit` are all specified but absent from the current script.
+The miri situation needs clarification (it may already be in CI).
+
+**Complexity:** Low (test.sh edits only).
+
+**Acceptance:** `test.sh` exits 0 on a clean tree; each new step is visible in the script with a
+comment explaining what it checks.
+
+---
+
+### R.7 Fix rpds version in README comparison table (LOW) — DONE [2026-04-26]
+
+**What:** README states rpds 1.2.0 in the comparison table, but `Cargo.toml` dev-dep pins 1.1.0.
+Check `Cargo.lock` for the actual resolved version and update the table to match. If the lock file
+shows 1.1.x, use that; if 1.2.0 has been released and is available, update the dev-dep too.
+
+**Why:** Inaccurate version in a comparison table misleads users.
+
+**Complexity:** Trivial (1-2 line change).
+
+**Acceptance:** README version matches `Cargo.lock` resolved version.
+
+---
 
 ### 6.11 Cross-session interning: verbatim-hash pool reconstruction
 

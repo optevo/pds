@@ -118,25 +118,11 @@ enum MapIterFrame<'a, K, V, P: SharedPointerKind> {
     /// A single leaf value
     Leaf(&'a K, &'a V),
     /// Iterating entries in a HamtNode's SparseChunk
-    Hamt(
-        imbl_sized_chunks::sparse_chunk::Iter<'a, Entry<(K, V), P>, HASH_WIDTH>,
-    ),
+    Hamt(imbl_sized_chunks::sparse_chunk::Iter<'a, Entry<(K, V), P>, HASH_WIDTH>),
     /// Iterating kv-pairs in a SmallSimdNode
-    SmallSimd(
-        imbl_sized_chunks::sparse_chunk::Iter<
-            'a,
-            ((K, V), u64),
-            SMALL_NODE_WIDTH,
-        >,
-    ),
+    SmallSimd(imbl_sized_chunks::sparse_chunk::Iter<'a, ((K, V), u64), SMALL_NODE_WIDTH>),
     /// Iterating kv-pairs in a LargeSimdNode
-    LargeSimd(
-        imbl_sized_chunks::sparse_chunk::Iter<
-            'a,
-            ((K, V), u64),
-            HASH_WIDTH,
-        >,
-    ),
+    LargeSimd(imbl_sized_chunks::sparse_chunk::Iter<'a, ((K, V), u64), HASH_WIDTH>),
     /// Iterating kv-pairs in a CollisionNode
     Collision(core::slice::Iter<'a, (K, V)>),
 }
@@ -281,9 +267,7 @@ where
 }
 
 /// Create a mutable DFS iterator from a single Entry, yielding (&K, &mut V).
-fn map_entry_iter_mut<'a, K, V, P>(
-    entry: &'a mut Entry<(K, V), P>,
-) -> MapEntryIterMut<'a, K, V, P>
+fn map_entry_iter_mut<'a, K, V, P>(entry: &'a mut Entry<(K, V), P>) -> MapEntryIterMut<'a, K, V, P>
 where
     K: Clone,
     V: Clone,
@@ -299,8 +283,7 @@ where
         }
         Entry::HamtNode(ptr) => {
             let node = SharedPointer::make_mut(ptr);
-            iter.stack
-                .push(MapMutIterFrame::Hamt(node.data.iter_mut()));
+            iter.stack.push(MapMutIterFrame::Hamt(node.data.iter_mut()));
         }
         Entry::SmallSimdNode(ptr) => {
             let node = SharedPointer::make_mut(ptr);
@@ -328,23 +311,9 @@ struct MapEntryIterMut<'a, K, V, P: SharedPointerKind> {
 
 /// A frame in the DFS stack for mutably iterating map entries.
 enum MapMutIterFrame<'a, K, V, P: SharedPointerKind> {
-    Hamt(
-        imbl_sized_chunks::sparse_chunk::IterMut<'a, Entry<(K, V), P>, HASH_WIDTH>,
-    ),
-    SmallSimd(
-        imbl_sized_chunks::sparse_chunk::IterMut<
-            'a,
-            ((K, V), u64),
-            SMALL_NODE_WIDTH,
-        >,
-    ),
-    LargeSimd(
-        imbl_sized_chunks::sparse_chunk::IterMut<
-            'a,
-            ((K, V), u64),
-            HASH_WIDTH,
-        >,
-    ),
+    Hamt(imbl_sized_chunks::sparse_chunk::IterMut<'a, Entry<(K, V), P>, HASH_WIDTH>),
+    SmallSimd(imbl_sized_chunks::sparse_chunk::IterMut<'a, ((K, V), u64), SMALL_NODE_WIDTH>),
+    LargeSimd(imbl_sized_chunks::sparse_chunk::IterMut<'a, ((K, V), u64), HASH_WIDTH>),
     Collision(core::slice::IterMut<'a, (K, V)>),
 }
 
@@ -681,23 +650,9 @@ struct SetEntryIter<'a, A, P: SharedPointerKind> {
 
 enum SetIterFrame<'a, A, P: SharedPointerKind> {
     Leaf(&'a A),
-    Hamt(
-        imbl_sized_chunks::sparse_chunk::Iter<'a, Entry<Value<A>, P>, HASH_WIDTH>,
-    ),
-    SmallSimd(
-        imbl_sized_chunks::sparse_chunk::Iter<
-            'a,
-            (Value<A>, u64),
-            SMALL_NODE_WIDTH,
-        >,
-    ),
-    LargeSimd(
-        imbl_sized_chunks::sparse_chunk::Iter<
-            'a,
-            (Value<A>, u64),
-            HASH_WIDTH,
-        >,
-    ),
+    Hamt(imbl_sized_chunks::sparse_chunk::Iter<'a, Entry<Value<A>, P>, HASH_WIDTH>),
+    SmallSimd(imbl_sized_chunks::sparse_chunk::Iter<'a, (Value<A>, u64), SMALL_NODE_WIDTH>),
+    LargeSimd(imbl_sized_chunks::sparse_chunk::Iter<'a, (Value<A>, u64), HASH_WIDTH>),
     Collision(core::slice::Iter<'a, Value<A>>),
 }
 
@@ -717,8 +672,7 @@ impl<'a, A, P: SharedPointerKind> SetEntryIter<'a, A, P> {
                 self.stack.push(SetIterFrame::Hamt(node.data.iter()));
             }
             Entry::Collision(coll) => {
-                self.stack
-                    .push(SetIterFrame::Collision(coll.data.iter()));
+                self.stack.push(SetIterFrame::Collision(coll.data.iter()));
             }
         }
     }
@@ -847,7 +801,13 @@ where
         };
         smaller
             .par_iter()
-            .filter_map(|a| if larger.contains(a) { Some(a.clone()) } else { None })
+            .filter_map(|a| {
+                if larger.contains(a) {
+                    Some(a.clone())
+                } else {
+                    None
+                }
+            })
             .fold(Self::default, |mut acc, a| {
                 acc.insert(a);
                 acc
@@ -865,7 +825,13 @@ where
     #[must_use]
     pub fn par_difference(self, other: Self) -> Self {
         self.par_iter()
-            .filter_map(|a| if other.contains(a) { None } else { Some(a.clone()) })
+            .filter_map(|a| {
+                if other.contains(a) {
+                    None
+                } else {
+                    Some(a.clone())
+                }
+            })
             .fold(Self::default, |mut acc, a| {
                 acc.insert(a);
                 acc
@@ -924,9 +890,7 @@ where
 // ---------------------------------------------------------------------------
 
 /// Extract the top-level entry references from a HAMT root node.
-fn root_entries<A, P: SharedPointerKind>(
-    root: Option<&Node<A, P>>,
-) -> Vec<&Entry<A, P>> {
+fn root_entries<A, P: SharedPointerKind>(root: Option<&Node<A, P>>) -> Vec<&Entry<A, P>> {
     match root {
         Some(node) => node.data.iter().collect(),
         None => Vec::new(),
@@ -1269,7 +1233,10 @@ mod test {
     fn hashmap_par_union_empty() {
         let map1: HashMap<i32, i32> = (0..1_000).map(|i| (i, i)).collect();
         let map2: HashMap<i32, i32> = HashMap::new();
-        assert_eq!(map1.clone().par_union(map2.clone()), map1.clone().union(map2.clone()));
+        assert_eq!(
+            map1.clone().par_union(map2.clone()),
+            map1.clone().union(map2.clone())
+        );
         assert_eq!(map2.clone().par_union(map1.clone()), map2.union(map1));
     }
 

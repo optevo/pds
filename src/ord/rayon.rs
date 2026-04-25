@@ -254,9 +254,7 @@ where
 // ---------------------------------------------------------------------------
 
 /// Collect all leaf references from a B+ tree into a Vec (in order).
-fn collect_leaves<K, V, P: SharedPointerKind>(
-    root: &Option<Node<K, V, P>>,
-) -> Vec<&Leaf<K, V>> {
+fn collect_leaves<K, V, P: SharedPointerKind>(root: &Option<Node<K, V, P>>) -> Vec<&Leaf<K, V>> {
     match root {
         None => Vec::new(),
         Some(Node::Leaf(leaf)) => {
@@ -281,7 +279,12 @@ fn push_leaves<'a, K, V, P: SharedPointerKind>(
 ) {
     match &branch.children {
         Children::Leaves { leaves } => {
-            out.extend(leaves.iter().filter(|l| !l.keys.is_empty()).map(|l| l.as_ref()));
+            out.extend(
+                leaves
+                    .iter()
+                    .filter(|l| !l.keys.is_empty())
+                    .map(|l| l.as_ref()),
+            );
         }
         Children::Branches { branches, .. } => {
             for child in branches.iter() {

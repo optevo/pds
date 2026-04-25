@@ -3,11 +3,11 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 use archery::SharedPointerKind;
-use serde_core::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
-use serde_core::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use core::fmt;
 use core::hash::{BuildHasher, Hash};
 use core::marker::PhantomData;
+use serde_core::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde_core::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
 use crate::bag::GenericBag;
 use crate::bimap::GenericBiMap;
@@ -16,6 +16,7 @@ use crate::hash_width::HashWidth;
 use crate::hashmap::GenericHashMap;
 use crate::hashset::GenericHashSet;
 use crate::insertion_order_map::GenericInsertionOrderMap;
+use crate::insertion_order_set::GenericInsertionOrderSet;
 use crate::ordmap::GenericOrdMap;
 use crate::ordset::GenericOrdSet;
 use crate::symmap::GenericSymMap;
@@ -163,7 +164,8 @@ impl<K: Serialize + Ord, V: Serialize, P: SharedPointerKind> Serialize for Gener
 
 // HashMap
 
-impl<'de, K, V, S, P: SharedPointerKind, H: HashWidth> Deserialize<'de> for GenericHashMap<K, V, S, P, H>
+impl<'de, K, V, S, P: SharedPointerKind, H: HashWidth> Deserialize<'de>
+    for GenericHashMap<K, V, S, P, H>
 where
     K: Deserialize<'de> + Hash + Eq + Clone,
     V: Deserialize<'de> + Clone + Hash,
@@ -215,8 +217,8 @@ impl<
     }
 }
 
-impl<A: Serialize + Hash + Eq, S: BuildHasher + Default, P: SharedPointerKind, H: HashWidth> Serialize
-    for GenericHashSet<A, S, P, H>
+impl<A: Serialize + Hash + Eq, S: BuildHasher + Default, P: SharedPointerKind, H: HashWidth>
+    Serialize for GenericHashSet<A, S, P, H>
 {
     fn serialize<Ser>(&self, ser: Ser) -> Result<Ser::Ok, Ser::Error>
     where
@@ -341,9 +343,11 @@ where
     where
         D: Deserializer<'de>,
     {
-        des.deserialize_seq(
-            SeqVisitor::<'de, GenericInsertionOrderMap<K, V, S, P, H>, (K, V)>::new(),
-        )
+        des.deserialize_seq(SeqVisitor::<
+            'de,
+            GenericInsertionOrderMap<K, V, S, P, H>,
+            (K, V),
+        >::new())
     }
 }
 
@@ -366,6 +370,40 @@ where
     }
 }
 
+// InsertionOrderSet — serialises as a flat sequence of elements to preserve order.
+
+impl<'de, A, S, P, H: HashWidth> Deserialize<'de> for GenericInsertionOrderSet<A, S, P, H>
+where
+    A: Deserialize<'de> + Hash + Eq + Clone,
+    S: BuildHasher + Default + Clone,
+    P: SharedPointerKind,
+{
+    fn deserialize<D>(des: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        des.deserialize_seq(SeqVisitor::new())
+    }
+}
+
+impl<A, S, P, H: HashWidth> Serialize for GenericInsertionOrderSet<A, S, P, H>
+where
+    A: Serialize + Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    fn serialize<Ser>(&self, ser: Ser) -> Result<Ser::Ok, Ser::Error>
+    where
+        Ser: Serializer,
+    {
+        let mut s = ser.serialize_seq(Some(self.len()))?;
+        for a in self.iter() {
+            s.serialize_element(a)?;
+        }
+        s.end()
+    }
+}
+
 // BiMap — serialises as a sequence of (key, value) pairs.
 
 impl<'de, K, V, S, P, H: HashWidth> Deserialize<'de> for GenericBiMap<K, V, S, P, H>
@@ -379,9 +417,7 @@ where
     where
         D: Deserializer<'de>,
     {
-        des.deserialize_seq(
-            SeqVisitor::<'de, GenericBiMap<K, V, S, P, H>, (K, V)>::new(),
-        )
+        des.deserialize_seq(SeqVisitor::<'de, GenericBiMap<K, V, S, P, H>, (K, V)>::new())
     }
 }
 
@@ -416,9 +452,7 @@ where
     where
         D: Deserializer<'de>,
     {
-        des.deserialize_seq(
-            SeqVisitor::<'de, GenericSymMap<A, S, P, H>, (A, A)>::new(),
-        )
+        des.deserialize_seq(SeqVisitor::<'de, GenericSymMap<A, S, P, H>, (A, A)>::new())
     }
 }
 
@@ -453,9 +487,7 @@ where
     where
         D: Deserializer<'de>,
     {
-        des.deserialize_seq(
-            SeqVisitor::<'de, GenericTrie<K, V, S, P>, (Vec<K>, V)>::new(),
-        )
+        des.deserialize_seq(SeqVisitor::<'de, GenericTrie<K, V, S, P>, (Vec<K>, V)>::new())
     }
 }
 
@@ -485,7 +517,7 @@ mod test {
     use crate::{
         proptest::{hash_map, hash_set, ord_map, ord_set, vector},
         Bag, BiMap, Direction, HashMap, HashMultiMap, HashSet, InsertionOrderMap,
-        OrdMap, OrdSet, SymMap, Trie, Vector,
+        InsertionOrderSet, OrdMap, OrdSet, SymMap, Trie, Vector,
     };
     use proptest::num::i32;
     use proptest::proptest;
@@ -528,7 +560,10 @@ mod test {
     #[test]
     fn ser_bag() {
         let mut b = Bag::new();
-        b.insert(1i32); b.insert(1); b.insert(2); b.insert(3);
+        b.insert(1i32);
+        b.insert(1);
+        b.insert(2);
+        b.insert(3);
         let rt = from_str::<Bag<i32>>(&to_string(&b).unwrap()).unwrap();
         assert_eq!(b, rt);
     }
@@ -536,7 +571,9 @@ mod test {
     #[test]
     fn ser_hash_multimap() {
         let mut mm = HashMultiMap::new();
-        mm.insert(1i32, 10i32); mm.insert(1, 11); mm.insert(2, 20);
+        mm.insert(1i32, 10i32);
+        mm.insert(1, 11);
+        mm.insert(2, 20);
         let rt = from_str::<HashMultiMap<i32, i32>>(&to_string(&mm).unwrap()).unwrap();
         assert_eq!(mm, rt);
     }
@@ -544,7 +581,9 @@ mod test {
     #[test]
     fn ser_insertion_order_map() {
         let mut m = InsertionOrderMap::new();
-        m.insert(1i32, 100i32); m.insert(2, 200); m.insert(3, 300);
+        m.insert(1i32, 100i32);
+        m.insert(2, 200);
+        m.insert(3, 300);
         let json = to_string(&m).unwrap();
         let rt = from_str::<InsertionOrderMap<i32, i32>>(&json).unwrap();
         assert_eq!(m, rt);
@@ -555,9 +594,25 @@ mod test {
     }
 
     #[test]
+    fn ser_insertion_order_set() {
+        let mut s = InsertionOrderSet::new();
+        s.insert(3i32);
+        s.insert(1);
+        s.insert(2);
+        let json = to_string(&s).unwrap();
+        let rt = from_str::<InsertionOrderSet<i32>>(&json).unwrap();
+        assert_eq!(s, rt);
+        // Insertion order must survive the round-trip.
+        let orig: Vec<_> = s.iter().copied().collect();
+        let rt_elems: Vec<_> = rt.iter().copied().collect();
+        assert_eq!(orig, rt_elems);
+    }
+
+    #[test]
     fn ser_bimap() {
         let mut bm = BiMap::new();
-        bm.insert(1i32, 10i32); bm.insert(2, 20);
+        bm.insert(1i32, 10i32);
+        bm.insert(2, 20);
         let rt = from_str::<BiMap<i32, i32>>(&to_string(&bm).unwrap()).unwrap();
         assert_eq!(bm, rt);
         // Reverse direction must also work.
@@ -567,7 +622,8 @@ mod test {
     #[test]
     fn ser_symmap() {
         let mut sm = SymMap::new();
-        sm.insert(1i32, 10i32); sm.insert(2, 20);
+        sm.insert(1i32, 10i32);
+        sm.insert(2, 20);
         let rt = from_str::<SymMap<i32>>(&to_string(&sm).unwrap()).unwrap();
         assert_eq!(sm, rt);
         assert_eq!(rt.get(Direction::Backward, &10), Some(&1));

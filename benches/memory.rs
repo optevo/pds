@@ -180,7 +180,9 @@ fn main() {
     let sizes = [1_000, 10_000, 100_000];
 
     println!("=== pds Memory Profiling (dhat) ===");
-    println!("Each line: operation, total allocations, total bytes, peak live blocks, peak live bytes\n");
+    println!(
+        "Each line: operation, total allocations, total bytes, peak live blocks, peak live bytes\n"
+    );
 
     bench_hashmap(&sizes);
     bench_hashset(&sizes);

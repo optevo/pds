@@ -25,24 +25,24 @@ use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
-#[cfg(feature = "std")]
-use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator};
 use core::mem;
 use core::ops::{Index, IndexMut};
 use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
+#[cfg(feature = "std")]
+use std::collections::hash_map::RandomState;
 
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
 
 use crate::config::{MERKLE_HASH_BITS, MERKLE_POSITIVE_EQ_MIN_BITS};
-use crate::hashset::GenericHashSet;
 use crate::hash_width::HashWidth;
+use crate::hashset::GenericHashSet;
 use crate::nodes::hamt::{
-    fmix64, hash_key, Drain as NodeDrain, Entry as NodeEntry, HashValue,
-    Iter as NodeIter, IterMut as NodeIterMut, Node, HASH_WIDTH,
+    fmix64, hash_key, Drain as NodeDrain, Entry as NodeEntry, HashValue, Iter as NodeIter,
+    IterMut as NodeIterMut, Node, HASH_WIDTH,
 };
 #[cfg(any(feature = "std", feature = "foldhash"))]
 use crate::shared_ptr::DefaultSharedPtr;
@@ -97,8 +97,7 @@ pub type HashMap<K, V> = GenericHashMap<K, V, RandomState, DefaultSharedPtr>;
 /// Type alias for [`GenericHashMap`] using [`foldhash::fast::RandomState`] — available
 /// in `no_std` environments when the `foldhash` feature is enabled.
 #[cfg(all(not(feature = "std"), feature = "foldhash"))]
-pub type HashMap<K, V> =
-    GenericHashMap<K, V, foldhash::fast::RandomState, DefaultSharedPtr>;
+pub type HashMap<K, V> = GenericHashMap<K, V, foldhash::fast::RandomState, DefaultSharedPtr>;
 
 /// An unordered map backed by a [hash array mapped trie][1].
 ///
@@ -1022,7 +1021,10 @@ where
     pub fn partition_map<V1, V2, F>(
         &self,
         mut f: F,
-    ) -> (GenericHashMap<K, V1, S, P, H>, GenericHashMap<K, V2, S, P, H>)
+    ) -> (
+        GenericHashMap<K, V1, S, P, H>,
+        GenericHashMap<K, V2, S, P, H>,
+    )
     where
         V1: Clone,
         V2: Clone,
@@ -1085,7 +1087,6 @@ where
         }
         result
     }
-
 }
 
 // Internal helpers that don't require V: Hash. Used by set operations and
@@ -1250,14 +1251,16 @@ where
         if let Some((_, ref old_v)) = result {
             if self.kv_merkle_valid {
                 let old_value_hash = self.hasher.hash_one(old_v);
-                self.kv_merkle_hash = self.kv_merkle_hash
+                self.kv_merkle_hash = self
+                    .kv_merkle_hash
                     .wrapping_sub(fmix64(hash.to_u64().wrapping_add(old_value_hash)))
                     .wrapping_add(fmix64(hash.to_u64().wrapping_add(value_hash)));
             }
         } else {
             self.size += 1;
             if self.kv_merkle_valid {
-                self.kv_merkle_hash = self.kv_merkle_hash
+                self.kv_merkle_hash = self
+                    .kv_merkle_hash
                     .wrapping_add(fmix64(hash.to_u64().wrapping_add(value_hash)));
             }
         }
@@ -1322,7 +1325,8 @@ where
             self.size -= 1;
             if self.kv_merkle_valid {
                 let value_hash = self.hasher.hash_one(v);
-                self.kv_merkle_hash = self.kv_merkle_hash
+                self.kv_merkle_hash = self
+                    .kv_merkle_hash
                     .wrapping_sub(fmix64(hash.to_u64().wrapping_add(value_hash)));
             }
         }
@@ -2192,11 +2196,7 @@ where
     /// assert_eq!(doubled[&2], 40);
     /// ```
     #[must_use]
-    pub fn map_accum<St, V2, F>(
-        &self,
-        init: St,
-        mut f: F,
-    ) -> (St, GenericHashMap<K, V2, S, P, H>)
+    pub fn map_accum<St, V2, F>(&self, init: St, mut f: F) -> (St, GenericHashMap<K, V2, S, P, H>)
     where
         V2: Clone,
         S: Default,
@@ -2627,7 +2627,8 @@ where
     }
 }
 
-impl<K, V, S1, S2, P1, P2, H: HashWidth> PartialEq<GenericHashMap<K, V, S2, P2, H>> for GenericHashMap<K, V, S1, P1, H>
+impl<K, V, S1, S2, P1, P2, H: HashWidth> PartialEq<GenericHashMap<K, V, S2, P2, H>>
+    for GenericHashMap<K, V, S1, P1, H>
 where
     K: Hash + Eq,
     V: PartialEq,
@@ -2906,7 +2907,9 @@ impl<'a, K, V, P: SharedPointerKind, H: HashWidth> ExactSizeIterator for Values<
 
 impl<'a, K, V, P: SharedPointerKind, H: HashWidth> FusedIterator for Values<'a, K, V, P, H> {}
 
-impl<'a, K, V, S, P: SharedPointerKind, H: HashWidth> IntoIterator for &'a GenericHashMap<K, V, S, P, H> {
+impl<'a, K, V, S, P: SharedPointerKind, H: HashWidth> IntoIterator
+    for &'a GenericHashMap<K, V, S, P, H>
+{
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V, P, H>;
 
@@ -3032,7 +3035,8 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<K, V, S1, S2, P, H: HashWidth> From<std::collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P, H>
+impl<K, V, S1, S2, P, H: HashWidth> From<std::collections::HashMap<K, V, S2>>
+    for GenericHashMap<K, V, S1, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -3046,7 +3050,8 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<'a, K, V, S1, S2, P, H: HashWidth> From<&'a std::collections::HashMap<K, V, S2>> for GenericHashMap<K, V, S1, P, H>
+impl<'a, K, V, S1, S2, P, H: HashWidth> From<&'a std::collections::HashMap<K, V, S2>>
+    for GenericHashMap<K, V, S1, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone + Hash,
@@ -3383,15 +3388,14 @@ mod test {
     use crate::test::LolHasher;
     #[rustfmt::skip]
     use ::proptest::{collection, num::{i16, usize}, proptest};
-    use static_assertions::{assert_impl_all, assert_not_impl_any};
     use core::hash::BuildHasherDefault;
+    use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     assert_impl_all!(HashMap<i32, i32>: Send, Sync);
     assert_not_impl_any!(HashMap<i32, *const i32>: Send, Sync);
     assert_not_impl_any!(HashMap<*const i32, i32>: Send, Sync);
     assert_covariant!(HashMap<T, i32> in T);
     assert_covariant!(HashMap<i32, T> in T);
-
 
     #[test]
     fn safe_mutation() {
@@ -4187,12 +4191,8 @@ mod test {
     fn merge_with_as_intersection() {
         let left = hashmap! {1 => 10, 2 => 20, 3 => 30};
         let right = hashmap! {2 => 200, 3 => 300, 4 => 400};
-        let merged: HashMap<i32, i32> = left.merge_with(
-            &right,
-            |_, _| None,
-            |_, l, r| Some(l + r),
-            |_, _| None,
-        );
+        let merged: HashMap<i32, i32> =
+            left.merge_with(&right, |_, _| None, |_, l, r| Some(l + r), |_, _| None);
         assert_eq!(merged, hashmap! {2 => 220, 3 => 330});
     }
 
@@ -4330,8 +4330,7 @@ mod test {
     // corrupts tree structure because those entries have shift-dependent
     // upgrade paths. Only Value entries can be safely demoted.
 
-    type LolMap<K, V> =
-        GenericHashMap<K, V, BuildHasherDefault<LolHasher>, DefaultSharedPtr>;
+    type LolMap<K, V> = GenericHashMap<K, V, BuildHasherDefault<LolHasher>, DefaultSharedPtr>;
 
     // Bits per HAMT level — keys separated by (1 << SHIFT) land in the same level-0 slot.
     const SHIFT: usize = crate::config::HASH_LEVEL_SIZE;
@@ -4779,7 +4778,9 @@ mod test {
         }
         assert!(map.kv_merkle_valid());
         // iter_mut invalidates on call; drop the iterator before checking
-        { let _ = map.iter_mut(); }
+        {
+            let _ = map.iter_mut();
+        }
         assert!(!map.kv_merkle_valid());
     }
 
@@ -4889,10 +4890,7 @@ mod test {
         assert_eq!(v, 15);
         assert!(remaining.kv_merkle_valid());
 
-        let expected: LolMap<i32, i32> = (0..10)
-            .filter(|&i| i != 5)
-            .map(|i| (i, i * 3))
-            .collect();
+        let expected: LolMap<i32, i32> = (0..10).filter(|&i| i != 5).map(|i| (i, i * 3)).collect();
         assert_eq!(remaining.kv_merkle_hash, expected.kv_merkle_hash);
     }
 
@@ -4958,9 +4956,13 @@ mod test {
             h.finish()
         }
         let mut a = HashMap::new();
-        a.insert(1, 10); a.insert(2, 20); a.insert(3, 30);
+        a.insert(1, 10);
+        a.insert(2, 20);
+        a.insert(3, 30);
         let mut b = HashMap::new();
-        b.insert(3, 30); b.insert(1, 10); b.insert(2, 20); // different insertion order
+        b.insert(3, 30);
+        b.insert(1, 10);
+        b.insert(2, 20); // different insertion order
         assert_eq!(hash_of(&a), hash_of(&b));
     }
 }

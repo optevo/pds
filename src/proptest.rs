@@ -2,9 +2,9 @@
 //!
 //! These are only available when using the `proptest` feature flag.
 
-use crate::{OrdMap, OrdSet, Vector};
 #[cfg(any(feature = "std", feature = "foldhash"))]
 use crate::{HashMap, HashSet};
+use crate::{OrdMap, OrdSet, Vector};
 use ::proptest::collection::vec;
 use ::proptest::strategy::{BoxedStrategy, Strategy, ValueTree};
 #[cfg(any(feature = "std", feature = "foldhash"))]

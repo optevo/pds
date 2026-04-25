@@ -191,7 +191,10 @@ mod tests {
         assert_eq!(hash_value(&bh, 0u64), 0);
         assert_eq!(hash_value(&bh, 1u64), 1);
         assert_eq!(hash_value(&bh, u64::MAX), u64::MAX);
-        assert_eq!(hash_value(&bh, 0xdeadbeef_cafebabe_u64), 0xdeadbeef_cafebabe_u64);
+        assert_eq!(
+            hash_value(&bh, 0xdeadbeef_cafebabe_u64),
+            0xdeadbeef_cafebabe_u64
+        );
     }
 
     #[test]
@@ -235,8 +238,8 @@ mod tests {
 
     #[test]
     fn identity_hasher_in_hashmap() {
-        use crate::GenericHashMap;
         use crate::shared_ptr::DefaultSharedPtr;
+        use crate::GenericHashMap;
         let mut map: GenericHashMap<u64, &str, IdentityBuildHasher, DefaultSharedPtr> =
             GenericHashMap::with_hasher(IdentityBuildHasher);
         map.insert(1_u64, "one");
@@ -251,8 +254,8 @@ mod tests {
 
     #[test]
     fn identity_hasher_in_hashset() {
-        use crate::GenericHashSet;
         use crate::shared_ptr::DefaultSharedPtr;
+        use crate::GenericHashSet;
         let mut set: GenericHashSet<u64, IdentityBuildHasher, DefaultSharedPtr> =
             GenericHashSet::with_hasher(IdentityBuildHasher);
         set.insert(100_u64);
@@ -269,8 +272,8 @@ mod tests {
     fn large_map_with_identity_hasher() {
         // Use well-distributed keys (multiply by a mixing constant) to
         // exercise the HAMT at scale without sequential clustering.
-        use crate::GenericHashMap;
         use crate::shared_ptr::DefaultSharedPtr;
+        use crate::GenericHashMap;
         let mut map: GenericHashMap<u64, u64, IdentityBuildHasher, DefaultSharedPtr> =
             GenericHashMap::with_hasher(IdentityBuildHasher);
         for i in 0u64..1000 {

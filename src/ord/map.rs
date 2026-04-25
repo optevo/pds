@@ -32,11 +32,11 @@ use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Comparable;
 
 use crate::hashmap::GenericHashMap;
-use crate::ordset::GenericOrdSet;
 use crate::nodes::btree::{
     ConsumingIter as NodeConsumingIter, Cursor, InsertAction, Iter as NodeIter,
     IterMut as NodeIterMut, Node,
 };
+use crate::ordset::GenericOrdSet;
 use crate::shared_ptr::DefaultSharedPtr;
 
 /// Construct a map from a sequence of key/value pairs.
@@ -1152,8 +1152,6 @@ where
         }
         result
     }
-
-
 
     /// Remove all entries from a map that do not satisfy the given
     /// predicate.
@@ -2875,7 +2873,8 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<'a, K, V, OK, OV, RK, RV, P> From<&'a std::collections::HashMap<RK, RV>> for GenericOrdMap<K, V, P>
+impl<'a, K, V, OK, OV, RK, RV, P> From<&'a std::collections::HashMap<RK, RV>>
+    for GenericOrdMap<K, V, P>
 where
     K: Ord + Clone + From<OK>,
     V: Clone + From<OV>,
@@ -3224,9 +3223,7 @@ mod test {
         const N: usize = NODE_SIZE * NODE_SIZE * NODE_SIZE / 2; // enough for a sizeable 3 level tree
 
         let data = (1usize..N).filter(|i| i % 2 == 0).map(|i| (i, ()));
-        let bmap = data
-            .clone()
-            .collect::<BTreeMap<usize, ()>>();
+        let bmap = data.clone().collect::<BTreeMap<usize, ()>>();
         let omap = data.collect::<OrdMap<usize, ()>>();
         assert_eq!(bmap.len(), omap.len());
 
@@ -3842,12 +3839,8 @@ mod test {
     fn merge_with_as_intersection() {
         let left = ordmap! {1 => 10, 2 => 20, 3 => 30};
         let right = ordmap! {2 => 200, 3 => 300, 4 => 400};
-        let merged: OrdMap<i32, i32> = left.merge_with(
-            &right,
-            |_, _| None,
-            |_, l, r| Some(l + r),
-            |_, _| None,
-        );
+        let merged: OrdMap<i32, i32> =
+            left.merge_with(&right, |_, _| None, |_, l, r| Some(l + r), |_, _| None);
         assert_eq!(merged, ordmap! {2 => 220, 3 => 330});
     }
 
@@ -3938,8 +3931,7 @@ mod test {
     #[test]
     fn partition_map_all_left() {
         let map = ordmap! {1 => 1, 2 => 2};
-        let (left, right): (OrdMap<i32, i32>, OrdMap<i32, i32>) =
-            map.partition_map(|_, v| Ok(*v));
+        let (left, right): (OrdMap<i32, i32>, OrdMap<i32, i32>) = map.partition_map(|_, v| Ok(*v));
         assert_eq!(left, map);
         assert!(right.is_empty());
     }
@@ -4094,7 +4086,9 @@ mod test {
         assert_eq!(m.get(&3), Some(&30));
 
         // update_with_key: merge fn receives key
-        let m = map.clone().update_with_key(1, 100, |k, old, new| k + old + new);
+        let m = map
+            .clone()
+            .update_with_key(1, 100, |k, old, new| k + old + new);
         assert_eq!(m.get(&1), Some(&111));
     }
 
@@ -4103,12 +4097,16 @@ mod test {
         let map = ordmap! {1 => 10, 2 => 20};
 
         // Existing key: returns old value
-        let (old, m) = map.clone().update_lookup_with_key(1, 100, |_, old, new| old + new);
+        let (old, m) = map
+            .clone()
+            .update_lookup_with_key(1, 100, |_, old, new| old + new);
         assert_eq!(old, Some(10));
         assert_eq!(m.get(&1), Some(&110));
 
         // New key: returns None
-        let (old, m) = map.clone().update_lookup_with_key(3, 30, |_, old, new| old + new);
+        let (old, m) = map
+            .clone()
+            .update_lookup_with_key(3, 30, |_, old, new| old + new);
         assert_eq!(old, None);
         assert_eq!(m.get(&3), Some(&30));
     }
@@ -4266,7 +4264,9 @@ mod test {
         assert_eq!(sd, ordmap! {1 => 10, 4 => 400});
 
         // symmetric_difference_with: merge fn decides fate of shared keys
-        let sd = a.clone().symmetric_difference_with(b.clone(), |l, r| Some(l + r));
+        let sd = a
+            .clone()
+            .symmetric_difference_with(b.clone(), |l, r| Some(l + r));
         assert_eq!(sd, ordmap! {1 => 10, 2 => 220, 3 => 330, 4 => 400});
     }
 
@@ -4525,10 +4525,7 @@ mod test {
 
     #[test]
     fn unions_with_key() {
-        let maps = vec![
-            ordmap! {1 => 10},
-            ordmap! {1 => 20, 2 => 20},
-        ];
+        let maps = vec![ordmap! {1 => 10}, ordmap! {1 => 20, 2 => 20}];
         let u = OrdMap::unions_with_key(maps, |k, l, r| k * 100 + l + r);
         assert_eq!(u.get(&1), Some(&130));
         assert_eq!(u.get(&2), Some(&20));

@@ -259,7 +259,6 @@ impl<A: Clone, P: SharedPointerKind> Entry<A, P> {
             _ => panic!("rrb::Entry::unwrap_nodes_mut: expected nodes, found values"),
         }
     }
-
 }
 
 // Node
@@ -665,7 +664,9 @@ impl<A: Hash, P: SharedPointerKind> Node<A, P> {
             Values(chunk) => {
                 let mut h: u64 = 0;
                 for elem in chunk.iter() {
-                    h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(hash_element(elem));
+                    h = h
+                        .wrapping_mul(MERKLE_PRIME)
+                        .wrapping_add(hash_element(elem));
                 }
                 h
             }
@@ -680,7 +681,11 @@ impl<A: Hash, P: SharedPointerKind> Node<A, P> {
             Empty => 0,
         };
         // Avoid colliding with the sentinel value.
-        if h == MERKLE_NOT_COMPUTED { 0 } else { h }
+        if h == MERKLE_NOT_COMPUTED {
+            0
+        } else {
+            h
+        }
     }
 }
 
@@ -690,9 +695,15 @@ impl<A: Hash, P: SharedPointerKind> Node<A, P> {
 pub(crate) fn chunk_merkle_hash<A: Hash>(chunk: &Chunk<A>) -> u64 {
     let mut h: u64 = 0;
     for elem in chunk.iter() {
-        h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(hash_element(elem));
+        h = h
+            .wrapping_mul(MERKLE_PRIME)
+            .wrapping_add(hash_element(elem));
     }
-    if h == MERKLE_NOT_COMPUTED { 0 } else { h }
+    if h == MERKLE_NOT_COMPUTED {
+        0
+    } else {
+        h
+    }
 }
 
 impl<A: Clone, P: SharedPointerKind> Node<A, P> {
@@ -1215,12 +1226,7 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
     /// pack into a result node. Returns (node, level_of_node).
     /// Height increases only when the rebalanced children exceed
     /// NODE_SIZE, implementing L'orange's bounded-height concatenation.
-    fn concat_rebalance(
-        level: usize,
-        left: Self,
-        middle: Self,
-        right: Self,
-    ) -> (Self, usize) {
+    fn concat_rebalance(level: usize, left: Self, middle: Self, right: Self) -> (Self, usize) {
         // Collect all children at level-1 from the three level-`level` nodes
         let mut all: Vec<Self> = Vec::new();
 
@@ -1276,26 +1282,24 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
         } else {
             left.invalidate_merkle();
             right.invalidate_merkle();
-            let left_last =
-                if let Entry::Nodes(ref mut size, ref mut children) = left.children {
-                    let node = SharedPointer::make_mut(children).pop_back();
-                    if !node.is_empty() {
-                        size.pop(Side::Right, level, node.len());
-                    }
-                    node
-                } else {
-                    panic!("merge: expected nodes in left at level {}", level);
-                };
-            let right_first =
-                if let Entry::Nodes(ref mut size, ref mut children) = right.children {
-                    let node = SharedPointer::make_mut(children).pop_front();
-                    if !node.is_empty() {
-                        size.pop(Side::Left, level, node.len());
-                    }
-                    node
-                } else {
-                    panic!("merge: expected nodes in right at level {}", level);
-                };
+            let left_last = if let Entry::Nodes(ref mut size, ref mut children) = left.children {
+                let node = SharedPointer::make_mut(children).pop_back();
+                if !node.is_empty() {
+                    size.pop(Side::Right, level, node.len());
+                }
+                node
+            } else {
+                panic!("merge: expected nodes in left at level {}", level);
+            };
+            let right_first = if let Entry::Nodes(ref mut size, ref mut children) = right.children {
+                let node = SharedPointer::make_mut(children).pop_front();
+                if !node.is_empty() {
+                    size.pop(Side::Left, level, node.len());
+                }
+                node
+            } else {
+                panic!("merge: expected nodes in right at level {}", level);
+            };
 
             let (merged, merged_level) = Self::merge(left_last, right_first, level - 1);
 

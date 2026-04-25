@@ -24,11 +24,12 @@
 //! assert_eq!(bag.total_count(), 3);
 //! ```
 
-#[cfg(feature = "std")]
-use std::collections::hash_map::RandomState;
+use alloc::vec::Vec;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FromIterator;
+#[cfg(feature = "std")]
+use std::collections::hash_map::RandomState;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -275,6 +276,37 @@ where
             let other_count = other.count(k);
             let diff = count.saturating_sub(other_count);
             if diff > 0 {
+                result.map.insert(k.clone(), diff);
+                result.total += diff;
+            }
+        }
+        result
+    }
+
+    /// Return the multiset symmetric difference (absolute difference of multiplicities).
+    ///
+    /// For each element, the result count is `|self.count − other.count|`.
+    /// Elements whose counts are equal in both bags are excluded.
+    #[must_use]
+    pub fn symmetric_difference(&self, other: &Self) -> Self
+    where
+        S: Default,
+    {
+        let mut result = Self::new_default();
+        // Elements where self_count > other_count.
+        for (k, &self_count) in self.map.iter() {
+            let other_count = other.count(k);
+            if self_count > other_count {
+                let diff = self_count - other_count;
+                result.map.insert(k.clone(), diff);
+                result.total += diff;
+            }
+        }
+        // Elements where other_count > self_count.
+        for (k, &other_count) in other.map.iter() {
+            let self_count = self.count(k);
+            if other_count > self_count {
+                let diff = other_count - self_count;
                 result.map.insert(k.clone(), diff);
                 result.total += diff;
             }
@@ -645,6 +677,40 @@ mod test {
     }
 
     #[test]
+    fn symmetric_difference_bags() {
+        let mut a = Bag::new();
+        a.insert_many("x", 5);
+        a.insert_many("y", 2);
+        a.insert_many("z", 3);
+
+        let mut b = Bag::new();
+        b.insert_many("x", 3);
+        b.insert_many("y", 2); // equal — excluded
+        b.insert_many("w", 1);
+
+        let c = a.symmetric_difference(&b);
+        assert_eq!(c.count(&"x"), 2); // |5-3|
+        assert_eq!(c.count(&"y"), 0); // equal, excluded
+        assert_eq!(c.count(&"z"), 3); // only in a
+        assert_eq!(c.count(&"w"), 1); // only in b
+        assert_eq!(c.total_count(), 6);
+    }
+
+    #[test]
+    fn symmetric_difference_disjoint() {
+        let mut a = Bag::new();
+        a.insert_many("a", 2);
+
+        let mut b = Bag::new();
+        b.insert_many("b", 3);
+
+        let c = a.symmetric_difference(&b);
+        assert_eq!(c.count(&"a"), 2);
+        assert_eq!(c.count(&"b"), 3);
+        assert_eq!(c.total_count(), 5);
+    }
+
+    #[test]
     fn from_iterator() {
         let bag: Bag<i32> = vec![1, 2, 2, 3, 3, 3].into_iter().collect();
         assert_eq!(bag.count(&1), 1);
@@ -750,9 +816,11 @@ mod test {
             h.finish()
         }
         let mut a = Bag::new();
-        a.insert(1); a.insert(2);
+        a.insert(1);
+        a.insert(2);
         let mut b = Bag::new();
-        b.insert(2); b.insert(1); // different insertion order
+        b.insert(2);
+        b.insert(1); // different insertion order
         assert_eq!(hash_of(&a), hash_of(&b));
     }
 
@@ -789,5 +857,4 @@ mod test {
         assert_eq!(b.count(&1), 2);
         assert_eq!(b.count(&2), 1);
     }
-
 }

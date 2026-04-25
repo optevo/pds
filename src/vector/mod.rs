@@ -1421,8 +1421,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
                         }
                         Ordering::Equal => left.middle_level,
                     };
-                    let (merged, merged_level) =
-                        Node::merge(middle1, middle2, normalised_middle);
+                    let (merged, merged_level) = Node::merge(middle1, middle2, normalised_middle);
                     left.middle = SharedPointer::new(merged);
                     left.middle_level = merged_level;
 
@@ -2216,7 +2215,9 @@ impl<A: Clone + Hash, P: SharedPointerKind> GenericVector<A, P> {
             Inline(chunk) => {
                 let mut h: u64 = 0;
                 for elem in chunk.iter() {
-                    h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(hash_element(elem));
+                    h = h
+                        .wrapping_mul(MERKLE_PRIME)
+                        .wrapping_add(hash_element(elem));
                 }
                 h
             }
@@ -2224,11 +2225,21 @@ impl<A: Clone + Hash, P: SharedPointerKind> GenericVector<A, P> {
             Full(tree) => {
                 let mut h: u64 = 0;
                 // Combine the five RRB segments in order.
-                h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(chunk_merkle_hash(&tree.outer_f));
-                h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(chunk_merkle_hash(&tree.inner_f));
-                h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(tree.middle.merkle_hash());
-                h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(chunk_merkle_hash(&tree.inner_b));
-                h = h.wrapping_mul(MERKLE_PRIME).wrapping_add(chunk_merkle_hash(&tree.outer_b));
+                h = h
+                    .wrapping_mul(MERKLE_PRIME)
+                    .wrapping_add(chunk_merkle_hash(&tree.outer_f));
+                h = h
+                    .wrapping_mul(MERKLE_PRIME)
+                    .wrapping_add(chunk_merkle_hash(&tree.inner_f));
+                h = h
+                    .wrapping_mul(MERKLE_PRIME)
+                    .wrapping_add(tree.middle.merkle_hash());
+                h = h
+                    .wrapping_mul(MERKLE_PRIME)
+                    .wrapping_add(chunk_merkle_hash(&tree.inner_b));
+                h = h
+                    .wrapping_mul(MERKLE_PRIME)
+                    .wrapping_add(chunk_merkle_hash(&tree.outer_b));
                 h
             }
         };
@@ -2857,9 +2868,7 @@ pub struct DiffIter<'a, 'b, A, P: SharedPointerKind> {
     done: bool,
 }
 
-impl<'a, 'b, A: PartialEq, P: SharedPointerKind + 'a + 'b> Iterator
-    for DiffIter<'a, 'b, A, P>
-{
+impl<'a, 'b, A: PartialEq, P: SharedPointerKind + 'a + 'b> Iterator for DiffIter<'a, 'b, A, P> {
     type Item = DiffItem<'a, 'b, A>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -4291,8 +4300,7 @@ mod test {
             // Build a vector by repeatedly concatenating small vectors
             let mut vec = Vector::new();
             for i in 0..chunk_count {
-                let chunk: Vector<usize> =
-                    (i * chunk_size..(i + 1) * chunk_size).collect();
+                let chunk: Vector<usize> = (i * chunk_size..(i + 1) * chunk_size).collect();
                 vec.append(chunk);
             }
 
@@ -4523,7 +4531,9 @@ mod test {
     fn merkle_invalidated_by_iter_mut() {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
-        { let _ = v.iter_mut(); }
+        {
+            let _ = v.iter_mut();
+        }
         assert!(!v.merkle_valid());
     }
 
@@ -4531,7 +4541,9 @@ mod test {
     fn merkle_invalidated_by_focus_mut() {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
-        { let _ = v.focus_mut(); }
+        {
+            let _ = v.focus_mut();
+        }
         assert!(!v.merkle_valid());
     }
 

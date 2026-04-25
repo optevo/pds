@@ -27,12 +27,13 @@
 //! assert_eq!(bm.get_by_value(&2), Some(&"bob"));
 //! ```
 
-#[cfg(feature = "std")]
-use std::collections::hash_map::RandomState;
+use alloc::vec::Vec;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FromIterator;
 use core::ops::Index;
+#[cfg(feature = "std")]
+use std::collections::hash_map::RandomState;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -54,13 +55,7 @@ pub type BiMap<K, V> = GenericBiMap<K, V, foldhash::fast::RandomState, DefaultSh
 ///
 /// Maintains a bijection: each key maps to exactly one value and vice versa.
 /// Clone is O(1) via structural sharing.
-pub struct GenericBiMap<
-    K,
-    V,
-    S,
-    P: SharedPointerKind = DefaultSharedPtr,
-    H: HashWidth = u64,
-> {
+pub struct GenericBiMap<K, V, S, P: SharedPointerKind = DefaultSharedPtr, H: HashWidth = u64> {
     pub(crate) forward: GenericHashMap<K, V, S, P, H>,
     pub(crate) backward: GenericHashMap<V, K, S, P, H>,
 }
@@ -248,6 +243,40 @@ where
         self.extend(other);
         self
     }
+
+    /// Return entries whose keys are in `self` but not in `other`.
+    #[must_use]
+    pub fn difference(self, other: &Self) -> Self {
+        self.into_iter()
+            .filter(|(k, _)| !other.contains_key(k))
+            .collect()
+    }
+
+    /// Return entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    #[must_use]
+    pub fn intersection(self, other: &Self) -> Self {
+        self.into_iter()
+            .filter(|(k, _)| other.contains_key(k))
+            .collect()
+    }
+
+    /// Return entries whose keys are in exactly one of `self` or `other`.
+    #[must_use]
+    pub fn symmetric_difference(self, other: &Self) -> Self {
+        // Clone self before consuming it — O(1) via structural sharing — so we can
+        // check key membership for other's entries after self is consumed.
+        let self_clone = self.clone();
+        let self_diff: Self = self
+            .into_iter()
+            .filter(|(k, _)| !other.contains_key(k))
+            .collect();
+        let other_diff: Self = other
+            .clone()
+            .into_iter()
+            .filter(|(k, _)| !self_clone.contains_key(k))
+            .collect();
+        self_diff.union(other_diff)
+    }
 }
 
 impl<K, V, S, P, H: HashWidth> Default for GenericBiMap<K, V, S, P, H>
@@ -352,8 +381,7 @@ where
     }
 }
 
-impl<K, V, S, const N: usize, P, H: HashWidth> From<[(K, V); N]>
-    for GenericBiMap<K, V, S, P, H>
+impl<K, V, S, const N: usize, P, H: HashWidth> From<[(K, V); N]> for GenericBiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,
@@ -592,8 +620,7 @@ mod test {
 
     #[test]
     fn from_iterator() {
-        let bm: BiMap<&str, i32> =
-            vec![("a", 1), ("b", 2), ("c", 3)].into_iter().collect();
+        let bm: BiMap<&str, i32> = vec![("a", 1), ("b", 2), ("c", 3)].into_iter().collect();
         assert_eq!(bm.len(), 3);
         assert_eq!(bm.get_by_key(&"b"), Some(&2));
         assert_eq!(bm.get_by_value(&3), Some(&"c"));
@@ -694,6 +721,52 @@ mod test {
     }
 
     #[test]
+    fn difference_method() {
+        let mut a = BiMap::new();
+        a.insert("a", 1);
+        a.insert("b", 2);
+        a.insert("c", 3);
+        let mut b = BiMap::new();
+        b.insert("b", 99);
+        b.insert("d", 4);
+        let c = a.difference(&b);
+        assert!(c.contains_key(&"a"));
+        assert!(!c.contains_key(&"b"));
+        assert!(c.contains_key(&"c"));
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn intersection_method() {
+        let mut a = BiMap::new();
+        a.insert("a", 1);
+        a.insert("b", 2);
+        let mut b = BiMap::new();
+        b.insert("b", 99);
+        b.insert("c", 3);
+        let c = a.intersection(&b);
+        assert!(!c.contains_key(&"a"));
+        assert!(c.contains_key(&"b"));
+        assert_eq!(c.get_by_key(&"b"), Some(&2)); // self's value kept
+        assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn symmetric_difference_method() {
+        let mut a = BiMap::new();
+        a.insert("a", 1);
+        a.insert("b", 2);
+        let mut b = BiMap::new();
+        b.insert("b", 99);
+        b.insert("c", 3);
+        let c = a.symmetric_difference(&b);
+        assert!(c.contains_key(&"a")); // only in a
+        assert!(!c.contains_key(&"b")); // in both — excluded
+        assert!(c.contains_key(&"c")); // only in b
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
     fn default_is_empty() {
         let bm: BiMap<String, i32> = Default::default();
         assert!(bm.is_empty());
@@ -718,9 +791,11 @@ mod test {
             h.finish()
         }
         let mut a = BiMap::new();
-        a.insert(1, 10); a.insert(2, 20);
+        a.insert(1, 10);
+        a.insert(2, 20);
         let mut b = BiMap::new();
-        b.insert(2, 20); b.insert(1, 10); // different insertion order
+        b.insert(2, 20);
+        b.insert(1, 10); // different insertion order
         assert_eq!(hash_of(&a), hash_of(&b));
     }
 

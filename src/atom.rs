@@ -33,8 +33,8 @@
 //! assert_eq!(snapshot.get("key"), Some(&42));
 //! ```
 
-use core::fmt::{self, Debug};
 use alloc::sync::Arc;
+use core::fmt::{self, Debug};
 
 use arc_swap::ArcSwap;
 

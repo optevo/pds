@@ -401,7 +401,10 @@ impl<A, P: SharedPointerKind> TreeFocus<A, P> {
 
     /// Gets the chunk that this TreeFocus is focused on.
     fn get_focus(&self) -> &Chunk<A> {
-        debug_assert!(!self.target_ptr.is_null(), "TreeFocus: target_ptr is null — set_focus not called");
+        debug_assert!(
+            !self.target_ptr.is_null(),
+            "TreeFocus: target_ptr is null — set_focus not called"
+        );
         // SAFETY: target_ptr is set by set_focus() which obtains a valid pointer
         // into the Arc-managed tree. The tree cannot be modified through a
         // &self reference, so the pointer remains valid for the borrow's lifetime.
@@ -905,7 +908,10 @@ where
     /// Gets the chunk for an index and its corresponding range within the TreeFocusMut.
     fn get_focus(&mut self) -> &mut Chunk<A> {
         let ptr = self.target_ptr.load(Ordering::Relaxed);
-        debug_assert!(!ptr.is_null(), "TreeFocusMut: target_ptr is null — set_focus not called");
+        debug_assert!(
+            !ptr.is_null(),
+            "TreeFocusMut: target_ptr is null — set_focus not called"
+        );
         // SAFETY: target_ptr is set by set_focus() which acquires the tree's Mutex,
         // calls SharedPointer::make_mut (ensuring exclusive ownership of the chunk),
         // and stores the resulting pointer. Relaxed ordering suffices because the

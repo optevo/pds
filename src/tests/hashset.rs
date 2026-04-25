@@ -1,8 +1,8 @@
 #![allow(clippy::unit_arg)] // Property test combinators (e.g. `assert_eq!((), op())`) pass `()` as arguments; this is idiomatic in proptest-generated assertions.
 
-use std::collections::HashSet as NatSet;
 use core::fmt::{Debug, Error, Formatter, Write};
 use core::hash::Hash;
+use std::collections::HashSet as NatSet;
 
 use crate::HashSet;
 

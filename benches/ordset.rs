@@ -256,9 +256,7 @@ where
     }
 
     for size in &[1000, 10000] {
-        group.bench_function(format!("iter_{}", size), |b| {
-            bench_iter::<S, A>(b, *size)
-        });
+        group.bench_function(format!("iter_{}", size), |b| bench_iter::<S, A>(b, *size));
     }
 
     if S::IMMUTABLE {

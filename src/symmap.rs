@@ -25,12 +25,13 @@
 //! assert_eq!(sm.get(Direction::Forward, &"hola"), Some(&"hello"));
 //! ```
 
-#[cfg(feature = "std")]
-use std::collections::hash_map::RandomState;
+use alloc::vec::Vec;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FromIterator;
 use core::ops::Index;
+#[cfg(feature = "std")]
+use std::collections::hash_map::RandomState;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -62,20 +63,13 @@ pub type SymMap<A> = GenericSymMap<A, foldhash::fast::RandomState, DefaultShared
 /// Both sides of the mapping share the same type `A`. The map can be
 /// [`swap`][Self::swap]ped in O(1) to reverse the primary direction.
 /// Clone is O(1) via structural sharing.
-pub struct GenericSymMap<
-    A,
-    S,
-    P: SharedPointerKind = DefaultSharedPtr,
-    H: HashWidth = u64,
-> {
+pub struct GenericSymMap<A, S, P: SharedPointerKind = DefaultSharedPtr, H: HashWidth = u64> {
     pub(crate) forward: GenericHashMap<A, A, S, P, H>,
     pub(crate) backward: GenericHashMap<A, A, S, P, H>,
 }
 
 // Manual Clone — avoid derive's spurious `P: Clone` bound.
-impl<A: Clone, S: Clone, P: SharedPointerKind, H: HashWidth> Clone
-    for GenericSymMap<A, S, P, H>
-{
+impl<A: Clone, S: Clone, P: SharedPointerKind, H: HashWidth> Clone for GenericSymMap<A, S, P, H> {
     fn clone(&self) -> Self {
         GenericSymMap {
             forward: self.forward.clone(),
@@ -239,6 +233,40 @@ where
         self.extend(other);
         self
     }
+
+    /// Return entries whose forward keys are in `self` but not in `other`.
+    #[must_use]
+    pub fn difference(self, other: &Self) -> Self {
+        self.into_iter()
+            .filter(|(a, _)| !other.contains(Direction::Forward, a))
+            .collect()
+    }
+
+    /// Return entries whose forward keys are in both `self` and `other`; `self`'s values are kept.
+    #[must_use]
+    pub fn intersection(self, other: &Self) -> Self {
+        self.into_iter()
+            .filter(|(a, _)| other.contains(Direction::Forward, a))
+            .collect()
+    }
+
+    /// Return entries whose forward keys are in exactly one of `self` or `other`.
+    #[must_use]
+    pub fn symmetric_difference(self, other: &Self) -> Self {
+        // Clone self before consuming it — O(1) via structural sharing — so we can
+        // check key membership for other's entries after self is consumed.
+        let self_clone = self.clone();
+        let self_diff: Self = self
+            .into_iter()
+            .filter(|(a, _)| !other.contains(Direction::Forward, a))
+            .collect();
+        let other_diff: Self = other
+            .clone()
+            .into_iter()
+            .filter(|(a, _)| !self_clone.contains(Direction::Forward, a))
+            .collect();
+        self_diff.union(other_diff)
+    }
 }
 
 /// Iterator wrapper to unify forward/backward iteration without boxing.
@@ -366,8 +394,7 @@ where
     }
 }
 
-impl<A, S, const N: usize, P, H: HashWidth> From<[(A, A); N]>
-    for GenericSymMap<A, S, P, H>
+impl<A, S, const N: usize, P, H: HashWidth> From<[(A, A); N]> for GenericSymMap<A, S, P, H>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone + Default,
@@ -600,8 +627,7 @@ mod test {
 
     #[test]
     fn from_iterator() {
-        let sm: SymMap<&str> =
-            vec![("a", "x"), ("b", "y")].into_iter().collect();
+        let sm: SymMap<&str> = vec![("a", "x"), ("b", "y")].into_iter().collect();
         assert_eq!(sm.len(), 2);
         assert_eq!(sm.get(Direction::Forward, &"a"), Some(&"x"));
     }
@@ -702,6 +728,52 @@ mod test {
     }
 
     #[test]
+    fn difference_method() {
+        let mut a: SymMap<i32> = SymMap::new();
+        a.insert(1, 10);
+        a.insert(2, 20);
+        a.insert(3, 30);
+        let mut b: SymMap<i32> = SymMap::new();
+        b.insert(2, 99);
+        b.insert(4, 40);
+        let c = a.difference(&b);
+        assert!(c.contains(Direction::Forward, &1));
+        assert!(!c.contains(Direction::Forward, &2));
+        assert!(c.contains(Direction::Forward, &3));
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn intersection_method() {
+        let mut a: SymMap<i32> = SymMap::new();
+        a.insert(1, 10);
+        a.insert(2, 20);
+        let mut b: SymMap<i32> = SymMap::new();
+        b.insert(2, 99);
+        b.insert(3, 30);
+        let c = a.intersection(&b);
+        assert!(!c.contains(Direction::Forward, &1));
+        assert!(c.contains(Direction::Forward, &2));
+        assert_eq!(c.get(Direction::Forward, &2), Some(&20)); // self's value
+        assert_eq!(c.len(), 1);
+    }
+
+    #[test]
+    fn symmetric_difference_method() {
+        let mut a: SymMap<i32> = SymMap::new();
+        a.insert(1, 10);
+        a.insert(2, 20);
+        let mut b: SymMap<i32> = SymMap::new();
+        b.insert(2, 99);
+        b.insert(3, 30);
+        let c = a.symmetric_difference(&b);
+        assert!(c.contains(Direction::Forward, &1)); // only in a
+        assert!(!c.contains(Direction::Forward, &2)); // in both — excluded
+        assert!(c.contains(Direction::Forward, &3)); // only in b
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
     fn default_is_empty() {
         let sm: SymMap<String> = Default::default();
         assert!(sm.is_empty());
@@ -726,9 +798,11 @@ mod test {
             h.finish()
         }
         let mut a = SymMap::new();
-        a.insert(1, 10); a.insert(2, 20);
+        a.insert(1, 10);
+        a.insert(2, 20);
         let mut b = SymMap::new();
-        b.insert(2, 20); b.insert(1, 10); // different insertion order
+        b.insert(2, 20);
+        b.insert(1, 10); // different insertion order
         assert_eq!(hash_of(&a), hash_of(&b));
     }
 

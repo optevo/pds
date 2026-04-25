@@ -24,12 +24,13 @@
 //! assert_eq!(keys, vec![&"c", &"a", &"b"]);
 //! ```
 
-#[cfg(feature = "std")]
-use std::collections::hash_map::RandomState;
+use alloc::vec::Vec;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FromIterator;
 use core::ops::{Index, IndexMut};
+#[cfg(feature = "std")]
+use std::collections::hash_map::RandomState;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -41,8 +42,7 @@ use crate::shared_ptr::DefaultSharedPtr;
 
 /// Type alias for [`GenericInsertionOrderMap`] with default hasher and pointer type.
 #[cfg(feature = "std")]
-pub type InsertionOrderMap<K, V> =
-    GenericInsertionOrderMap<K, V, RandomState, DefaultSharedPtr>;
+pub type InsertionOrderMap<K, V> = GenericInsertionOrderMap<K, V, RandomState, DefaultSharedPtr>;
 
 /// Type alias for [`GenericInsertionOrderMap`] using [`foldhash::fast::RandomState`] —
 /// available in `no_std` environments when the `foldhash` feature is enabled.
@@ -330,7 +330,8 @@ where
     }
 }
 
-impl<K, V, S, const N: usize, P, H: HashWidth> From<[(K, V); N]> for GenericInsertionOrderMap<K, V, S, P, H>
+impl<K, V, S, const N: usize, P, H: HashWidth> From<[(K, V); N]>
+    for GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -410,13 +411,38 @@ where
     /// Return entries whose keys are in `self` but not in `other`.
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
-        self.into_iter().filter(|(k, _)| !other.contains_key(k)).collect()
+        self.into_iter()
+            .filter(|(k, _)| !other.contains_key(k))
+            .collect()
     }
 
     /// Return entries whose keys are in both `self` and `other`; `self`'s values are kept.
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
-        self.into_iter().filter(|(k, _)| other.contains_key(k)).collect()
+        self.into_iter()
+            .filter(|(k, _)| other.contains_key(k))
+            .collect()
+    }
+
+    /// Return entries whose keys are in exactly one of `self` or `other`.
+    ///
+    /// The result preserves insertion order: self's unique entries first
+    /// (in their original order), followed by other's unique entries.
+    #[must_use]
+    pub fn symmetric_difference(self, other: &Self) -> Self {
+        // Clone self before consuming it — O(1) via structural sharing — so we can
+        // check key membership for other's entries after self is consumed.
+        let self_clone = self.clone();
+        let self_diff: Self = self
+            .into_iter()
+            .filter(|(k, _)| !other.contains_key(k))
+            .collect();
+        let other_diff: Self = other
+            .clone()
+            .into_iter()
+            .filter(|(k, _)| !self_clone.contains_key(k))
+            .collect();
+        self_diff.union(other_diff)
     }
 }
 
@@ -717,13 +743,16 @@ mod test {
         }
         // Insertion order is part of identity, so same entries same order → equal hash.
         let mut a = InsertionOrderMap::new();
-        a.insert(1, 10); a.insert(2, 20);
+        a.insert(1, 10);
+        a.insert(2, 20);
         let mut b = InsertionOrderMap::new();
-        b.insert(1, 10); b.insert(2, 20);
+        b.insert(1, 10);
+        b.insert(2, 20);
         assert_eq!(hash_of(&a), hash_of(&b));
         // Different order → different hash (with high probability).
         let mut c = InsertionOrderMap::new();
-        c.insert(2, 20); c.insert(1, 10);
+        c.insert(2, 20);
+        c.insert(1, 10);
         assert_ne!(hash_of(&a), hash_of(&c));
     }
 
@@ -769,6 +798,33 @@ mod test {
         assert!(c.contains_key("y"));
         assert_eq!(c.get("y"), Some(&2)); // self's value is kept
         assert!(!c.contains_key("x"));
+    }
+
+    #[test]
+    fn symmetric_difference_method() {
+        let mut a = InsertionOrderMap::new();
+        a.insert("x", 1i32);
+        a.insert("y", 2);
+        a.insert("z", 3);
+        let mut b = InsertionOrderMap::new();
+        b.insert("y", 99); // shared — excluded
+        b.insert("w", 4); // only in b
+        let c = a.symmetric_difference(&b);
+        assert_eq!(c.len(), 3); // x, z (from a), w (from b)
+        assert!(c.contains_key("x"));
+        assert!(!c.contains_key("y"));
+        assert!(c.contains_key("z"));
+        assert!(c.contains_key("w"));
+    }
+
+    #[test]
+    fn symmetric_difference_disjoint() {
+        let mut a = InsertionOrderMap::new();
+        a.insert(1i32, "a");
+        let mut b = InsertionOrderMap::new();
+        b.insert(2i32, "b");
+        let c = a.symmetric_difference(&b);
+        assert_eq!(c.len(), 2);
     }
 
     #[test]

@@ -1313,8 +1313,9 @@ where
             }
             Node::Leaf(leaf_ref) => {
                 let leaf = SharedPointer::make_mut(leaf_ref);
-                self.stack
-                    .push(IterMutItem::LeafEntries(leaf.keys.as_mut_slice().iter_mut()));
+                self.stack.push(IterMutItem::LeafEntries(
+                    leaf.keys.as_mut_slice().iter_mut(),
+                ));
             }
         }
     }

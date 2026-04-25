@@ -23,12 +23,13 @@
 //! assert!(!mm.contains("fruit", &"pear"));
 //! ```
 
-#[cfg(feature = "std")]
-use std::collections::hash_map::RandomState;
+use alloc::vec::Vec;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FromIterator;
 use core::ops::Index;
+#[cfg(feature = "std")]
+use std::collections::hash_map::RandomState;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -51,13 +52,8 @@ pub type HashMultiMap<K, V> =
 /// A persistent multimap backed by [`GenericHashMap`] and [`GenericHashSet`].
 ///
 /// Each key maps to a set of values. Clone is O(1) via structural sharing.
-pub struct GenericHashMultiMap<
-    K,
-    V,
-    S,
-    P: SharedPointerKind = DefaultSharedPtr,
-    H: HashWidth = u64,
-> {
+pub struct GenericHashMultiMap<K, V, S, P: SharedPointerKind = DefaultSharedPtr, H: HashWidth = u64>
+{
     map: GenericHashMap<K, GenericHashSet<V, S, P, H>, S, P, H>,
     total: usize,
 }
@@ -139,10 +135,7 @@ where
     ///
     /// Returns `true` if the value was newly inserted.
     pub fn insert(&mut self, key: K, value: V) -> bool {
-        let set = self
-            .map
-            .entry(key)
-            .or_default();
+        let set = self.map.entry(key).or_default();
         let prev_len = set.len();
         set.insert(value);
         let inserted = set.len() > prev_len;
@@ -201,10 +194,7 @@ where
     where
         Q: Hash + Equivalent<K> + ?Sized,
     {
-        self.map
-            .get(key)
-            .cloned()
-            .unwrap_or_default()
+        self.map.get(key).cloned().unwrap_or_default()
     }
 
     /// Test whether a specific key-value pair is present.
@@ -214,9 +204,7 @@ where
         QK: Hash + Equivalent<K> + ?Sized,
         QV: Hash + Equivalent<V> + ?Sized,
     {
-        self.map
-            .get(key)
-            .is_some_and(|set| set.contains(value))
+        self.map.get(key).is_some_and(|set| set.contains(value))
     }
 
     /// Test whether a key is present (has at least one value).
@@ -266,13 +254,37 @@ where
     /// Return entries whose keys are in `self` but not in `other`.
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
-        self.into_iter().filter(|(k, _)| !other.contains_key(k)).collect()
+        self.into_iter()
+            .filter(|(k, _)| !other.contains_key(k))
+            .collect()
     }
 
     /// Return entries whose keys are in both `self` and `other`; `self`'s values are kept.
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
-        self.into_iter().filter(|(k, _)| other.contains_key(k)).collect()
+        self.into_iter()
+            .filter(|(k, _)| other.contains_key(k))
+            .collect()
+    }
+
+    /// Return entries whose keys are in exactly one of `self` or `other`.
+    ///
+    /// Keys present in both maps (regardless of their value sets) are excluded.
+    #[must_use]
+    pub fn symmetric_difference(self, other: &Self) -> Self {
+        // Clone self before consuming it — O(1) via structural sharing — so we can
+        // check key membership for other's entries after self is consumed.
+        let self_clone = self.clone();
+        let self_diff: Self = self
+            .into_iter()
+            .filter(|(k, _)| !other.contains_key(k))
+            .collect();
+        let other_diff: Self = other
+            .clone()
+            .into_iter()
+            .filter(|(k, _)| !self_clone.contains_key(k))
+            .collect();
+        self_diff.union(other_diff)
     }
 }
 
@@ -378,7 +390,8 @@ where
     }
 }
 
-impl<K, V, S, const N: usize, P, H: HashWidth> From<[(K, V); N]> for GenericHashMultiMap<K, V, S, P, H>
+impl<K, V, S, const N: usize, P, H: HashWidth> From<[(K, V); N]>
+    for GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,
@@ -640,8 +653,7 @@ mod test {
 
     #[test]
     fn from_iterator() {
-        let mm: HashMultiMap<&str, i32> =
-            vec![("a", 1), ("a", 2), ("b", 3)].into_iter().collect();
+        let mm: HashMultiMap<&str, i32> = vec![("a", 1), ("a", 2), ("b", 3)].into_iter().collect();
         assert_eq!(mm.len(), 3);
         assert_eq!(mm.keys_len(), 2);
         assert_eq!(mm.key_count("a"), 2);
@@ -734,7 +746,10 @@ mod test {
         let mut mm = HashMultiMap::new();
         mm.insert(1i32, 10i32);
         let s = format!("{:?}", mm);
-        assert!(s.contains("HashMultiMap") || s.contains('{'), "debug should produce non-empty output: {s}");
+        assert!(
+            s.contains("HashMultiMap") || s.contains('{'),
+            "debug should produce non-empty output: {s}"
+        );
     }
 
     #[test]
@@ -753,9 +768,11 @@ mod test {
             h.finish()
         }
         let mut a = HashMultiMap::new();
-        a.insert(1, 10); a.insert(2, 20);
+        a.insert(1, 10);
+        a.insert(2, 20);
         let mut b = HashMultiMap::new();
-        b.insert(2, 20); b.insert(1, 10); // different insertion order
+        b.insert(2, 20);
+        b.insert(1, 10); // different insertion order
         assert_eq!(hash_of(&a), hash_of(&b));
     }
 
@@ -764,7 +781,8 @@ mod test {
         let mut a = HashMultiMap::new();
         a.insert(1, "x");
         let mut b = HashMultiMap::new();
-        b.insert(1, "y"); b.insert(2, "z");
+        b.insert(1, "y");
+        b.insert(2, "z");
         let c = a.union(b);
         assert_eq!(c.key_count(&1), 2); // both values for key 1
         assert_eq!(c.key_count(&2), 1);
@@ -773,7 +791,8 @@ mod test {
     #[test]
     fn difference() {
         let mut a = HashMultiMap::new();
-        a.insert(1, "x"); a.insert(2, "y");
+        a.insert(1, "x");
+        a.insert(2, "y");
         let mut b = HashMultiMap::new();
         b.insert(2, "z");
         let c = a.difference(&b);
@@ -784,13 +803,44 @@ mod test {
     #[test]
     fn intersection_method() {
         let mut a = HashMultiMap::new();
-        a.insert(1, "x"); a.insert(2, "y");
+        a.insert(1, "x");
+        a.insert(2, "y");
         let mut b = HashMultiMap::new();
-        b.insert(2, "z"); b.insert(3, "w");
+        b.insert(2, "z");
+        b.insert(3, "w");
         let c = a.intersection(&b);
         assert!(!c.contains_key(&1));
         assert!(c.contains_key(&2));
         assert!(c.contains(&2, &"y")); // self's value is kept
+    }
+
+    #[test]
+    fn symmetric_difference_method() {
+        let mut a = HashMultiMap::new();
+        a.insert(1, "x");
+        a.insert(2, "y");
+        a.insert(3, "z");
+        let mut b = HashMultiMap::new();
+        b.insert(2, "w");
+        b.insert(4, "v");
+        let c = a.symmetric_difference(&b);
+        // 1 and 3 are only in a, 4 is only in b, 2 is in both (excluded).
+        assert!(c.contains_key(&1));
+        assert!(!c.contains_key(&2));
+        assert!(c.contains_key(&3));
+        assert!(c.contains_key(&4));
+        assert_eq!(c.keys_len(), 3);
+    }
+
+    #[test]
+    fn symmetric_difference_disjoint() {
+        let mut a = HashMultiMap::new();
+        a.insert(1, "a");
+        let mut b = HashMultiMap::new();
+        b.insert(2, "b");
+        let c = a.symmetric_difference(&b);
+        assert_eq!(c.keys_len(), 2);
+        assert!(c.contains_key(&1) && c.contains_key(&2));
     }
 
     #[test]

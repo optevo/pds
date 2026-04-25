@@ -17,11 +17,15 @@
 //!
 //! Briefly, the following data structures are provided:
 //!
-//! * [Vectors][vector::Vector] based on [RRB trees][rrb-tree]
-//! * [Hash maps][hashmap::HashMap]/[sets][hashset::HashSet] based on [hash
-//!   array mapped tries][hamt]
-//! * [Ordered maps][ordmap::OrdMap]/[sets][ordset::OrdSet] based on
-//!   [B+trees][b+tree]
+//! * [`Vector<A>`][vector::Vector] — RRB tree sequence
+//! * [`HashMap<K, V>`][hashmap::HashMap] / [`HashSet<A>`][hashset::HashSet] — HAMT-based unordered map and set
+//! * [`OrdMap<K, V>`][ordmap::OrdMap] / [`OrdSet<A>`][ordset::OrdSet] — B+ tree sorted map and set
+//! * [`InsertionOrderMap<K, V>`][crate::InsertionOrderMap] / [`InsertionOrderSet<A>`][crate::InsertionOrderSet] — insertion-ordered map and set
+//! * [`Bag<A>`][crate::Bag] — persistent multiset tracking element counts
+//! * [`HashMultiMap<K, V>`][crate::HashMultiMap] — key → set of values multimap
+//! * [`BiMap<K, V>`][crate::BiMap] — bidirectional bijection map
+//! * [`SymMap<A>`][crate::SymMap] — symmetric bidirectional map
+//! * [`Trie<K, V>`][crate::Trie] — persistent prefix tree
 //!
 //! ## Why Would I Want This?
 //!
@@ -260,6 +264,7 @@
 //! | [`Bag<A>`][crate::Bag] | Persistent multiset (bag) — tracks element counts | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`HashMultiMap<K, V>`][crate::HashMultiMap] | Key → set of values multimap | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`InsertionOrderMap<K, V>`][crate::InsertionOrderMap] | Map that iterates in insertion order | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//! | [`InsertionOrderSet<A>`][crate::InsertionOrderSet] | Set that iterates in insertion order | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`BiMap<K, V>`][crate::BiMap] | Bidirectional map — bijection between two types | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`SymMap<A>`][crate::SymMap] | Symmetric bidirectional map with O(1) swap | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`Trie<K, V>`][crate::Trie] | Persistent prefix tree (trie) — paths to values | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
@@ -323,7 +328,7 @@
 //! ```
 //!
 //! In `no_std` mode, convenience type aliases (`HashMap`, `HashSet`, `Bag`,
-//! `HashMultiMap`, `InsertionOrderMap`) are not available because they depend
+//! `HashMultiMap`, `InsertionOrderMap`, `InsertionOrderSet`) are not available because they depend
 //! on `std::collections::hash_map::RandomState`. Use the generic variants
 //! (`GenericHashMap`, `GenericHashSet`, etc.) with your own
 //! [`BuildHasher`](core::hash::BuildHasher) implementation instead.
@@ -344,6 +349,8 @@
 //! | [`atom`](https://crates.io/crates/arc-swap/) | No | Thread-safe shared values via `arc-swap` (requires `std`) |
 //! | `hash-intern` | No | Hash consing / node interning for HAMT collections via `InternPool`. Deduplicates structurally identical subtrees to save memory and enable O(1) equality via pointer comparison. Requires `std`. |
 //! | `persist` | No | Structural-sharing-preserving serialisation via `HashMapPool`. Serialises HAMT node trees with deduplication and reconstructs with hash consing on deserialisation. Requires `std` and `hash-intern`. |
+//! | `small-chunks` | No | Reduces internal chunk sizes so tree structures can be exercised with small collections. For testing only — not intended for production use. |
+//! | `debug` | No | Enables internal invariant-checking methods on `Vector` (RRB tree validation). For testing and debugging only. |
 //!
 //! [rrb-tree]: https://infoscience.epfl.ch/record/213452/files/rrbvector.pdf
 //! [hamt]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie
@@ -413,36 +420,40 @@ pub mod intern;
 #[cfg(feature = "persist")]
 pub mod persist;
 
-pub mod hash_multimap;
-pub mod insertion_order_map;
 pub mod bag;
 pub mod bimap;
+pub mod hash_multimap;
+pub mod insertion_order_map;
+pub mod insertion_order_set;
 pub mod symmap;
 pub mod trie;
 
+#[cfg(any(feature = "std", feature = "foldhash"))]
+pub use crate::bag::Bag;
+pub use crate::bag::GenericBag;
+#[cfg(any(feature = "std", feature = "foldhash"))]
+pub use crate::bimap::BiMap;
+pub use crate::bimap::GenericBiMap;
 pub use crate::hash_multimap::GenericHashMultiMap;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::hash_multimap::HashMultiMap;
 pub use crate::hashmap::GenericHashMap;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::hashmap::HashMap;
-pub use crate::insertion_order_map::GenericInsertionOrderMap;
-#[cfg(any(feature = "std", feature = "foldhash"))]
-pub use crate::insertion_order_map::InsertionOrderMap;
 pub use crate::hashset::GenericHashSet;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::hashset::HashSet;
+pub use crate::insertion_order_map::GenericInsertionOrderMap;
+#[cfg(any(feature = "std", feature = "foldhash"))]
+pub use crate::insertion_order_map::InsertionOrderMap;
+pub use crate::insertion_order_set::GenericInsertionOrderSet;
+#[cfg(any(feature = "std", feature = "foldhash"))]
+pub use crate::insertion_order_set::InsertionOrderSet;
 pub use crate::ordmap::{GenericOrdMap, OrdMap};
 pub use crate::ordset::{GenericOrdSet, OrdSet};
-pub use crate::bag::GenericBag;
-#[cfg(any(feature = "std", feature = "foldhash"))]
-pub use crate::bag::Bag;
-pub use crate::bimap::GenericBiMap;
-#[cfg(any(feature = "std", feature = "foldhash"))]
-pub use crate::bimap::BiMap;
 pub use crate::symmap::GenericSymMap;
 #[cfg(any(feature = "std", feature = "foldhash"))]
-pub use crate::symmap::{SymMap, Direction};
+pub use crate::symmap::{Direction, SymMap};
 pub use crate::trie::GenericTrie;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::trie::Trie;

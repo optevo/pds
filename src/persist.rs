@@ -8,7 +8,7 @@
 //! internal tree structure. This module provides **pool-based**
 //! serialisation that writes each node once and references shared nodes
 //! by integer ID. On deserialisation, nodes are hash-consed on the fly
-//! via [`InternPool`] for cross-session deduplication.
+//! via [`crate::intern::InternPool`] for cross-session deduplication.
 //!
 //! See DEC-027 in `docs/decisions.md` for design rationale.
 //!
@@ -49,7 +49,9 @@ use serde_core::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
 
 use crate::hash_width::HashWidth;
 use crate::hashmap::GenericHashMap;
-use crate::nodes::hamt::{CollisionNode, Entry, HamtNode, LargeSimdNode, SmallSimdNode, HASH_WIDTH};
+use crate::nodes::hamt::{
+    CollisionNode, Entry, HamtNode, LargeSimdNode, SmallSimdNode, HASH_WIDTH,
+};
 
 // Note: SharedPointer, Entry, HamtNode, SmallSimdNode, LargeSimdNode, CollisionNode
 // are used by PoolCollector (serialisation path). The reconstruction path uses
@@ -490,9 +492,7 @@ impl<K: Clone + PartialEq, V: Clone + PartialEq, H: HashWidth> HashMapPool<K, V,
     ///
     /// Time: O(n) amortised (same as `from_maps`; Merkle hash collisions
     /// are negligible at 2^-64).
-    pub fn from_maps_dedup<S, P: SharedPointerKind>(
-        maps: &[&GenericHashMap<K, V, S, P, H>],
-    ) -> Self
+    pub fn from_maps_dedup<S, P: SharedPointerKind>(maps: &[&GenericHashMap<K, V, S, P, H>]) -> Self
     where
         BitsImpl<HASH_WIDTH>: Bits,
     {
@@ -576,7 +576,7 @@ where
     ///
     /// For cross-session node deduplication, call
     /// [`GenericHashMap::intern`](crate::hashmap::GenericHashMap::intern)
-    /// on each returned map with a shared [`InternPool`].
+    /// on each returned map with a shared [`crate::intern::InternPool`].
     pub fn to_maps<S, P>(&self) -> Vec<GenericHashMap<K, V, S, P, H>>
     where
         K: Hash + Eq,
@@ -742,8 +742,7 @@ where
 
                 Ok(HashMapPool {
                     nodes: nodes.ok_or_else(|| de::Error::missing_field("nodes"))?,
-                    containers: containers
-                        .ok_or_else(|| de::Error::missing_field("containers"))?,
+                    containers: containers.ok_or_else(|| de::Error::missing_field("containers"))?,
                 })
             }
         }
@@ -782,8 +781,9 @@ where
             }
 
             fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-                let tag: String =
-                    map.next_key()?.ok_or_else(|| de::Error::custom("empty node object"))?;
+                let tag: String = map
+                    .next_key()?
+                    .ok_or_else(|| de::Error::custom("empty node object"))?;
 
                 let node = match tag.as_str() {
                     "h" => {
@@ -935,8 +935,7 @@ impl<K: Clone, V: Clone> OrdPoolCollector<K, V> {
                 )
             }
             Children::Branches { branches, level } => {
-                let child_ids: Vec<u32> =
-                    branches.iter().map(|b| self.visit_branch(b)).collect();
+                let child_ids: Vec<u32> = branches.iter().map(|b| self.visit_branch(b)).collect();
                 self.push(
                     OrdPoolNode::BranchBranches {
                         keys,
@@ -949,10 +948,7 @@ impl<K: Clone, V: Clone> OrdPoolCollector<K, V> {
         }
     }
 
-    fn visit_leaf<P: SharedPointerKind>(
-        &mut self,
-        leaf: &SharedPointer<Leaf<K, V>, P>,
-    ) -> u32 {
+    fn visit_leaf<P: SharedPointerKind>(&mut self, leaf: &SharedPointer<Leaf<K, V>, P>) -> u32 {
         let addr = SharedPointer::as_ptr(leaf) as usize;
         if let Some(&id) = self.seen.get(&addr) {
             return id;
@@ -1142,8 +1138,9 @@ impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for TaggedO
             }
 
             fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-                let tag: String =
-                    map.next_key()?.ok_or_else(|| de::Error::custom("empty node object"))?;
+                let tag: String = map
+                    .next_key()?
+                    .ok_or_else(|| de::Error::custom("empty node object"))?;
                 let node = match tag.as_str() {
                     "bl" => {
                         let (keys, children): (Vec<K>, Vec<u32>) = map.next_value()?;
@@ -1189,10 +1186,7 @@ where
                 write!(f, "an OrdMapPool struct")
             }
 
-            fn visit_map<M: MapAccess<'de>>(
-                self,
-                mut access: M,
-            ) -> Result<Self::Value, M::Error> {
+            fn visit_map<M: MapAccess<'de>>(self, mut access: M) -> Result<Self::Value, M::Error> {
                 let mut nodes: Option<Vec<OrdPoolNode<K, V>>> = None;
                 let mut containers: Option<Vec<PoolContainer>> = None;
 
@@ -1218,8 +1212,7 @@ where
 
                 Ok(OrdMapPool {
                     nodes: nodes.ok_or_else(|| de::Error::missing_field("nodes"))?,
-                    containers: containers
-                        .ok_or_else(|| de::Error::missing_field("containers"))?,
+                    containers: containers.ok_or_else(|| de::Error::missing_field("containers"))?,
                 })
             }
         }
@@ -1636,9 +1629,7 @@ impl<A: Clone + PartialEq, H: HashWidth> HashSetPool<A, H> {
     ///
     /// See [`HashMapPool::from_maps_dedup`] for the full explanation.
     /// Requires `A: PartialEq`.
-    pub fn from_sets_dedup<S, P: SharedPointerKind>(
-        sets: &[&GenericHashSet<A, S, P, H>],
-    ) -> Self
+    pub fn from_sets_dedup<S, P: SharedPointerKind>(sets: &[&GenericHashSet<A, S, P, H>]) -> Self
     where
         BitsImpl<HASH_WIDTH>: Bits,
     {
@@ -1789,8 +1780,7 @@ where
 
                 Ok(HashSetPool {
                     nodes: nodes.ok_or_else(|| de::Error::missing_field("nodes"))?,
-                    containers: containers
-                        .ok_or_else(|| de::Error::missing_field("containers"))?,
+                    containers: containers.ok_or_else(|| de::Error::missing_field("containers"))?,
                 })
             }
         }
@@ -1827,13 +1817,13 @@ where
             }
 
             fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-                let tag: String =
-                    map.next_key()?.ok_or_else(|| de::Error::custom("empty node object"))?;
+                let tag: String = map
+                    .next_key()?
+                    .ok_or_else(|| de::Error::custom("empty node object"))?;
 
                 let node = match tag.as_str() {
                     "h" => {
-                        let (values, refs): (Vec<(u8, A, H)>, Vec<(u8, u32)>) =
-                            map.next_value()?;
+                        let (values, refs): (Vec<(u8, A, H)>, Vec<(u8, u32)>) = map.next_value()?;
                         let mut entries = Vec::with_capacity(values.len() + refs.len());
                         for (slot, val, hash) in values {
                             entries.push((slot, PoolEntry::Value(val, hash)));
@@ -1893,8 +1883,7 @@ impl<A: Clone> BagPool<A> {
     where
         BitsImpl<HASH_WIDTH>: Bits,
     {
-        let maps: Vec<&GenericHashMap<A, usize, S, P>> =
-            bags.iter().map(|b| &b.map).collect();
+        let maps: Vec<&GenericHashMap<A, usize, S, P>> = bags.iter().map(|b| &b.map).collect();
         BagPool(HashMapPool::from_maps(&maps))
     }
 
@@ -1915,8 +1904,7 @@ impl<A: Clone + PartialEq> BagPool<A> {
     where
         BitsImpl<HASH_WIDTH>: Bits,
     {
-        let maps: Vec<&GenericHashMap<A, usize, S, P>> =
-            bags.iter().map(|b| &b.map).collect();
+        let maps: Vec<&GenericHashMap<A, usize, S, P>> = bags.iter().map(|b| &b.map).collect();
         BagPool(HashMapPool::from_maps_dedup(&maps))
     }
 
@@ -2001,8 +1989,7 @@ impl<K: Clone, V: Clone, H: HashWidth> BiMapPool<K, V, H> {
     where
         BitsImpl<HASH_WIDTH>: Bits,
     {
-        let fwd: Vec<&GenericHashMap<K, V, S, P, H>> =
-            maps.iter().map(|b| &b.forward).collect();
+        let fwd: Vec<&GenericHashMap<K, V, S, P, H>> = maps.iter().map(|b| &b.forward).collect();
         BiMapPool(HashMapPool::from_maps(&fwd))
     }
 
@@ -2019,14 +2006,11 @@ impl<K: Clone + PartialEq, V: Clone + PartialEq, H: HashWidth> BiMapPool<K, V, H
     /// Build a pool from one or more BiMaps, deduplicating content-equal nodes.
     ///
     /// See [`HashMapPool::from_maps_dedup`] for the full explanation.
-    pub fn from_bimaps_dedup<S, P: SharedPointerKind>(
-        maps: &[&GenericBiMap<K, V, S, P, H>],
-    ) -> Self
+    pub fn from_bimaps_dedup<S, P: SharedPointerKind>(maps: &[&GenericBiMap<K, V, S, P, H>]) -> Self
     where
         BitsImpl<HASH_WIDTH>: Bits,
     {
-        let fwd: Vec<&GenericHashMap<K, V, S, P, H>> =
-            maps.iter().map(|b| &b.forward).collect();
+        let fwd: Vec<&GenericHashMap<K, V, S, P, H>> = maps.iter().map(|b| &b.forward).collect();
         BiMapPool(HashMapPool::from_maps_dedup(&fwd))
     }
 
@@ -2119,8 +2103,7 @@ impl<A: Clone, H: HashWidth> SymMapPool<A, H> {
     where
         BitsImpl<HASH_WIDTH>: Bits,
     {
-        let fwd: Vec<&GenericHashMap<A, A, S, P, H>> =
-            maps.iter().map(|s| &s.forward).collect();
+        let fwd: Vec<&GenericHashMap<A, A, S, P, H>> = maps.iter().map(|s| &s.forward).collect();
         SymMapPool(HashMapPool::from_maps(&fwd))
     }
 
@@ -2183,8 +2166,7 @@ impl<A: Clone + PartialEq, H: HashWidth> SymMapPool<A, H> {
     where
         BitsImpl<HASH_WIDTH>: Bits,
     {
-        let fwd: Vec<&GenericHashMap<A, A, S, P, H>> =
-            maps.iter().map(|s| &s.forward).collect();
+        let fwd: Vec<&GenericHashMap<A, A, S, P, H>> = maps.iter().map(|s| &s.forward).collect();
         SymMapPool(HashMapPool::from_maps_dedup(&fwd))
     }
 
@@ -2300,9 +2282,7 @@ impl<K: Serialize, V: Serialize> Serialize for HashMultiMapPool<K, V> {
     }
 }
 
-impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de>
-    for HashMultiMapPool<K, V>
-{
+impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for HashMultiMapPool<K, V> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(HashMultiMapPool {
             containers: Vec::deserialize(deserializer)?,
@@ -2515,8 +2495,7 @@ mod tests {
 
     #[test]
     fn roundtrip_single_map() {
-        let map: HashMap<String, i32> =
-            [("a".into(), 1), ("b".into(), 2), ("c".into(), 3)].into();
+        let map: HashMap<String, i32> = [("a".into(), 1), ("b".into(), 2), ("c".into(), 3)].into();
 
         let pool = HashMapPool::from_map(&map);
         let json = serde_json::to_string(&pool).unwrap();
@@ -2654,8 +2633,7 @@ mod tests {
     fn ordmap_roundtrip_single() {
         use crate::OrdMap;
 
-        let map: OrdMap<String, i32> =
-            [("a".into(), 1), ("b".into(), 2), ("c".into(), 3)].into();
+        let map: OrdMap<String, i32> = [("a".into(), 1), ("b".into(), 2), ("c".into(), 3)].into();
 
         let pool = OrdMapPool::from_map(&map);
         let json = serde_json::to_string(&pool).unwrap();
@@ -3016,14 +2994,8 @@ mod tests {
         let loaded: SymMapPool<&str> = serde_json::from_str(&json).unwrap();
         let restored: SymMap<&str> = loaded.to_symmap();
 
-        assert_eq!(
-            restored.get(Direction::Forward, &"hello"),
-            Some(&"hola")
-        );
-        assert_eq!(
-            restored.get(Direction::Backward, &"hola"),
-            Some(&"hello")
-        );
+        assert_eq!(restored.get(Direction::Forward, &"hello"), Some(&"hola"));
+        assert_eq!(restored.get(Direction::Backward, &"hola"), Some(&"hello"));
     }
 
     #[test]
@@ -3334,7 +3306,10 @@ mod tests {
         assert_eq!(maps[1].get(&999), Some(&1998));
         // Verify original insertion order preserved
         let keys1: Vec<&i32> = maps[0].keys().collect();
-        assert_eq!(keys1, (0..50).collect::<Vec<_>>().iter().collect::<Vec<_>>());
+        assert_eq!(
+            keys1,
+            (0..50).collect::<Vec<_>>().iter().collect::<Vec<_>>()
+        );
     }
 
     // --- TriePool tests ---

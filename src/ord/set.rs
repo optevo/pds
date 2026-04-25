@@ -15,10 +15,10 @@
 //!
 //! [1]: https://en.wikipedia.org/wiki/B%2B_tree
 
-use alloc::collections::BTreeSet;
-use core::borrow::Borrow;
 use alloc::borrow::ToOwned;
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
+use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};

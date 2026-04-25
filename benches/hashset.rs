@@ -233,9 +233,7 @@ where
     }
 
     for size in &[1000, 10000, 100000] {
-        group.bench_function(format!("iter_{}", size), |b| {
-            bench_iter::<S, A>(b, *size)
-        });
+        group.bench_function(format!("iter_{}", size), |b| bench_iter::<S, A>(b, *size));
     }
 
     if S::IMMUTABLE {
@@ -252,9 +250,7 @@ where
 fn bench_set_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("hashset_ops_i64");
     for size in &[100, 1000, 10000] {
-        group.bench_function(format!("union_{}", size), |b| {
-            bench_union::<i64>(b, *size)
-        });
+        group.bench_function(format!("union_{}", size), |b| bench_union::<i64>(b, *size));
         group.bench_function(format!("intersection_{}", size), |b| {
             bench_intersection::<i64>(b, *size)
         });

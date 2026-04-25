@@ -155,8 +155,7 @@ impl<A, P: SharedPointerKind, H: HashWidth> InternPool<A, P, H> {
 /// This is a type alias that hides the internal `Value<A>` wrapper used
 /// by the set's HAMT. Use this instead of constructing an `InternPool`
 /// with the raw element type.
-pub type HashSetInternPool<A, P = DefaultSharedPtr, H = u64> =
-    InternPool<SetValue<A>, P, H>;
+pub type HashSetInternPool<A, P = DefaultSharedPtr, H = u64> = InternPool<SetValue<A>, P, H>;
 
 impl<A, P: SharedPointerKind, H: HashWidth> Default for InternPool<A, P, H> {
     fn default() -> Self {
@@ -274,7 +273,10 @@ fn hamt_nodes_equal<A: PartialEq, P: SharedPointerKind, H: HashWidth>(
     // Compare each occupied entry. SparseChunk iterates by slot index,
     // so two nodes with the same content in the same hash positions will
     // yield entries in the same order.
-    a.data.iter().zip(b.data.iter()).all(|(ea, eb)| entries_equal(ea, eb))
+    a.data
+        .iter()
+        .zip(b.data.iter())
+        .all(|(ea, eb)| entries_equal(ea, eb))
 }
 
 /// Compare two SIMD nodes for equality by checking their data elements.
@@ -292,7 +294,10 @@ where
         return false;
     }
     // SIMD nodes store (A, H) pairs — compare values
-    a.data.iter().zip(b.data.iter()).all(|((va, ha), (vb, hb))| va == vb && ha == hb)
+    a.data
+        .iter()
+        .zip(b.data.iter())
+        .all(|((va, ha), (vb, hb))| va == vb && ha == hb)
 }
 
 /// Compare two collision nodes for equality.
@@ -477,8 +482,7 @@ mod tests {
         use crate::test::LolHasher;
         use core::hash::BuildHasherDefault;
 
-        type DetMap<K, V> =
-            GenericHashMap<K, V, BuildHasherDefault<LolHasher>, DefaultSharedPtr>;
+        type DetMap<K, V> = GenericHashMap<K, V, BuildHasherDefault<LolHasher>, DefaultSharedPtr>;
 
         let mut pool = InternPool::new();
 
@@ -670,7 +674,8 @@ mod tests {
         map.intern(&mut pool);
         // Second intern: every node already in pool → all hits
         assert_eq!(
-            pool.stats().hits, after_first,
+            pool.stats().hits,
+            after_first,
             "re-interning same map should hit every node"
         );
         // No new misses

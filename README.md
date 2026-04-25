@@ -9,23 +9,42 @@ SIMD-accelerated HAMT nodes, and no_std support.
 
 ## Collections
 
-| Type | Backing structure | Key operations |
-|------|-------------------|----------------|
-| `Vector<A>` | RRB tree | O(log n) index, push, split, concat |
-| `HashMap<K, V>` | SIMD HAMT | O(log n) insert, lookup, set operations |
-| `HashSet<A>` | SIMD HAMT | O(log n) insert, lookup, set operations |
-| `OrdMap<K, V>` | B+ tree | O(log n) insert, lookup, range queries |
-| `OrdSet<A>` | B+ tree | O(log n) insert, lookup, range queries |
-| `Bag<A>` | SIMD HAMT | Persistent multiset (bag) with element counts |
-| `HashMultiMap<K, V>` | SIMD HAMT | Key → set of values multimap |
-| `InsertionOrderMap<K, V>` | SIMD HAMT + B+ tree | Map iterating in insertion order |
-| `BiMap<K, V>` | 2× SIMD HAMT | Bidirectional map (bijection between two types) |
-| `SymMap<A>` | 2× SIMD HAMT | Symmetric bidirectional map with O(1) swap |
-| `Trie<K, V>` | HAMT of HAMTs | Hierarchical path-keyed map |
+All collections use structural sharing: cloning is O(1) and modified copies
+share unchanged subtrees with the original.
 
-All collections use structural sharing for efficient cloning — cloning a
-collection is O(1), and modified versions share unchanged subtrees with the
-original.
+### Lists
+
+| Type | Algorithm | Constraints | Order | Insert | Lookup |
+|------|-----------|-------------|-------|--------|--------|
+| `Vector<A>` | RRB tree | `Clone` | insertion | O(1)* | O(log n) |
+
+*Amortised O(1) push; O(log n) split/concat.
+
+### Maps
+
+| Type | Algorithm | Constraints | Order | Insert | Lookup |
+|------|-----------|-------------|-------|--------|--------|
+| `HashMap<K, V>` | SIMD HAMT | `Clone + Hash + Eq` | undefined | O(log n) | O(log n) |
+| `OrdMap<K, V>` | B+ tree | `Clone + Ord` | sorted | O(log n) | O(log n) |
+
+### Sets
+
+| Type | Algorithm | Constraints | Order | Insert | Lookup |
+|------|-----------|-------------|-------|--------|--------|
+| `HashSet<A>` | SIMD HAMT | `Clone + Hash + Eq` | undefined | O(log n) | O(log n) |
+| `OrdSet<A>` | B+ tree | `Clone + Ord` | sorted | O(log n) | O(log n) |
+
+### Other collections
+
+| Type | Algorithm | Constraints | Description |
+|------|-----------|-------------|-------------|
+| `Bag<A>` | SIMD HAMT | `Clone + Hash + Eq` | Persistent multiset — tracks element counts |
+| `HashMultiMap<K, V>` | SIMD HAMT | `Clone + Hash + Eq` | Key → set of values multimap |
+| `InsertionOrderMap<K, V>` | SIMD HAMT + B+ tree | `Clone + Hash + Eq` | Map that iterates in insertion order |
+| `InsertionOrderSet<A>` | SIMD HAMT + B+ tree | `Clone + Hash + Eq` | Set that iterates in insertion order |
+| `BiMap<K, V>` | 2× SIMD HAMT | `Clone + Hash + Eq` | Bidirectional map — bijection between two types |
+| `SymMap<A>` | 2× SIMD HAMT | `Clone + Hash + Eq` | Symmetric bidirectional map with O(1) swap |
+| `Trie<K, V>` | HAMT of HAMTs | `Clone + Hash + Eq` | Persistent prefix tree — paths to values |
 
 ## Comparison with similar crates
 
@@ -47,6 +66,7 @@ a different collection set and design philosophy.
 | **Bag** | yes | — | — | — |
 | **HashMultiMap** | yes | — | — | — |
 | **InsertionOrderMap** | yes | — | — | — |
+| **InsertionOrderSet** | yes | — | — | — |
 | **BiMap** | yes | — | — | — |
 | **SymMap** | yes | — | — | — |
 | **Trie** | yes | — | — | — |
@@ -64,7 +84,7 @@ a different collection set and design philosophy.
 **Key differences from imbl:**
 - SIMD-accelerated HAMT nodes for faster hash map/set operations
 - Merkle hashing on all collections for O(1) structural equality checks
-- Six additional collection types (Bag, HashMultiMap, InsertionOrderMap, BiMap, SymMap, Trie)
+- Seven additional collection types (Bag, HashMultiMap, InsertionOrderMap, InsertionOrderSet, BiMap, SymMap, Trie)
 - Hash consing via `InternPool` — deduplicates identical HAMT subtrees across collections
 - Structural-sharing-preserving serialisation via `HashMapPool` — serialises/deserialises trees with node deduplication and cross-session interning
 - `no_std` support via the `foldhash` feature flag
@@ -73,7 +93,7 @@ a different collection set and design philosophy.
 
 ## Documentation
 
-- API docs — build locally with `cargo doc --open --all-features`
+- API docs — build locally with `rm -rf rustdocs && cargo doc --no-deps --all-features --target-dir rustdocs --open`
 - [Architecture](docs/architecture.md) — internal data structure design
 - [Decision log](docs/decisions.md) — architectural choices and rationale
 - [Glossary](docs/glossary.md) — project terminology
@@ -82,18 +102,21 @@ a different collection set and design philosophy.
 
 ## Feature flags
 
-| Feature | Description |
-|---------|-------------|
-| `proptest` | Proptest strategies for all collection types |
-| `quickcheck` | `Arbitrary` implementations for all collection types |
-| `rayon` | Parallel iterators for all collection types |
-| `serde` | `Serialize` / `Deserialize` for all collection types |
-| `triomphe` | Use `triomphe::Arc` (no weak count, 8 bytes smaller per node) |
-| `foldhash` | Enables `HashMap`/`HashSet`/etc. type aliases in `no_std` via `foldhash::fast::RandomState` |
-| `arbitrary` | `Arbitrary` implementations for fuzzing |
-| `atom` | Thread-safe atomic state holder via `arc-swap` (requires `std`) |
-| `hash-intern` | Hash consing / node interning for HAMT collections via `InternPool` — deduplicates identical subtrees for memory savings and O(1) pointer equality |
-| `persist` | Structural-sharing-preserving serialisation via `HashMapPool` — serialises HAMT trees with node deduplication, reconstructs with hash consing. Requires `hash-intern` |
+| Feature | Default | Description |
+|---------|:-------:|-------------|
+| `std` | Yes | Enables `std`-dependent type aliases (`HashMap`, `HashSet`, etc.), `From<std::collections::*>` conversions, and `Mutex`-based locking. Disable for `no_std + alloc` environments. |
+| `triomphe` | Yes | Use `triomphe::Arc` as the default shared pointer — no weak count, 8 bytes smaller per node, one fewer atomic op per clone/drop. |
+| `proptest` | No | Proptest strategies for all collection types |
+| `quickcheck` | No | `Arbitrary` implementations for all collection types |
+| `rayon` | No | Parallel iterators for all collection types |
+| `serde` | No | `Serialize` / `Deserialize` for all collection types |
+| `arbitrary` | No | `Arbitrary` implementations for fuzzing |
+| `foldhash` | No | Enables `HashMap`/`HashSet`/etc. type aliases in `no_std` via `foldhash::fast::RandomState` |
+| `atom` | No | Thread-safe atomic state holder via `arc-swap` (requires `std`) |
+| `hash-intern` | No | Hash consing / node interning for HAMT collections via `InternPool` — deduplicates identical subtrees for memory savings and O(1) pointer equality |
+| `persist` | No | Structural-sharing-preserving serialisation via `HashMapPool` — serialises HAMT trees with node deduplication, reconstructs with hash consing. Requires `hash-intern` |
+| `small-chunks` | No | Reduces internal chunk sizes so tree structures can be exercised with small collections. For testing only — not intended for production use. |
+| `debug` | No | Enables internal invariant-checking methods on `Vector` (RRB tree validation). For testing and debugging only. |
 
 ## Building
 
@@ -122,11 +145,3 @@ Copyright 2021 Joe Neeman
 This software is subject to the terms of the Mozilla Public
 License, v. 2.0. If a copy of the MPL was not distributed with this
 file, You can obtain one at <http://mozilla.org/MPL/2.0/>.
-
-## Code of Conduct
-
-Please note that this project is released with a [Contributor Code of
-Conduct][coc]. By participating in this project you agree to abide by its
-terms.
-
-[coc]: https://github.com/optevo/pds/blob/main/CODE_OF_CONDUCT.md

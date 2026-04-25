@@ -453,10 +453,11 @@ required by the completion gate.
 ### Local rustdocs
 
 Whenever documentation is updated (doc comments, module-level docs, or
-README changes), rebuild the local rustdocs:
+README changes), rebuild the local rustdocs. Always delete the directory
+first — stale entries from renamed or removed crates accumulate otherwise:
 
 ```bash
-cargo doc --no-deps --all-features --target-dir rustdocs
+rm -rf rustdocs && cargo doc --no-deps --all-features --target-dir rustdocs
 ```
 
 This places the generated docs in `rustdocs/doc/pds/`. The `rustdocs/`

@@ -194,8 +194,7 @@ where
     }
 }
 
-impl<A, H: HashWidth, const WIDTH: usize, const GROUPS: usize>
-    GenericSimdNode<A, H, WIDTH, GROUPS>
+impl<A, H: HashWidth, const WIDTH: usize, const GROUPS: usize> GenericSimdNode<A, H, WIDTH, GROUPS>
 where
     BitsImpl<WIDTH>: Bits,
 {
@@ -223,7 +222,6 @@ where
         let (val, hash) = self.data.pop().unwrap();
         Entry::Value(val, hash)
     }
-
 }
 
 impl<A: HashValue, H: HashWidth, const WIDTH: usize, const GROUPS: usize>
@@ -363,7 +361,6 @@ where
     fn pop(&mut self) -> Entry<A, P, H> {
         self.data.pop().unwrap()
     }
-
 }
 
 impl<A: HashValue, H: HashWidth> SmallSimdNode<A, H> {
@@ -577,14 +574,10 @@ impl<A: HashValue, P: SharedPointerKind, H: HashWidth> HamtNode<A, P, H> {
                     }
                     Err(value) => {
                         // Small SIMD node is full, upgrade to LargeSimdNode
-                        let new_entry =
-                            small.upgrade_to_large(hash, shift + HASH_SHIFT, value);
+                        let new_entry = small.upgrade_to_large(hash, shift + HASH_SHIFT, value);
                         let new_m = new_entry.merkle_contribution();
                         *entry = new_entry;
-                        self.merkle_hash = self
-                            .merkle_hash
-                            .wrapping_sub(old_m)
-                            .wrapping_add(new_m);
+                        self.merkle_hash = self.merkle_hash.wrapping_sub(old_m).wrapping_add(new_m);
                         return None;
                     }
                 }
@@ -602,14 +595,10 @@ impl<A: HashValue, P: SharedPointerKind, H: HashWidth> HamtNode<A, P, H> {
                     }
                     Err(value) => {
                         // Large SIMD node is full, upgrade to HamtNode
-                        let new_entry =
-                            large.upgrade_to_hamt(hash, shift + HASH_SHIFT, value);
+                        let new_entry = large.upgrade_to_hamt(hash, shift + HASH_SHIFT, value);
                         let new_m = new_entry.merkle_contribution();
                         *entry = new_entry;
-                        self.merkle_hash = self
-                            .merkle_hash
-                            .wrapping_sub(old_m)
-                            .wrapping_add(new_m);
+                        self.merkle_hash = self.merkle_hash.wrapping_sub(old_m).wrapping_add(new_m);
                         return None;
                     }
                 }
@@ -629,10 +618,7 @@ impl<A: HashValue, P: SharedPointerKind, H: HashWidth> HamtNode<A, P, H> {
                 let old_m = (coll.data.len() as u64).wrapping_mul(fmix64(coll.hash.to_u64()));
                 let result = coll.insert(value);
                 let new_m = (coll.data.len() as u64).wrapping_mul(fmix64(coll.hash.to_u64()));
-                self.merkle_hash = self
-                    .merkle_hash
-                    .wrapping_sub(old_m)
-                    .wrapping_add(new_m);
+                self.merkle_hash = self.merkle_hash.wrapping_sub(old_m).wrapping_add(new_m);
                 return result;
             }
         };
@@ -728,10 +714,7 @@ impl<A: HashValue, P: SharedPointerKind, H: HashWidth> HamtNode<A, P, H> {
                     (old_m, Some(coll.pop_value()))
                 } else {
                     let new_m = (coll.data.len() as u64).wrapping_mul(fmix64(coll.hash.to_u64()));
-                    self.merkle_hash = self
-                        .merkle_hash
-                        .wrapping_sub(old_m)
-                        .wrapping_add(new_m);
+                    self.merkle_hash = self.merkle_hash.wrapping_sub(old_m).wrapping_add(new_m);
                     return removed;
                 }
             }
@@ -740,10 +723,7 @@ impl<A: HashValue, P: SharedPointerKind, H: HashWidth> HamtNode<A, P, H> {
         if let Some(new_node) = new_node {
             let new_m = new_node.merkle_contribution();
             self.data.insert(index, new_node);
-            self.merkle_hash = self
-                .merkle_hash
-                .wrapping_sub(old_m)
-                .wrapping_add(new_m);
+            self.merkle_hash = self.merkle_hash.wrapping_sub(old_m).wrapping_add(new_m);
         }
         removed
     }
@@ -1094,10 +1074,7 @@ where
     }
 }
 
-impl<'a, A, P: SharedPointerKind, H: HashWidth> ExactSizeIterator for Iter<'a, A, P, H> where
-    A: 'a
-{
-}
+impl<'a, A, P: SharedPointerKind, H: HashWidth> ExactSizeIterator for Iter<'a, A, P, H> where A: 'a {}
 
 impl<'a, A, P: SharedPointerKind, H: HashWidth> FusedIterator for Iter<'a, A, P, H> where A: 'a {}
 
