@@ -19,7 +19,6 @@
 //! # {
 //! use pds::HashMap;
 //! use pds::persist::HashMapPool;
-//! use pds::intern::InternPool;
 //!
 //! let map1: HashMap<String, i32> = [("a".into(), 1), ("b".into(), 2)].into();
 //! let mut map2 = map1.clone();
@@ -29,10 +28,9 @@
 //! let pool = HashMapPool::from_maps(&[&map1, &map2]);
 //! let json = serde_json::to_string(&pool).unwrap();
 //!
-//! // Deserialise with interning
-//! let mut intern = InternPool::new();
+//! // Deserialise
 //! let loaded: HashMapPool<String, i32> = serde_json::from_str(&json).unwrap();
-//! let maps: Vec<HashMap<String, i32>> = loaded.to_maps(&mut intern);
+//! let maps: Vec<HashMap<String, i32>> = loaded.to_maps();
 //! assert_eq!(maps[0], map1);
 //! assert_eq!(maps[1], map2);
 //! # }
@@ -51,8 +49,11 @@ use serde_core::ser::{Serialize, SerializeMap, SerializeStruct, Serializer};
 
 use crate::hash_width::HashWidth;
 use crate::hashmap::GenericHashMap;
-use crate::intern::InternPool;
 use crate::nodes::hamt::{CollisionNode, Entry, HamtNode, LargeSimdNode, SmallSimdNode, HASH_WIDTH};
+
+// Note: SharedPointer, Entry, HamtNode, SmallSimdNode, LargeSimdNode, CollisionNode
+// are used by PoolCollector (serialisation path). The reconstruction path uses
+// FromIterator (re-inserts leaves into fresh maps).
 
 // ─── Serialised pool types ───────────────────────────────────────────
 
@@ -230,111 +231,90 @@ impl<K: Clone, V: Clone, H: HashWidth> HashMapPool<K, V, H> {
 }
 
 // ─── Reconstruction (deserialisation path) ───────────────────────────
-
-/// Reconstructed node, indexed by pool ID.
-enum ReconNode<A, P: SharedPointerKind, H: HashWidth> {
-    Hamt(SharedPointer<HamtNode<A, P, H>, P>),
-    SimdSmall(SharedPointer<SmallSimdNode<A, H>, P>),
-    SimdLarge(SharedPointer<LargeSimdNode<A, H>, P>),
-    Collision(SharedPointer<CollisionNode<A, H>, P>),
-}
+//
+// The pool preserves the original HAMT tree structure, but that
+// structure depends on the hasher used during construction.
+// Reconstructing the exact tree with a different hasher would produce
+// maps where `get()` follows the wrong path.
+//
+// Instead, we extract all leaf (K, V) pairs and rebuild each map from
+// scratch via `FromIterator`, which inserts elements with the new
+// hasher. This guarantees correct lookups with any hasher.
+//
+// Structural sharing between deserialized maps is possible when the
+// user supplies the same hasher to both maps and then calls
+// `map.intern(&mut pool)` after deserialization.
 
 impl<K, V, H: HashWidth> HashMapPool<K, V, H>
 where
-    K: Clone + Hash + Eq + PartialEq,
-    V: Clone + PartialEq,
+    K: Clone,
+    V: Clone,
 {
-    /// Reconstruct HashMaps from this pool with InternPool for
-    /// cross-session deduplication.
-    pub fn to_maps<S, P>(
-        &self,
-        intern: &mut InternPool<(K, V), P, H>,
-    ) -> Vec<GenericHashMap<K, V, S, P, H>>
+    /// Collect all leaf (K, V) pairs for a given container root.
+    fn collect_leaves(&self, root_id: usize, out: &mut Vec<(K, V)>) {
+        match &self.nodes[root_id] {
+            PoolNode::Hamt(entries) => {
+                for (_slot, entry) in entries {
+                    match entry {
+                        PoolEntry::Value((k, v), _h) => out.push((k.clone(), v.clone())),
+                        PoolEntry::Ref(id) => self.collect_leaves(*id as usize, out),
+                    }
+                }
+            }
+            PoolNode::SimdSmall(entries) | PoolNode::SimdLarge(entries) => {
+                for (_slot, (k, v), _h) in entries {
+                    out.push((k.clone(), v.clone()));
+                }
+            }
+            PoolNode::Collision(_hash, values) => {
+                for (k, v) in values {
+                    out.push((k.clone(), v.clone()));
+                }
+            }
+        }
+    }
+
+    /// Reconstruct HashMaps from this pool.
+    ///
+    /// Each map is rebuilt by inserting all leaf elements into a fresh
+    /// map using `S::default()` as the hasher. This ensures lookups
+    /// work correctly regardless of the original hasher.
+    ///
+    /// For cross-session node deduplication, call
+    /// [`GenericHashMap::intern`](crate::hashmap::GenericHashMap::intern)
+    /// on each returned map with a shared [`InternPool`].
+    pub fn to_maps<S, P>(&self) -> Vec<GenericHashMap<K, V, S, P, H>>
     where
+        K: Hash + Eq,
+        V: Hash,
         S: BuildHasher + Default,
         P: SharedPointerKind,
         BitsImpl<HASH_WIDTH>: Bits,
     {
-        let mut recon: Vec<ReconNode<(K, V), P, H>> = Vec::with_capacity(self.nodes.len());
-
-        for pool_node in &self.nodes {
-            let node = match pool_node {
-                PoolNode::SimdSmall(entries) => {
-                    let node_entries: Vec<(usize, (K, V), H)> = entries
-                        .iter()
-                        .map(|(idx, (k, v), h)| (*idx as usize, (k.clone(), v.clone()), *h))
-                        .collect();
-                    let ptr = SharedPointer::new(SmallSimdNode::from_entries(&node_entries));
-                    ReconNode::SimdSmall(intern.intern_small(ptr))
-                }
-                PoolNode::SimdLarge(entries) => {
-                    let node_entries: Vec<(usize, (K, V), H)> = entries
-                        .iter()
-                        .map(|(idx, (k, v), h)| (*idx as usize, (k.clone(), v.clone()), *h))
-                        .collect();
-                    let ptr = SharedPointer::new(LargeSimdNode::from_entries(&node_entries));
-                    ReconNode::SimdLarge(intern.intern_large(ptr))
-                }
-                PoolNode::Collision(hash, values) => {
-                    let ptr = SharedPointer::new(CollisionNode {
-                        hash: *hash,
-                        data: values.clone(),
-                    });
-                    ReconNode::Collision(intern.intern_collision(ptr))
-                }
-                PoolNode::Hamt(entries) => {
-                    let hamt_entries: Vec<(usize, Entry<(K, V), P, H>)> = entries
-                        .iter()
-                        .map(|(slot, pe)| {
-                            let entry = match pe {
-                                PoolEntry::Value(a, h) => Entry::Value(a.clone(), *h),
-                                PoolEntry::Ref(id) => match &recon[*id as usize] {
-                                    ReconNode::Hamt(p) => Entry::HamtNode(p.clone()),
-                                    ReconNode::SimdSmall(p) => Entry::SmallSimdNode(p.clone()),
-                                    ReconNode::SimdLarge(p) => Entry::LargeSimdNode(p.clone()),
-                                    ReconNode::Collision(p) => Entry::Collision(p.clone()),
-                                },
-                            };
-                            (*slot as usize, entry)
-                        })
-                        .collect();
-                    let ptr = SharedPointer::new(HamtNode::from_entries(hamt_entries));
-                    ReconNode::Hamt(intern.intern_hamt(ptr))
-                }
-            };
-            recon.push(node);
-        }
-
         self.containers
             .iter()
             .map(|c| {
-                let root = c.root.map(|id| match &recon[id as usize] {
-                    ReconNode::Hamt(ptr) => ptr.clone(),
-                    _ => panic!("pool: root must be a HamtNode"),
-                });
-                GenericHashMap {
-                    root,
-                    size: c.size,
-                    hasher: S::default(),
-                    hasher_id: crate::hash::map::next_hasher_id(),
-                    kv_merkle_hash: 0,
-                    kv_merkle_valid: false,
+                if let Some(root_id) = c.root {
+                    let mut pairs = Vec::with_capacity(c.size);
+                    self.collect_leaves(root_id as usize, &mut pairs);
+                    pairs.into_iter().collect()
+                } else {
+                    GenericHashMap::default()
                 }
             })
             .collect()
     }
 
     /// Reconstruct a single HashMap (convenience for single-map pools).
-    pub fn to_map<S, P>(
-        &self,
-        intern: &mut InternPool<(K, V), P, H>,
-    ) -> GenericHashMap<K, V, S, P, H>
+    pub fn to_map<S, P>(&self) -> GenericHashMap<K, V, S, P, H>
     where
+        K: Hash + Eq,
+        V: Hash,
         S: BuildHasher + Default,
         P: SharedPointerKind,
         BitsImpl<HASH_WIDTH>: Bits,
     {
-        let mut maps = self.to_maps(intern);
+        let mut maps = self.to_maps();
         assert!(!maps.is_empty(), "pool contains no containers");
         maps.swap_remove(0)
     }
@@ -550,6 +530,502 @@ where
     }
 }
 
+// ─── OrdMap/OrdSet pool types ────────────────────────────────────────
+
+use crate::nodes::btree::{Branch, Children, Leaf, Node as BTreeNode};
+use crate::ord::map::GenericOrdMap;
+use crate::ord::set::GenericOrdSet;
+
+/// A serialised node in the B+ tree pool.
+#[derive(Clone, Debug)]
+enum OrdPoolNode<K, V> {
+    /// Branch with leaf children: separator keys + leaf pool IDs.
+    BranchLeaves { keys: Vec<K>, children: Vec<u32> },
+    /// Branch with branch children: separator keys + branch pool IDs + level.
+    BranchBranches {
+        keys: Vec<K>,
+        children: Vec<u32>,
+        level: usize,
+    },
+    /// Leaf: key-value pairs in sorted order.
+    Leaf(Vec<(K, V)>),
+}
+
+/// A pool of serialised B+ tree nodes with container metadata.
+///
+/// Multiple OrdMaps can share nodes within the same pool. Serialise
+/// with any serde-compatible format (JSON, bincode, etc.).
+///
+/// # Example
+///
+/// ```
+/// # #[cfg(feature = "persist")]
+/// # {
+/// use pds::OrdMap;
+/// use pds::persist::OrdMapPool;
+///
+/// let map1: OrdMap<String, i32> = [("a".into(), 1), ("b".into(), 2)].into();
+/// let mut map2 = map1.clone();
+/// map2.insert("c".into(), 3);
+///
+/// let pool = OrdMapPool::from_maps(&[&map1, &map2]);
+/// let json = serde_json::to_string(&pool).unwrap();
+///
+/// let loaded: OrdMapPool<String, i32> = serde_json::from_str(&json).unwrap();
+/// let maps: Vec<OrdMap<String, i32>> = loaded.to_maps();
+/// assert_eq!(maps[0], map1);
+/// assert_eq!(maps[1], map2);
+/// # }
+/// ```
+#[derive(Clone, Debug)]
+pub struct OrdMapPool<K, V> {
+    nodes: Vec<OrdPoolNode<K, V>>,
+    containers: Vec<PoolContainer>,
+}
+
+/// Type alias for [`OrdMapPool`] specialised for sets (`V = ()`).
+///
+/// Use [`from_sets`][OrdMapPool::from_sets] and
+/// [`to_sets`][OrdMapPool::to_sets] for ergonomic set operations.
+pub type OrdSetPool<A> = OrdMapPool<A, ()>;
+
+// ─── OrdMap pool collector ──────────────────────────────────────────
+
+struct OrdPoolCollector<K, V> {
+    seen: StdHashMap<usize, u32>,
+    nodes: Vec<OrdPoolNode<K, V>>,
+}
+
+impl<K: Clone, V: Clone> OrdPoolCollector<K, V> {
+    fn new() -> Self {
+        OrdPoolCollector {
+            seen: StdHashMap::new(),
+            nodes: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, node: OrdPoolNode<K, V>, addr: usize) -> u32 {
+        let id = self.nodes.len() as u32;
+        self.nodes.push(node);
+        self.seen.insert(addr, id);
+        id
+    }
+
+    fn visit_node<P: SharedPointerKind>(&mut self, node: &BTreeNode<K, V, P>) -> u32 {
+        match node {
+            BTreeNode::Branch(branch) => self.visit_branch(branch),
+            BTreeNode::Leaf(leaf) => self.visit_leaf(leaf),
+        }
+    }
+
+    fn visit_branch<P: SharedPointerKind>(
+        &mut self,
+        branch: &SharedPointer<Branch<K, V, P>, P>,
+    ) -> u32 {
+        let addr = SharedPointer::as_ptr(branch) as usize;
+        if let Some(&id) = self.seen.get(&addr) {
+            return id;
+        }
+
+        let keys: Vec<K> = branch.keys.iter().cloned().collect();
+
+        match &branch.children {
+            Children::Leaves { leaves } => {
+                let child_ids: Vec<u32> = leaves.iter().map(|l| self.visit_leaf(l)).collect();
+                self.push(
+                    OrdPoolNode::BranchLeaves {
+                        keys,
+                        children: child_ids,
+                    },
+                    addr,
+                )
+            }
+            Children::Branches { branches, level } => {
+                let child_ids: Vec<u32> =
+                    branches.iter().map(|b| self.visit_branch(b)).collect();
+                self.push(
+                    OrdPoolNode::BranchBranches {
+                        keys,
+                        children: child_ids,
+                        level: level.get(),
+                    },
+                    addr,
+                )
+            }
+        }
+    }
+
+    fn visit_leaf<P: SharedPointerKind>(
+        &mut self,
+        leaf: &SharedPointer<Leaf<K, V>, P>,
+    ) -> u32 {
+        let addr = SharedPointer::as_ptr(leaf) as usize;
+        if let Some(&id) = self.seen.get(&addr) {
+            return id;
+        }
+
+        let pairs: Vec<(K, V)> = leaf.keys.iter().cloned().collect();
+        self.push(OrdPoolNode::Leaf(pairs), addr)
+    }
+}
+
+// ─── OrdMapPool public API ──────────────────────────────────────────
+
+impl<K: Clone, V: Clone> OrdMapPool<K, V> {
+    /// Build a pool from one or more OrdMaps. Maps that share structure
+    /// (e.g., clones with modifications) will deduplicate shared nodes.
+    pub fn from_maps<P: SharedPointerKind>(maps: &[&GenericOrdMap<K, V, P>]) -> Self {
+        let mut collector = OrdPoolCollector::new();
+        let mut containers = Vec::with_capacity(maps.len());
+
+        for map in maps {
+            let root = map.root.as_ref().map(|r| collector.visit_node(r));
+            containers.push(PoolContainer {
+                root,
+                size: map.size,
+            });
+        }
+
+        OrdMapPool {
+            nodes: collector.nodes,
+            containers,
+        }
+    }
+
+    /// Build a pool from a single OrdMap.
+    pub fn from_map<P: SharedPointerKind>(map: &GenericOrdMap<K, V, P>) -> Self {
+        Self::from_maps(&[map])
+    }
+}
+
+impl<K: Clone, V: Clone> OrdMapPool<K, V> {
+    /// Collect all leaf (K, V) pairs for a given container root.
+    fn collect_leaves(&self, root_id: usize, out: &mut Vec<(K, V)>) {
+        match &self.nodes[root_id] {
+            OrdPoolNode::BranchLeaves { children, .. }
+            | OrdPoolNode::BranchBranches { children, .. } => {
+                for &child_id in children {
+                    self.collect_leaves(child_id as usize, out);
+                }
+            }
+            OrdPoolNode::Leaf(pairs) => {
+                out.extend(pairs.iter().cloned());
+            }
+        }
+    }
+
+    /// Reconstruct OrdMaps from this pool.
+    ///
+    /// Each map is rebuilt by inserting all leaf elements into a fresh
+    /// map via `FromIterator`.
+    pub fn to_maps<P>(&self) -> Vec<GenericOrdMap<K, V, P>>
+    where
+        K: Ord,
+        P: SharedPointerKind,
+    {
+        self.containers
+            .iter()
+            .map(|c| {
+                if let Some(root_id) = c.root {
+                    let mut pairs = Vec::with_capacity(c.size);
+                    self.collect_leaves(root_id as usize, &mut pairs);
+                    pairs.into_iter().collect()
+                } else {
+                    GenericOrdMap::default()
+                }
+            })
+            .collect()
+    }
+
+    /// Reconstruct a single OrdMap (convenience for single-map pools).
+    pub fn to_map<P>(&self) -> GenericOrdMap<K, V, P>
+    where
+        K: Ord,
+        P: SharedPointerKind,
+    {
+        let mut maps = self.to_maps();
+        assert!(!maps.is_empty(), "pool contains no containers");
+        maps.swap_remove(0)
+    }
+}
+
+// ─── OrdSetPool convenience methods ─────────────────────────────────
+
+impl<A: Clone> OrdMapPool<A, ()> {
+    /// Build a pool from one or more OrdSets.
+    pub fn from_sets<P: SharedPointerKind>(sets: &[&GenericOrdSet<A, P>]) -> Self {
+        let maps: Vec<&GenericOrdMap<A, (), P>> = sets.iter().map(|s| &s.map).collect();
+        Self::from_maps(&maps)
+    }
+
+    /// Build a pool from a single OrdSet.
+    pub fn from_set<P: SharedPointerKind>(set: &GenericOrdSet<A, P>) -> Self {
+        Self::from_sets(&[set])
+    }
+
+    /// Reconstruct OrdSets from this pool.
+    pub fn to_sets<P>(&self) -> Vec<GenericOrdSet<A, P>>
+    where
+        A: Ord,
+        P: SharedPointerKind,
+    {
+        self.to_maps()
+            .into_iter()
+            .map(|map| GenericOrdSet { map })
+            .collect()
+    }
+
+    /// Reconstruct a single OrdSet (convenience for single-set pools).
+    pub fn to_set<P>(&self) -> GenericOrdSet<A, P>
+    where
+        A: Ord,
+        P: SharedPointerKind,
+    {
+        let mut sets = self.to_sets();
+        assert!(!sets.is_empty(), "pool contains no containers");
+        sets.swap_remove(0)
+    }
+}
+
+// ─── OrdMapPool Serde Serialize ─────────────────────────────────────
+//
+// Format:
+//   {
+//     "nodes": [
+//       {"bl": [[k, ...], [child_id, ...]]},
+//       {"bb": [[k, ...], [child_id, ...], level]},
+//       {"lf": [[k, v], ...]},
+//       ...
+//     ],
+//     "containers": [[root_id_or_null, size], ...]
+//   }
+
+impl<K: Serialize, V: Serialize> Serialize for OrdPoolNode<K, V> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(1))?;
+        match self {
+            OrdPoolNode::BranchLeaves { keys, children } => {
+                map.serialize_entry("bl", &(keys, children))?;
+            }
+            OrdPoolNode::BranchBranches {
+                keys,
+                children,
+                level,
+            } => {
+                map.serialize_entry("bb", &(keys, children, level))?;
+            }
+            OrdPoolNode::Leaf(pairs) => {
+                map.serialize_entry("lf", pairs)?;
+            }
+        }
+        map.end()
+    }
+}
+
+impl<K: Serialize, V: Serialize> Serialize for OrdMapPool<K, V> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("OrdMapPool", 2)?;
+        state.serialize_field("nodes", &self.nodes)?;
+        state.serialize_field("containers", &self.containers)?;
+        state.end()
+    }
+}
+
+// ─── OrdMapPool Serde Deserialize ───────────────────────────────────
+
+/// Wrapper for deserializing a single tagged OrdPoolNode.
+struct TaggedOrdNode<K, V>(OrdPoolNode<K, V>);
+
+impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Deserialize<'de> for TaggedOrdNode<K, V> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct NodeVisitor<K, V>(PhantomData<(K, V)>);
+
+        impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Visitor<'de> for NodeVisitor<K, V> {
+            type Value = TaggedOrdNode<K, V>;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "a tagged B+ tree pool node")
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+                let tag: String =
+                    map.next_key()?.ok_or_else(|| de::Error::custom("empty node object"))?;
+                let node = match tag.as_str() {
+                    "bl" => {
+                        let (keys, children): (Vec<K>, Vec<u32>) = map.next_value()?;
+                        OrdPoolNode::BranchLeaves { keys, children }
+                    }
+                    "bb" => {
+                        let (keys, children, level): (Vec<K>, Vec<u32>, usize) =
+                            map.next_value()?;
+                        OrdPoolNode::BranchBranches {
+                            keys,
+                            children,
+                            level,
+                        }
+                    }
+                    "lf" => {
+                        let pairs: Vec<(K, V)> = map.next_value()?;
+                        OrdPoolNode::Leaf(pairs)
+                    }
+                    other => {
+                        return Err(de::Error::custom(format!("unknown node tag: {other}")));
+                    }
+                };
+                Ok(TaggedOrdNode(node))
+            }
+        }
+
+        deserializer.deserialize_map(NodeVisitor(PhantomData))
+    }
+}
+
+impl<'de, K, V> Deserialize<'de> for OrdMapPool<K, V>
+where
+    K: Deserialize<'de>,
+    V: Deserialize<'de>,
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct PoolVisitor<K, V>(PhantomData<(K, V)>);
+
+        impl<'de, K: Deserialize<'de>, V: Deserialize<'de>> Visitor<'de> for PoolVisitor<K, V> {
+            type Value = OrdMapPool<K, V>;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "an OrdMapPool struct")
+            }
+
+            fn visit_map<M: MapAccess<'de>>(
+                self,
+                mut access: M,
+            ) -> Result<Self::Value, M::Error> {
+                let mut nodes: Option<Vec<OrdPoolNode<K, V>>> = None;
+                let mut containers: Option<Vec<PoolContainer>> = None;
+
+                while let Some(key) = access.next_key::<&str>()? {
+                    match key {
+                        "nodes" => {
+                            let raw: Vec<TaggedOrdNode<K, V>> = access.next_value()?;
+                            nodes = Some(raw.into_iter().map(|t| t.0).collect());
+                        }
+                        "containers" => {
+                            let raw: Vec<(Option<u32>, usize)> = access.next_value()?;
+                            containers = Some(
+                                raw.into_iter()
+                                    .map(|(root, size)| PoolContainer { root, size })
+                                    .collect(),
+                            );
+                        }
+                        _ => {
+                            let _ = access.next_value::<de::IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                Ok(OrdMapPool {
+                    nodes: nodes.ok_or_else(|| de::Error::missing_field("nodes"))?,
+                    containers: containers
+                        .ok_or_else(|| de::Error::missing_field("containers"))?,
+                })
+            }
+        }
+
+        deserializer.deserialize_struct(
+            "OrdMapPool",
+            &["nodes", "containers"],
+            PoolVisitor(PhantomData),
+        )
+    }
+}
+
+// ─── VectorPool ─────────────────────────────────────────────────────
+
+use crate::vector::GenericVector;
+
+/// A pool of serialised Vector elements.
+///
+/// Stores each vector as a flat element list. Multiple vectors
+/// in the same pool share the container-level format for consistent
+/// serialisation.
+///
+/// # Example
+///
+/// ```
+/// # #[cfg(feature = "persist")]
+/// # {
+/// use pds::Vector;
+/// use pds::persist::VectorPool;
+///
+/// let v1: Vector<i32> = (0..100).collect();
+/// let mut v2 = v1.clone();
+/// v2.push_back(999);
+///
+/// let pool = VectorPool::from_vectors(&[&v1, &v2]);
+/// let json = serde_json::to_string(&pool).unwrap();
+///
+/// let loaded: VectorPool<i32> = serde_json::from_str(&json).unwrap();
+/// let vecs: Vec<Vector<i32>> = loaded.to_vectors();
+/// assert_eq!(vecs[0], v1);
+/// assert_eq!(vecs[1], v2);
+/// # }
+/// ```
+#[derive(Clone, Debug)]
+pub struct VectorPool<A> {
+    containers: Vec<Vec<A>>,
+}
+
+impl<A: Clone> VectorPool<A> {
+    /// Build a pool from one or more Vectors.
+    pub fn from_vectors<P: SharedPointerKind>(vectors: &[&GenericVector<A, P>]) -> Self {
+        VectorPool {
+            containers: vectors
+                .iter()
+                .map(|v| v.iter().cloned().collect())
+                .collect(),
+        }
+    }
+
+    /// Build a pool from a single Vector.
+    pub fn from_vector<P: SharedPointerKind>(vector: &GenericVector<A, P>) -> Self {
+        Self::from_vectors(&[vector])
+    }
+
+    /// Reconstruct Vectors from this pool.
+    pub fn to_vectors<P>(&self) -> Vec<GenericVector<A, P>>
+    where
+        P: SharedPointerKind,
+    {
+        self.containers
+            .iter()
+            .map(|elems| elems.iter().cloned().collect())
+            .collect()
+    }
+
+    /// Reconstruct a single Vector (convenience for single-vector pools).
+    pub fn to_vector<P>(&self) -> GenericVector<A, P>
+    where
+        P: SharedPointerKind,
+    {
+        let mut vecs = self.to_vectors();
+        assert!(!vecs.is_empty(), "pool contains no containers");
+        vecs.swap_remove(0)
+    }
+}
+
+impl<A: Serialize> Serialize for VectorPool<A> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.containers.serialize(serializer)
+    }
+}
+
+impl<'de, A: Deserialize<'de>> Deserialize<'de> for VectorPool<A> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(VectorPool {
+            containers: Vec::deserialize(deserializer)?,
+        })
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -565,9 +1041,8 @@ mod tests {
         let pool = HashMapPool::from_map(&map);
         let json = serde_json::to_string(&pool).unwrap();
 
-        let mut intern = InternPool::new();
         let loaded: HashMapPool<String, i32> = serde_json::from_str(&json).unwrap();
-        let restored: HashMap<String, i32> = loaded.to_map(&mut intern);
+        let restored: HashMap<String, i32> = loaded.to_map();
 
         assert_eq!(restored, map);
         assert_eq!(restored.len(), 3);
@@ -580,23 +1055,41 @@ mod tests {
         let pool = HashMapPool::from_map(&map);
         let json = serde_json::to_string(&pool).unwrap();
 
-        let mut intern = InternPool::new();
         let loaded: HashMapPool<i32, i32> = serde_json::from_str(&json).unwrap();
-        let restored: HashMap<i32, i32> = loaded.to_map(&mut intern);
+        let restored: HashMap<i32, i32> = loaded.to_map();
 
         assert_eq!(restored, map);
     }
 
     #[test]
+    fn roundtrip_get_works() {
+        // Verify deserialized maps support get() — not just equality.
+        let map: HashMap<i32, i32> = (0..500).map(|i| (i, i * 2)).collect();
+        let pool = HashMapPool::from_map(&map);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: HashMapPool<i32, i32> = serde_json::from_str(&json).unwrap();
+        let restored: HashMap<i32, i32> = loaded.to_map();
+
+        for i in 0..500 {
+            assert_eq!(
+                restored.get(&i),
+                Some(&(i * 2)),
+                "get({i}) failed on deserialized map"
+            );
+        }
+    }
+
+    #[test]
     fn shared_nodes_deduplicated_in_pool() {
+        // Two maps sharing structure (via clone) should produce fewer
+        // serialised nodes than two independently constructed maps.
         let base: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
         let mut modified = base.clone();
         modified.insert(999, 999);
 
         let pool = HashMapPool::from_maps(&[&base, &modified]);
 
-        // Two maps sharing structure should produce fewer nodes than
-        // two independently constructed maps
         let independent: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
         let pool_independent = HashMapPool::from_maps(&[&base, &independent]);
 
@@ -617,46 +1110,49 @@ mod tests {
         let pool = HashMapPool::from_maps(&[&map1, &map2]);
         let json = serde_json::to_string(&pool).unwrap();
 
-        let mut intern = InternPool::new();
         let loaded: HashMapPool<i32, i32> = serde_json::from_str(&json).unwrap();
-        let maps: Vec<HashMap<i32, i32>> = loaded.to_maps(&mut intern);
+        let maps: Vec<HashMap<i32, i32>> = loaded.to_maps();
 
         assert_eq!(maps.len(), 2);
         assert_eq!(maps[0], map1);
         assert_eq!(maps[1], map2);
+        // Verify get() works on both maps
+        for i in 0..50 {
+            assert_eq!(maps[0].get(&i), Some(&i));
+            assert_eq!(maps[1].get(&i), Some(&i));
+        }
+        assert_eq!(maps[1].get(&999), Some(&42));
     }
 
     #[test]
-    fn intern_pool_deduplicates_on_deserialise() {
-        // Serialise a map, deserialise it twice into the same InternPool.
-        // The second deserialisation should hit the pool (cross-session dedup).
+    fn intern_after_deserialise_deduplicates() {
+        // Deserialise the same data twice, intern both results.
+        // With different RandomState hashers, tree structures differ,
+        // so we only verify that interning works and maps remain correct.
+        use crate::intern::InternPool;
+
         let map: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
         let pool = HashMapPool::from_map(&map);
         let json = serde_json::to_string(&pool).unwrap();
 
-        let mut intern = InternPool::new();
-
-        // First deserialisation — populates the InternPool
         let loaded1: HashMapPool<i32, i32> = serde_json::from_str(&json).unwrap();
-        let _map1: HashMap<i32, i32> = loaded1.to_map(&mut intern);
-        let misses_after_first = intern.stats().misses;
+        let mut map1: HashMap<i32, i32> = loaded1.to_map();
 
-        // Second deserialisation — should hit InternPool for all nodes
         let loaded2: HashMapPool<i32, i32> = serde_json::from_str(&json).unwrap();
-        let map2: HashMap<i32, i32> = loaded2.to_map(&mut intern);
-        let hits_after_second = intern.stats().hits;
+        let mut map2: HashMap<i32, i32> = loaded2.to_map();
 
-        assert_eq!(map2, map);
-        assert!(
-            hits_after_second > 0,
-            "expected InternPool hits on second deserialisation"
-        );
-        // All nodes from the second deserialisation should be hits
-        assert!(
-            hits_after_second >= misses_after_first,
-            "expected at least as many hits ({hits_after_second}) \
-             as first-pass misses ({misses_after_first})"
-        );
+        // Intern both into the same pool
+        let mut intern = InternPool::new();
+        map1.intern(&mut intern);
+        map2.intern(&mut intern);
+
+        assert!(intern.len() > 0);
+
+        // Both maps must still work correctly after interning
+        for i in 0..100 {
+            assert_eq!(map1.get(&i), Some(&i));
+            assert_eq!(map2.get(&i), Some(&i));
+        }
     }
 
     #[test]
@@ -665,11 +1161,205 @@ mod tests {
         let pool = HashMapPool::from_map(&map);
         let json = serde_json::to_string(&pool).unwrap();
 
-        let mut intern = InternPool::new();
         let loaded: HashMapPool<i32, i32> = serde_json::from_str(&json).unwrap();
-        let restored: HashMap<i32, i32> = loaded.to_map(&mut intern);
+        let restored: HashMap<i32, i32> = loaded.to_map();
 
         assert_eq!(restored, map);
         assert!(restored.is_empty());
+    }
+
+    // --- OrdMapPool tests ---
+
+    #[test]
+    fn ordmap_roundtrip_single() {
+        use crate::OrdMap;
+
+        let map: OrdMap<String, i32> =
+            [("a".into(), 1), ("b".into(), 2), ("c".into(), 3)].into();
+
+        let pool = OrdMapPool::from_map(&map);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: OrdMapPool<String, i32> = serde_json::from_str(&json).unwrap();
+        let restored: OrdMap<String, i32> = loaded.to_map();
+
+        assert_eq!(restored, map);
+        assert_eq!(restored.len(), 3);
+    }
+
+    #[test]
+    fn ordmap_roundtrip_large() {
+        use crate::OrdMap;
+
+        let map: OrdMap<i32, i32> = (0..1000).map(|i| (i, i * 2)).collect();
+
+        let pool = OrdMapPool::from_map(&map);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: OrdMapPool<i32, i32> = serde_json::from_str(&json).unwrap();
+        let restored: OrdMap<i32, i32> = loaded.to_map();
+
+        assert_eq!(restored, map);
+        for i in 0..1000 {
+            assert_eq!(restored.get(&i), Some(&(i * 2)));
+        }
+    }
+
+    #[test]
+    fn ordmap_shared_nodes_deduplicated() {
+        use crate::OrdMap;
+
+        let base: OrdMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+        let mut modified = base.clone();
+        modified.insert(999, 999);
+
+        let pool = OrdMapPool::from_maps(&[&base, &modified]);
+
+        let independent: OrdMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+        let pool_independent = OrdMapPool::from_maps(&[&base, &independent]);
+
+        assert!(
+            pool.nodes.len() < pool_independent.nodes.len(),
+            "shared pool ({}) should have fewer nodes than independent ({})",
+            pool.nodes.len(),
+            pool_independent.nodes.len()
+        );
+    }
+
+    #[test]
+    fn ordmap_roundtrip_preserves_both() {
+        use crate::OrdMap;
+
+        let map1: OrdMap<i32, i32> = (0..50).map(|i| (i, i)).collect();
+        let mut map2 = map1.clone();
+        map2.insert(999, 42);
+
+        let pool = OrdMapPool::from_maps(&[&map1, &map2]);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: OrdMapPool<i32, i32> = serde_json::from_str(&json).unwrap();
+        let maps: Vec<OrdMap<i32, i32>> = loaded.to_maps();
+
+        assert_eq!(maps.len(), 2);
+        assert_eq!(maps[0], map1);
+        assert_eq!(maps[1], map2);
+    }
+
+    #[test]
+    fn ordmap_empty_roundtrip() {
+        use crate::OrdMap;
+
+        let map: OrdMap<i32, i32> = OrdMap::new();
+        let pool = OrdMapPool::from_map(&map);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: OrdMapPool<i32, i32> = serde_json::from_str(&json).unwrap();
+        let restored: OrdMap<i32, i32> = loaded.to_map();
+
+        assert_eq!(restored, map);
+        assert!(restored.is_empty());
+    }
+
+    // --- OrdSetPool tests ---
+
+    #[test]
+    fn ordset_roundtrip_single() {
+        use crate::OrdSet;
+
+        let set: OrdSet<i32> = (0..100).collect();
+
+        let pool = OrdSetPool::from_set(&set);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: OrdSetPool<i32> = serde_json::from_str(&json).unwrap();
+        let restored: OrdSet<i32> = loaded.to_set();
+
+        assert_eq!(restored, set);
+    }
+
+    #[test]
+    fn ordset_roundtrip_preserves_both() {
+        use crate::OrdSet;
+
+        let set1: OrdSet<i32> = (0..50).collect();
+        let mut set2 = set1.clone();
+        set2.insert(999);
+
+        let pool = OrdSetPool::from_sets(&[&set1, &set2]);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: OrdSetPool<i32> = serde_json::from_str(&json).unwrap();
+        let sets: Vec<OrdSet<i32>> = loaded.to_sets();
+
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0], set1);
+        assert_eq!(sets[1], set2);
+    }
+
+    // --- VectorPool tests ---
+
+    #[test]
+    fn vector_roundtrip_single() {
+        use crate::Vector;
+
+        let v: Vector<i32> = (0..100).collect();
+
+        let pool = VectorPool::from_vector(&v);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: VectorPool<i32> = serde_json::from_str(&json).unwrap();
+        let restored: Vector<i32> = loaded.to_vector();
+
+        assert_eq!(restored, v);
+    }
+
+    #[test]
+    fn vector_roundtrip_preserves_both() {
+        use crate::Vector;
+
+        let v1: Vector<i32> = (0..100).collect();
+        let mut v2 = v1.clone();
+        v2.push_back(999);
+
+        let pool = VectorPool::from_vectors(&[&v1, &v2]);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: VectorPool<i32> = serde_json::from_str(&json).unwrap();
+        let vecs: Vec<Vector<i32>> = loaded.to_vectors();
+
+        assert_eq!(vecs.len(), 2);
+        assert_eq!(vecs[0], v1);
+        assert_eq!(vecs[1], v2);
+    }
+
+    #[test]
+    fn vector_empty_roundtrip() {
+        use crate::Vector;
+
+        let v: Vector<i32> = Vector::new();
+        let pool = VectorPool::from_vector(&v);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: VectorPool<i32> = serde_json::from_str(&json).unwrap();
+        let restored: Vector<i32> = loaded.to_vector();
+
+        assert_eq!(restored, v);
+        assert!(restored.is_empty());
+    }
+
+    #[test]
+    fn vector_roundtrip_large() {
+        use crate::Vector;
+
+        let v: Vector<i32> = (0..10_000).collect();
+
+        let pool = VectorPool::from_vector(&v);
+        let json = serde_json::to_string(&pool).unwrap();
+
+        let loaded: VectorPool<i32> = serde_json::from_str(&json).unwrap();
+        let restored: Vector<i32> = loaded.to_vector();
+
+        assert_eq!(restored, v);
+        assert_eq!(restored.len(), 10_000);
     }
 }

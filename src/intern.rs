@@ -467,6 +467,244 @@ mod tests {
     }
 
     #[test]
+    fn independently_built_identical_maps_deduplicate() {
+        // The critical test: two maps built from scratch (not cloned)
+        // with the same deterministic hasher and same content must
+        // produce identical HAMT trees. Interning should deduplicate
+        // every node, giving ptr_eq on the roots.
+        use crate::hash::map::GenericHashMap;
+        use crate::shared_ptr::DefaultSharedPtr;
+        use crate::test::LolHasher;
+        use core::hash::BuildHasherDefault;
+
+        type DetMap<K, V> =
+            GenericHashMap<K, V, BuildHasherDefault<LolHasher>, DefaultSharedPtr>;
+
+        let mut pool = InternPool::new();
+
+        // Build two maps independently — no shared pointers between them
+        let mut map1: DetMap<i32, i32> = (0..200).map(|i| (i, i * 3)).collect();
+        let mut map2: DetMap<i32, i32> = (0..200).map(|i| (i, i * 3)).collect();
+
+        // Sanity: they are equal but do NOT share root pointers
+        assert_eq!(map1, map2);
+        assert!(!map1.ptr_eq(&map2));
+
+        map1.intern(&mut pool);
+        map2.intern(&mut pool);
+
+        // After interning, roots should be pointer-equal
+        assert!(
+            map1.ptr_eq(&map2),
+            "independently built identical maps should share root after interning"
+        );
+        assert!(pool.stats().hits > 0);
+    }
+
+    #[test]
+    fn cow_correctness_after_interning() {
+        // Mutating an interned map must not corrupt the sibling
+        // that shares nodes via the pool.
+        let mut pool = InternPool::new();
+        let base: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+        let mut map1 = base.clone();
+        let mut map2 = base.clone();
+
+        map1.intern(&mut pool);
+        map2.intern(&mut pool);
+
+        // Mutate map1 — COW should clone the affected path
+        map1.insert(50, 9999);
+        map1.remove(&0);
+
+        // map2 must be unaffected
+        assert_eq!(map2.get(&50), Some(&50));
+        assert_eq!(map2.get(&0), Some(&0));
+        assert_eq!(map2.len(), 100);
+
+        // map1 reflects the mutations
+        assert_eq!(map1.get(&50), Some(&9999));
+        assert_eq!(map1.get(&0), None);
+        assert_eq!(map1.len(), 99);
+    }
+
+    #[test]
+    fn re_intern_after_mutation() {
+        // Intern, mutate, re-intern. Unchanged subtrees should hit;
+        // the mutated path should be new misses.
+        let mut pool = InternPool::new();
+        let mut map: HashMap<i32, i32> = (0..200).map(|i| (i, i)).collect();
+        map.intern(&mut pool);
+
+        let misses_before = pool.stats().misses;
+        let hits_before = pool.stats().hits;
+
+        // Mutate one key — only the path to that key changes
+        map.insert(42, 9999);
+        map.intern(&mut pool);
+
+        // Unchanged subtrees produce more hits
+        assert!(
+            pool.stats().hits > hits_before,
+            "unchanged subtrees should hit on re-intern"
+        );
+        // The mutated path produces new misses
+        assert!(
+            pool.stats().misses > misses_before,
+            "mutated path should produce new misses"
+        );
+    }
+
+    #[test]
+    fn purge_cascading_eviction() {
+        // A HAMT parent references HAMT children in the pool. Dropping
+        // the map leaves all at strong_count==1, but single-pass purge
+        // would visit children before parents (HashMap iteration order
+        // is arbitrary) — seeing refcount > 1 because the parent still
+        // holds a reference. The multi-pass fix handles this.
+        let mut pool = InternPool::new();
+
+        // Build a large enough map to have multi-level HAMT nodes
+        {
+            let mut map: HashMap<i32, i32> = (0..1000).map(|i| (i, i)).collect();
+            map.intern(&mut pool);
+        }
+        // map is dropped — only pool holds references
+        let before = pool.len();
+        assert!(before > 0);
+
+        pool.purge();
+
+        // Every node should be evicted — nothing else references them
+        assert_eq!(
+            pool.len(),
+            0,
+            "cascading purge should evict all {} nodes",
+            before
+        );
+        assert_eq!(pool.stats().evictions as usize, before);
+    }
+
+    #[test]
+    fn collision_node_interning() {
+        // Force HAMT hash collisions using LolHasher<5> (5-bit hashes).
+        // Keys with the same 5-bit hash land in CollisionNode entries.
+        // These should be internable too.
+        use crate::hash::map::GenericHashMap;
+        use crate::shared_ptr::DefaultSharedPtr;
+        use crate::test::LolHasher;
+        use core::hash::BuildHasherDefault;
+
+        type NarrowMap<K, V> =
+            GenericHashMap<K, V, BuildHasherDefault<LolHasher<5>>, DefaultSharedPtr>;
+
+        let mut pool = InternPool::new();
+
+        // Keys 0, 32, 64 all hash to 0 with LolHasher<5>
+        let mut map1: NarrowMap<i32, i32> = NarrowMap::default();
+        map1.insert(0, 100);
+        map1.insert(32, 200);
+        map1.insert(64, 300);
+
+        let mut map2 = map1.clone();
+
+        // Modify map2 at a non-colliding key so the collision subtree stays
+        map2.insert(1, 999);
+
+        map1.intern(&mut pool);
+        map2.intern(&mut pool);
+
+        // The collision node (keys 0, 32, 64) should be shared
+        assert!(pool.len() > 0);
+        assert!(
+            pool.stats().hits > 0,
+            "collision node should be deduplicated"
+        );
+    }
+
+    #[test]
+    fn stats_accuracy() {
+        let mut pool = InternPool::new();
+        assert_eq!(pool.stats().hits, 0);
+        assert_eq!(pool.stats().misses, 0);
+        assert_eq!(pool.stats().evictions, 0);
+
+        // First map — every node is a miss
+        let mut map1: HashMap<i32, i32> = (0..50).map(|i| (i, i)).collect();
+        map1.intern(&mut pool);
+
+        let first_misses = pool.stats().misses;
+        assert!(first_misses > 0);
+        assert_eq!(pool.stats().hits, 0, "first intern should have zero hits");
+        assert_eq!(pool.len() as u64, first_misses);
+
+        // Clone + intern — every node should hit
+        let mut map2 = map1.clone();
+        map2.intern(&mut pool);
+
+        assert_eq!(
+            pool.stats().hits,
+            first_misses,
+            "cloned map should hit every node exactly once"
+        );
+        // Pool size unchanged — no new entries
+        assert_eq!(pool.len() as u64, first_misses);
+
+        // Drop both maps, purge
+        drop(map1);
+        drop(map2);
+        pool.purge();
+        assert_eq!(pool.stats().evictions, first_misses);
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn intern_idempotent() {
+        // Interning the same map twice should hit everything the second time
+        let mut pool = InternPool::new();
+        let mut map: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+
+        map.intern(&mut pool);
+        let after_first = pool.stats().misses;
+
+        map.intern(&mut pool);
+        // Second intern: every node already in pool → all hits
+        assert_eq!(
+            pool.stats().hits, after_first,
+            "re-interning same map should hit every node"
+        );
+        // No new misses
+        assert_eq!(pool.stats().misses, after_first);
+    }
+
+    #[test]
+    fn many_overlapping_maps() {
+        // Intern many maps that share a common prefix. Pool size should
+        // grow sub-linearly compared to total node count.
+        let mut pool = InternPool::new();
+        let base: HashMap<i32, i32> = (0..500).map(|i| (i, i)).collect();
+
+        let mut maps: Vec<HashMap<i32, i32>> = Vec::new();
+        for i in 0..20 {
+            let mut m = base.clone();
+            m.insert(1000 + i, i);
+            maps.push(m);
+        }
+
+        for m in &mut maps {
+            m.intern(&mut pool);
+        }
+
+        // Most nodes are shared — hits should vastly outnumber misses
+        assert!(
+            pool.stats().hits > pool.stats().misses * 5,
+            "20 overlapping maps: hits={} should vastly exceed misses={}",
+            pool.stats().hits,
+            pool.stats().misses
+        );
+    }
+
+    #[test]
     fn default_pool() {
         let pool: InternPool<(i32, i32)> = InternPool::default();
         assert!(pool.is_empty());
