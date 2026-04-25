@@ -847,6 +847,40 @@ impl<A, P: SharedPointerKind, H: HashWidth> Entry<A, P, H> {
     }
 }
 
+#[cfg(feature = "hash-intern")]
+impl<A: Clone + PartialEq, P: SharedPointerKind, H: HashWidth> Entry<A, P, H> {
+    /// Recursively intern this entry's child nodes bottom-up. Children
+    /// are interned before parents so that parent equality checks can
+    /// use `ptr_eq` on interned children.
+    pub(crate) fn intern(&mut self, pool: &mut crate::intern::InternPool<A, P, H>) {
+        match self {
+            Entry::HamtNode(node_ptr) => {
+                // First, intern children recursively
+                let node = SharedPointer::make_mut(node_ptr);
+                for entry in node.data.iter_mut() {
+                    entry.intern(pool);
+                }
+                // Then intern this node itself
+                *node_ptr = pool.intern_hamt(node_ptr.clone());
+            }
+            Entry::SmallSimdNode(node_ptr) => {
+                // Leaf-only node — no children to recurse into
+                *node_ptr = pool.intern_small(node_ptr.clone());
+            }
+            Entry::LargeSimdNode(node_ptr) => {
+                // Leaf-only node — no children to recurse into
+                *node_ptr = pool.intern_large(node_ptr.clone());
+            }
+            Entry::Collision(node_ptr) => {
+                *node_ptr = pool.intern_collision(node_ptr.clone());
+            }
+            Entry::Value(_, _) => {
+                // Leaf values are not interned — they are stored inline
+            }
+        }
+    }
+}
+
 impl<A, P: SharedPointerKind, H: HashWidth> From<CollisionNode<A, H>> for Entry<A, P, H> {
     fn from(node: CollisionNode<A, H>) -> Self {
         Entry::Collision(SharedPointer::new(node))

@@ -39,6 +39,7 @@ small-chunks = []
 triomphe = ["archery/triomphe"]
 atom = ["dep:arc-swap", "std"]
 foldhash = ["dep:foldhash"]
+hash-intern = ["std"]
 
 [dependencies]
 bitmaps = { version = "3", default-features = false }

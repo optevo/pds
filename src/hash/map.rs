@@ -2477,6 +2477,51 @@ where
     }
 }
 
+#[cfg(feature = "hash-intern")]
+impl<K, V, S, P, H: HashWidth> GenericHashMap<K, V, S, P, H>
+where
+    K: Clone + PartialEq,
+    V: Clone + PartialEq,
+    P: SharedPointerKind,
+{
+    /// Intern the internal HAMT nodes of this map into the given pool.
+    ///
+    /// Nodes with identical content (same Merkle hash + structural
+    /// equality) are deduplicated: after interning, shared subtrees
+    /// across different maps point to the same allocation. This reduces
+    /// memory and enables O(1) `ptr_eq` checks during diff and equality.
+    ///
+    /// Interning is bottom-up: children are interned before parents, so
+    /// parent equality checks can use `ptr_eq` on already-interned
+    /// children.
+    ///
+    /// Mutation after interning works normally — `make_mut` clones the
+    /// shared node (standard COW semantics).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # #[cfg(feature = "hash-intern")]
+    /// # {
+    /// use pds::HashMap;
+    /// use pds::intern::InternPool;
+    ///
+    /// let mut pool = InternPool::new();
+    /// let mut map: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+    /// map.intern(&mut pool);
+    /// # }
+    /// ```
+    pub fn intern(&mut self, pool: &mut crate::intern::InternPool<(K, V), P, H>) {
+        if let Some(root) = &mut self.root {
+            let node = SharedPointer::make_mut(root);
+            for entry in node.data.iter_mut() {
+                entry.intern(pool);
+            }
+            *root = pool.intern_hamt(root.clone());
+        }
+    }
+}
+
 impl<K, V, S1, S2, P1, P2, H: HashWidth> PartialEq<GenericHashMap<K, V, S2, P2, H>> for GenericHashMap<K, V, S1, P1, H>
 where
     K: Hash + Eq,

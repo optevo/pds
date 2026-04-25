@@ -404,6 +404,9 @@ pub mod shared_ptr;
 #[cfg(feature = "atom")]
 pub mod atom;
 
+#[cfg(feature = "hash-intern")]
+pub mod intern;
+
 pub mod hash_multimap;
 pub mod insertion_order_map;
 pub mod bag;

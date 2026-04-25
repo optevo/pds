@@ -148,7 +148,11 @@ pub struct GenericHashSet<A, S, P: SharedPointerKind, H: HashWidth = u64> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub(crate) struct Value<A>(pub(crate) A);
+/// Internal wrapper for hash set elements. This type is an
+/// implementation detail used by [`HashSetInternPool`](crate::intern::HashSetInternPool)
+/// — prefer the type alias over naming this type directly.
+#[doc(hidden)]
+pub struct Value<A>(pub(crate) A);
 
 impl<A> Deref for Value<A> {
     type Target = A;
@@ -860,6 +864,40 @@ where
             hasher_id: self.hasher_id,
             root: self.root.clone(),
             size: self.size,
+        }
+    }
+}
+
+#[cfg(feature = "hash-intern")]
+impl<A, S, P, H: HashWidth> GenericHashSet<A, S, P, H>
+where
+    A: Clone + PartialEq,
+    P: SharedPointerKind,
+{
+    /// Intern the internal HAMT nodes of this set into the given pool.
+    ///
+    /// See [`GenericHashMap::intern`] for details on how interning works.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # #[cfg(feature = "hash-intern")]
+    /// # {
+    /// use pds::HashSet;
+    /// use pds::intern::HashSetInternPool;
+    ///
+    /// let mut pool = HashSetInternPool::new();
+    /// let mut set: HashSet<i32> = (0..100).collect();
+    /// set.intern(&mut pool);
+    /// # }
+    /// ```
+    pub fn intern(&mut self, pool: &mut crate::intern::HashSetInternPool<A, P, H>) {
+        if let Some(root) = &mut self.root {
+            let node = SharedPointer::make_mut(root);
+            for entry in node.data.iter_mut() {
+                entry.intern(pool);
+            }
+            *root = pool.intern_hamt(root.clone());
         }
     }
 }
