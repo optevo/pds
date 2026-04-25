@@ -61,8 +61,8 @@ pub struct GenericBiMap<
     P: SharedPointerKind = DefaultSharedPtr,
     H: HashWidth = u64,
 > {
-    forward: GenericHashMap<K, V, S, P, H>,
-    backward: GenericHashMap<V, K, S, P, H>,
+    pub(crate) forward: GenericHashMap<K, V, S, P, H>,
+    pub(crate) backward: GenericHashMap<V, K, S, P, H>,
 }
 
 // Manual Clone — avoid derive's spurious `P: Clone` bound.

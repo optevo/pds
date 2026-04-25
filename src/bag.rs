@@ -51,8 +51,8 @@ pub type Bag<A> = GenericBag<A, foldhash::fast::RandomState, DefaultSharedPtr>;
 /// Tracks the count of each distinct element. Clone is O(1) via
 /// structural sharing.
 pub struct GenericBag<A, S, P: SharedPointerKind = DefaultSharedPtr> {
-    map: GenericHashMap<A, usize, S, P>,
-    total: usize,
+    pub(crate) map: GenericHashMap<A, usize, S, P>,
+    pub(crate) total: usize,
 }
 
 // Manual Clone to avoid derive's spurious `P: Clone` bound.

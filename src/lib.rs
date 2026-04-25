@@ -367,6 +367,7 @@ mod util;
 
 mod config;
 pub mod hash_width;
+pub mod identity_hasher;
 mod nodes;
 mod sort;
 mod sync;

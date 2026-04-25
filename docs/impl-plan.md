@@ -57,6 +57,18 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] 4.7 Stage 3: Identity hasher.** `IdentityHasher` +
+  `IdentityBuildHasher` in `src/identity_hasher.rs`. All integer `write_*`
+  methods specialised; XOR-fold fallback for bytes. Zero-sized `Copy`
+  `BuildHasher`. 10 tests.
+
+- **[2026-04-25] 6.6 extension: SSP serialisation (remaining 7 types).**
+  `HashSetPool` (dedicated HAMT collector), `BagPool` (delegates to
+  `HashMapPool<A, usize>`), `BiMapPool` (pools forward map only),
+  `SymMapPool` (pools forward map only), `HashMultiMapPool` (flat pairs),
+  `InsertionOrderMapPool` (ordered pairs), `TriePool` (flat path pairs).
+  19 tests total.
+
 - **[2026-04-25] 3.4: Parallel bulk ops.** `par_union`,
   `par_intersection`, `par_relative_complement`,
   `par_symmetric_difference` for HashMap and HashSet. Filter-map +
@@ -2230,16 +2242,16 @@ Open items not yet completed or killed. All prerequisites met.
 
 ---
 
-### 4.7 Stage 3: Identity hasher
+### 4.7 Stage 3: Identity hasher — DONE
 
-**What:** ~50-line `IdentityHasher` that passes key bytes directly as the
-hash value. For u64/u128 keys that are already well-distributed (UUIDs,
-content hashes), eliminates hash computation entirely.
+**What:** `IdentityHasher` and `IdentityBuildHasher` in `src/identity_hasher.rs`.
+Passes key bits directly as the hash value for integer keys.
 
-**Status:** Stages 1 (u64 hash width) and 2 (HashWidth trait) are done.
-Stage 3 is independent and trivial.
-
-**Complexity:** Low (~50 lines).
+**Status:** DONE [2026-04-25]. `IdentityHasher` with specialised `write_*` methods
+for all integer types (u8–u128, usize, all signed variants). XOR-fold fallback for
+byte slices. `IdentityBuildHasher` is zero-sized and `Copy`. 10 tests covering
+identity property, map/set integration at 1000 entries. Exposed as
+`pds::identity_hasher::{IdentityHasher, IdentityBuildHasher}`.
 
 **Dependencies:** None (4.7 stages 1+2 done).
 
@@ -2267,21 +2279,29 @@ DEC-017), branch-free intra-node search, bulk operations.
 
 ---
 
-### 6.6 extension: SSP serialisation for remaining types — MOSTLY DONE
+### 6.6 extension: SSP serialisation for remaining types — DONE
 
-**What:** Extend pool-based serialisation from HashMap to other types.
+**What:** Extend pool-based serialisation from HashMap to all 11 collection types.
 
-**Status:** OrdMap, OrdSet, and Vector done. Remaining 8 types (Bag,
-HashMultiMap, InsertionOrderMap, BiMap, SymMap, Trie, HashSet) not yet
-done but can delegate to their underlying HashMap/OrdMap pools.
+**Status:** DONE [2026-04-25]. All 11 types covered:
 
-Implemented:
-- `OrdMapPool<K, V>` — full B+ tree node-level pooling. Branch and
-  leaf nodes deduplicated by pointer address. 5 tests.
-- `OrdSetPool<A>` — type alias for `OrdMapPool<A, ()>` with
-  `from_sets`/`to_sets` convenience methods. 2 tests.
-- `VectorPool<A>` — flat element-level serialisation (RRB node-level
-  pooling deferred, requires making internal fields `pub(crate)`). 4 tests.
+Deep HAMT pooling (full SSP — shared nodes deduplicated by pointer address):
+- `HashSetPool<A, H>` — dedicated pool collector for `HamtNode<Value<A>>`,
+  unwraps `Value` wrapper. 4 tests.
+- `BagPool<A>` — delegates to `HashMapPool<A, usize>` via `bag.map`. 2 tests.
+- `BiMapPool<K, V, H>` — pools forward `HashMap<K, V>`, rebuilds backward
+  map on deserialisation. 2 tests.
+- `SymMapPool<A, H>` — pools forward `HashMap<A, A>`, rebuilds backward
+  map on deserialisation. 2 tests.
+
+Flat serialisation (correct, compact; no deep HAMT pooling):
+- `HashMultiMapPool<K, V>` — flat `(K, V)` pairs per container. 2 tests.
+- `InsertionOrderMapPool<K, V>` — ordered `(K, V)` pairs; insertion order
+  preserved, internal indices compacted to 0…n on deserialisation. 2 tests.
+- `TriePool<K, V>` — flat `(Vec<K>, V)` path pairs per container. 3 tests.
+
+Previously done: `OrdMapPool<K, V>`, `OrdSetPool<A>`, `VectorPool<A>`,
+`HashMapPool<K, V, H>`.
 
 **Dependencies:** 6.6 ✓ (HashMap implementation as template).
 

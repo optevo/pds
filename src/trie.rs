@@ -56,8 +56,8 @@ pub type Trie<K, V> = GenericTrie<K, V, foldhash::fast::RandomState, DefaultShar
 /// where *n* is the fanout at each level. For typical use cases (shallow
 /// tries with moderate fanout), this is effectively O(d).
 pub struct GenericTrie<K, V, S, P: SharedPointerKind = DefaultSharedPtr> {
-    value: Option<V>,
-    children: GenericHashMap<K, GenericTrie<K, V, S, P>, S, P>,
+    pub(crate) value: Option<V>,
+    pub(crate) children: GenericHashMap<K, GenericTrie<K, V, S, P>, S, P>,
 }
 
 // Manual Clone to avoid derive's spurious bounds.

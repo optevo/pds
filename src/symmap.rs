@@ -68,8 +68,8 @@ pub struct GenericSymMap<
     P: SharedPointerKind = DefaultSharedPtr,
     H: HashWidth = u64,
 > {
-    forward: GenericHashMap<A, A, S, P, H>,
-    backward: GenericHashMap<A, A, S, P, H>,
+    pub(crate) forward: GenericHashMap<A, A, S, P, H>,
+    pub(crate) backward: GenericHashMap<A, A, S, P, H>,
 }
 
 // Manual Clone — avoid derive's spurious `P: Clone` bound.
