@@ -461,14 +461,13 @@ items killed (6.3, 6.7, and 6.2 by inheritance), one deprioritised (6.1).
    H parameter added to GenericHashMap, GenericHashSet,
    GenericHashMultiMap, GenericInsertionOrderMap, serde impls, and
    all HAMT node types. Rayon uses u64 default (u128 rayon deferred).
-4. [ ] 6.9 Persistent trie — start as derived structure wrapping HashMap
-   (keys = path segments). Specialise only if profiling shows need.
-5. [ ] 4.6 Vector Merkle hash caching — lazy evaluation: compute on
-   equality check, cache on node, invalidate on mutation. Avoids
-   per-insert overhead that makes eager caching questionable.
-6. [ ] Probabilistic equality (`probably_eq()`) — Merkle match + size
-   match + first/middle/last element sampling. False positive rate ~2^-64.
-   Separate API from `PartialEq` (which must be deterministic).
+4. [x] 6.9 Persistent trie — **DONE.** Derived structure wrapping HashMap.
+5. [x] 4.6 Vector Merkle hash caching — **DONE** (DEC-022). Lazy per-node
+   Merkle with O(k log n) recomputation. Positive equality in PartialEq.
+6. ~~Probabilistic equality (`probably_eq()`)~~ — **KILLED.** Already
+   implemented in `PartialEq::eq()` for all three types (HashMap, HashSet,
+   Vector). Merkle positive equality with 2^-64 false positive rate is
+   below hardware error rates — meets the `eq()` contract directly.
 5. [x] Test coverage gaps — **DONE.** ord/set.rs 58%→96%, ord/map.rs
    72%→95%, hash/set.rs 72%→92%. Crate total 90.1% lines. Demotion
    edge cases covered via LolHasher tests in hash/map.rs.
