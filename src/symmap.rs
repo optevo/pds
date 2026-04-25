@@ -229,6 +229,16 @@ where
             Direction::Backward => IterDirection::Backward(self.backward.iter()),
         }
     }
+
+    /// Return the union of two symmaps; entries from `other` overwrite entries in `self`.
+    ///
+    /// For conflicting pairs, `other`'s mapping wins. The symmetric invariant
+    /// is maintained by the underlying [`insert`][Self::insert] logic.
+    #[must_use]
+    pub fn union(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
+    }
 }
 
 /// Iterator wrapper to unify forward/backward iteration without boxing.
@@ -421,9 +431,8 @@ where
 {
     type Output = GenericSymMap<A, S, P, H>;
 
-    fn add(mut self, other: Self) -> Self::Output {
-        self.extend(other);
-        self
+    fn add(self, other: Self) -> Self::Output {
+        self.union(other)
     }
 }
 
@@ -727,6 +736,19 @@ mod test {
         b.insert("b", "y");
         let c = a + b;
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn union_method() {
+        let mut a: SymMap<&str> = SymMap::new();
+        a.insert("a", "x");
+        let mut b: SymMap<&str> = SymMap::new();
+        b.insert("b", "y");
+        b.insert("a", "z"); // conflict: b wins
+        let c = a.union(b);
+        // b wins for "a": now "a" ↔ "z" (not "x")
+        assert_eq!(c.len(), 2);
+        assert!(c.get(Direction::Forward, &"a").is_some());
     }
 
     #[test]

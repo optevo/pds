@@ -317,6 +317,31 @@ where
         let subtrie = self.subtrie(prefix)?;
         Some(subtrie.iter())
     }
+
+    /// Return the union of two tries; when a path exists in both, `other`'s value wins.
+    #[must_use]
+    pub fn union(mut self, other: Self) -> Self {
+        for (path, value) in other {
+            self.insert(&path, value);
+        }
+        self
+    }
+
+    /// Return entries whose paths are in `self` but not in `other`.
+    #[must_use]
+    pub fn relative_complement(self, other: &Self) -> Self {
+        self.into_iter()
+            .filter(|(path, _)| !other.contains_path(path))
+            .collect()
+    }
+
+    /// Return entries whose paths are in both `self` and `other`; `self`'s values are kept.
+    #[must_use]
+    pub fn intersection(self, other: &Self) -> Self {
+        self.into_iter()
+            .filter(|(path, _)| other.contains_path(path))
+            .collect()
+    }
 }
 
 #[cfg(feature = "std")]
@@ -518,11 +543,7 @@ where
 
     /// Union two tries. When a path exists in both, the right operand's value wins.
     fn add(self, other: Self) -> Self {
-        let mut result = self;
-        for (path, value) in other {
-            result.insert(&path, value);
-        }
-        result
+        self.union(other)
     }
 }
 
@@ -934,6 +955,44 @@ mod test {
         b.insert(&["b"], 2);
         let c = &a + &b;
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn union_method() {
+        let mut a: Trie<&str, i32> = Trie::new();
+        a.insert(&["x"], 1);
+        let mut b: Trie<&str, i32> = Trie::new();
+        b.insert(&["y"], 2);
+        b.insert(&["x"], 99); // conflict — b wins
+        let c = a.union(b);
+        assert_eq!(c.get(&["x"]), Some(&99));
+        assert_eq!(c.get(&["y"]), Some(&2));
+    }
+
+    #[test]
+    fn relative_complement() {
+        let mut a: Trie<&str, i32> = Trie::new();
+        a.insert(&["x"], 1);
+        a.insert(&["y"], 2);
+        let mut b: Trie<&str, i32> = Trie::new();
+        b.insert(&["y"], 99);
+        let c = a.relative_complement(&b);
+        assert_eq!(c.get(&["x"]), Some(&1));
+        assert!(c.get(&["y"]).is_none());
+    }
+
+    #[test]
+    fn intersection_method() {
+        let mut a: Trie<&str, i32> = Trie::new();
+        a.insert(&["x"], 1);
+        a.insert(&["y"], 2);
+        let mut b: Trie<&str, i32> = Trie::new();
+        b.insert(&["y"], 99);
+        b.insert(&["z"], 3);
+        let c = a.intersection(&b);
+        assert_eq!(c.get(&["y"]), Some(&2)); // self's value is kept
+        assert!(c.get(&["x"]).is_none());
+        assert!(c.get(&["z"]).is_none());
     }
 
     #[test]

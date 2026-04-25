@@ -253,6 +253,27 @@ where
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         self.map.keys()
     }
+
+    /// Return the union of two multimaps; all key-value pairs from both are merged.
+    ///
+    /// For a key present in both, the resulting value-set is the union of both value-sets.
+    #[must_use]
+    pub fn union(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
+    }
+
+    /// Return entries whose keys are in `self` but not in `other`.
+    #[must_use]
+    pub fn relative_complement(self, other: &Self) -> Self {
+        self.into_iter().filter(|(k, _)| !other.contains_key(k)).collect()
+    }
+
+    /// Return entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    #[must_use]
+    pub fn intersection(self, other: &Self) -> Self {
+        self.into_iter().filter(|(k, _)| other.contains_key(k)).collect()
+    }
 }
 
 impl<K, V, S, P, H: HashWidth> Default for GenericHashMultiMap<K, V, S, P, H>
@@ -425,9 +446,8 @@ where
 {
     type Output = GenericHashMultiMap<K, V, S, P, H>;
 
-    fn add(mut self, other: Self) -> Self::Output {
-        self.extend(other);
-        self
+    fn add(self, other: Self) -> Self::Output {
+        self.union(other)
     }
 }
 
@@ -802,6 +822,40 @@ mod test {
         b.insert(2, 20);
         let c = &a + &b;
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn union_method() {
+        let mut a = HashMultiMap::new();
+        a.insert(1, "x");
+        let mut b = HashMultiMap::new();
+        b.insert(1, "y"); b.insert(2, "z");
+        let c = a.union(b);
+        assert_eq!(c.key_count(&1), 2); // both values for key 1
+        assert_eq!(c.key_count(&2), 1);
+    }
+
+    #[test]
+    fn relative_complement() {
+        let mut a = HashMultiMap::new();
+        a.insert(1, "x"); a.insert(2, "y");
+        let mut b = HashMultiMap::new();
+        b.insert(2, "z");
+        let c = a.relative_complement(&b);
+        assert!(c.contains_key(&1));
+        assert!(!c.contains_key(&2));
+    }
+
+    #[test]
+    fn intersection_method() {
+        let mut a = HashMultiMap::new();
+        a.insert(1, "x"); a.insert(2, "y");
+        let mut b = HashMultiMap::new();
+        b.insert(2, "z"); b.insert(3, "w");
+        let c = a.intersection(&b);
+        assert!(!c.contains_key(&1));
+        assert!(c.contains_key(&2));
+        assert!(c.contains(&2, &"y")); // self's value is kept
     }
 
     #[test]

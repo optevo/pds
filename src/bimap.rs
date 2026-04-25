@@ -238,6 +238,16 @@ where
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.forward.values()
     }
+
+    /// Return the union of two bimaps; entries from `other` overwrite entries in `self`.
+    ///
+    /// For conflicting keys or values, `other`'s mapping wins. The bijection
+    /// invariant is maintained by the underlying [`insert`][Self::insert] logic.
+    #[must_use]
+    pub fn union(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
+    }
 }
 
 impl<K, V, S, P, H: HashWidth> Default for GenericBiMap<K, V, S, P, H>
@@ -412,9 +422,8 @@ where
 {
     type Output = GenericBiMap<K, V, S, P, H>;
 
-    fn add(mut self, other: Self) -> Self::Output {
-        self.extend(other);
-        self
+    fn add(self, other: Self) -> Self::Output {
+        self.union(other)
     }
 }
 
@@ -722,6 +731,19 @@ mod test {
         b.insert("b", 2);
         let c = a + b;
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn union_method() {
+        let mut a = BiMap::new();
+        a.insert("a", 1);
+        a.insert("b", 2);
+        let mut b = BiMap::new();
+        b.insert("b", 99); // conflict: b wins
+        b.insert("c", 3);
+        let c = a.union(b);
+        assert_eq!(c.len(), 3);
+        assert_eq!(c.get_by_key(&"b"), Some(&99));
     }
 
     #[test]

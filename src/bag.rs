@@ -221,12 +221,12 @@ where
         }
     }
 
-    /// Return the multiset sum (union with added multiplicities).
+    /// Return the multiset union (sum of multiplicities).
     ///
     /// For each element, the result count is the sum of counts in
     /// both bags.
     #[must_use]
-    pub fn sum(&self, other: &Self) -> Self {
+    pub fn union(&self, other: &Self) -> Self {
         let mut result = self.clone();
         for (k, &count) in other.map.iter() {
             let prev = result.count(k);
@@ -262,12 +262,12 @@ where
         result
     }
 
-    /// Return the multiset difference.
+    /// Return the multiset relative complement (`self` minus `other`).
     ///
     /// For each element, the result count is `self.count - other.count`,
     /// clamped to zero.
     #[must_use]
-    pub fn difference(&self, other: &Self) -> Self
+    pub fn relative_complement(&self, other: &Self) -> Self
     where
         S: Default,
     {
@@ -438,7 +438,7 @@ where
     type Output = GenericBag<A, S, P>;
 
     fn add(self, other: Self) -> Self::Output {
-        self.sum(&other)
+        self.union(&other)
     }
 }
 
@@ -451,7 +451,7 @@ where
     type Output = GenericBag<A, S, P>;
 
     fn add(self, other: Self) -> Self::Output {
-        self.sum(other)
+        self.union(other)
     }
 }
 
@@ -636,7 +636,7 @@ mod test {
     }
 
     #[test]
-    fn sum_bags() {
+    fn union_bags() {
         let mut a = Bag::new();
         a.insert_many("x", 2);
         a.insert("y");
@@ -645,7 +645,7 @@ mod test {
         b.insert_many("x", 3);
         b.insert("z");
 
-        let c = a.sum(&b);
+        let c = a.union(&b);
         assert_eq!(c.count(&"x"), 5);
         assert_eq!(c.count(&"y"), 1);
         assert_eq!(c.count(&"z"), 1);
@@ -670,7 +670,7 @@ mod test {
     }
 
     #[test]
-    fn difference_bags() {
+    fn relative_complement_bags() {
         let mut a = Bag::new();
         a.insert_many("x", 5);
         a.insert_many("y", 2);
@@ -679,7 +679,7 @@ mod test {
         b.insert_many("x", 3);
         b.insert_many("y", 10);
 
-        let c = a.difference(&b);
+        let c = a.relative_complement(&b);
         assert_eq!(c.count(&"x"), 2);
         assert_eq!(c.count(&"y"), 0);
         assert_eq!(c.total_count(), 2);

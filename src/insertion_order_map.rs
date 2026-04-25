@@ -212,6 +212,16 @@ where
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.entries.iter().map(|(_, (_, v))| v)
     }
+
+    /// Return the union of two maps; entries from `other` overwrite entries in `self`.
+    ///
+    /// For conflicting keys, `other`'s value wins. New keys from `other` are
+    /// appended in `other`'s insertion order after all of `self`'s keys.
+    #[must_use]
+    pub fn union(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
+    }
 }
 
 impl<K, V, S, P, H: HashWidth> Default for GenericInsertionOrderMap<K, V, S, P, H>
@@ -390,6 +400,26 @@ where
     }
 }
 
+impl<K, V, S, P, H: HashWidth> GenericInsertionOrderMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    /// Return entries whose keys are in `self` but not in `other`.
+    #[must_use]
+    pub fn relative_complement(self, other: &Self) -> Self {
+        self.into_iter().filter(|(k, _)| !other.contains_key(k)).collect()
+    }
+
+    /// Return entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    #[must_use]
+    pub fn intersection(self, other: &Self) -> Self {
+        self.into_iter().filter(|(k, _)| other.contains_key(k)).collect()
+    }
+}
+
 impl<K, V, S, P, H: HashWidth> Add for GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
@@ -399,9 +429,8 @@ where
 {
     type Output = GenericInsertionOrderMap<K, V, S, P, H>;
 
-    fn add(mut self, other: Self) -> Self::Output {
-        self.extend(other);
-        self
+    fn add(self, other: Self) -> Self::Output {
+        self.union(other)
     }
 }
 
@@ -761,6 +790,50 @@ mod test {
         b.insert("y", 2);
         let c = &a + &b;
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn union_method() {
+        let mut a = InsertionOrderMap::new();
+        a.insert("x", 1i32);
+        a.insert("y", 2);
+        let mut b = InsertionOrderMap::new();
+        b.insert("y", 99); // conflict: b wins
+        b.insert("z", 3);
+        let c = a.union(b);
+        assert_eq!(c.get("x"), Some(&1));
+        assert_eq!(c.get("y"), Some(&99));
+        assert_eq!(c.get("z"), Some(&3));
+    }
+
+    #[test]
+    fn relative_complement() {
+        let mut a = InsertionOrderMap::new();
+        a.insert("x", 1i32);
+        a.insert("y", 2);
+        a.insert("z", 3);
+        let mut b = InsertionOrderMap::new();
+        b.insert("y", 99);
+        let c = a.relative_complement(&b);
+        assert_eq!(c.len(), 2);
+        assert!(c.contains_key("x"));
+        assert!(!c.contains_key("y"));
+        assert!(c.contains_key("z"));
+    }
+
+    #[test]
+    fn intersection_method() {
+        let mut a = InsertionOrderMap::new();
+        a.insert("x", 1i32);
+        a.insert("y", 2);
+        let mut b = InsertionOrderMap::new();
+        b.insert("y", 99);
+        b.insert("z", 3);
+        let c = a.intersection(&b);
+        assert_eq!(c.len(), 1);
+        assert!(c.contains_key("y"));
+        assert_eq!(c.get("y"), Some(&2)); // self's value is kept
+        assert!(!c.contains_key("x"));
     }
 
     #[test]
