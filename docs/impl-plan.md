@@ -455,11 +455,12 @@ items killed (6.3, 6.7, and 6.2 by inheritance), one deprioritised (6.1).
    partitioning + clone overhead negated tree-traversal savings. Gap is
    inherent to HAMT structure.
 2. [x] 4.7 Stage 1 — **DONE.** HashBits widened to u64. Performance
-   neutral at tested sizes. Stage 2 (configurable width via trait) next.
-3. [ ] 4.7 Stage 2 — Configurable hash width via `HashWidth` trait.
-   Default u64, support u128 for UUID/content-addressed keys. Breaking
-   change (adds type parameter to GenericHashMap). Large refactor (~80
-   impl blocks across 7 files).
+   neutral at tested sizes.
+3. [x] 4.7 Stage 2 — **DONE.** HashWidth trait threaded through all
+   hash-based types. Default u64, u128 available for wide tries.
+   H parameter added to GenericHashMap, GenericHashSet,
+   GenericHashMultiMap, GenericInsertionOrderMap, serde impls, and
+   all HAMT node types. Rayon uses u64 default (u128 rayon deferred).
 4. [ ] 6.9 Persistent trie — start as derived structure wrapping HashMap
    (keys = path segments). Specialise only if profiling shows need.
 5. [ ] 4.6 Vector Merkle hash caching — lazy evaluation: compute on
@@ -1779,25 +1780,33 @@ itself via collision reduction at large collection sizes?
   storage increase?
 - **Files:** `benches/hashmap.rs`
 
-#### Stage 2 design notes (breaking — v2.0.0)
+#### Stage 2 — DONE (2026-04-25)
 
-Abstract hash width behind a trait so users can choose u32/u64/u128:
+HashWidth trait implemented and threaded through the entire HAMT stack.
+The trait is defined in `src/hash_width.rs`:
 
 ```rust
-pub trait HashWidth: Copy + 'static {
-    type Bits: Copy + Eq + Hash + Default + Debug
-        + BitAnd<Output = Self::Bits>
-        + Shr<usize, Output = Self::Bits>
-        + From<u8>;
-    const WIDTH: usize;
-    fn from_u64(hash: u64) -> Self::Bits;
-    fn ctrl_hash(hash: Self::Bits) -> u8;
+pub trait HashWidth: Copy + Eq + Hash + Default + Debug + Send + Sync + 'static {
+    fn from_hash64(hash: u64) -> Self;
+    fn trie_index(&self, shift: usize) -> usize;
+    fn ctrl_byte(&self) -> u8;
+    fn ctrl_group(&self) -> u64;
+    fn to_u64(&self) -> u64;
 }
 ```
 
-Default impl for u64 (non-breaking path from stage 1). Wide impl for
-u128 (for UUID/content-addressed keys). This affects GenericHashMap's
-type signature — breaking change.
+Impls for u64 (12 levels, default) and u128 (25 levels, wide). The `H`
+parameter is added with `H: HashWidth = u64` default to:
+- `GenericHashMap<K, V, S, P, H>`, `GenericHashSet<A, S, P, H>`
+- `GenericHashMultiMap<K, V, S, P, H>`, `GenericInsertionOrderMap<K, V, S, P, H>`
+- All HAMT node types, entry types, iterator types
+- Serde Serialize/Deserialize impls
+
+Merkle hashing always uses u64 via `H::to_u64()`. Rayon parallel
+iterators use the u64 default (u128 rayon support deferred).
+
+Files touched: 9 (hash_width.rs new, hamt.rs, map.rs, set.rs, rayon.rs,
+hash_multimap.rs, insertion_order_map.rs, ser.rs, lib.rs).
 
 #### Stage 3: Identity hasher
 
@@ -1813,15 +1822,7 @@ impl BuildHasher for IdentityHasher {
 }
 ```
 
-Can land with either stage 1 or stage 2.
-
-**Complexity:**
-
-- Stage 1: Low-moderate. Mechanical: change type, update ~20 sites,
-  benchmark. Estimated ~40 lines changed.
-- Stage 2: Moderate. Requires threading an associated type through the
-  HAMT node hierarchy. Similar scope to SharedPointer generics.
-- Stage 3: Low. ~50 lines for the hasher implementation.
+**Complexity:** Low. ~50 lines for the hasher implementation.
 
 **Affects:** `HashMap<K, V>`, `HashSet<A>`.
 

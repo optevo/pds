@@ -1279,3 +1279,44 @@ from `lib.rs`, and removed the `-A deprecated` clippy allow from `test.sh`.
 **Consequences:**
 `cargo audit` is now clean. Users needing binary serialisation should use
 serde with any binary format crate (e.g. `postcard`, `bitcode`).
+
+## DEC-026: HashWidth trait design — value-level trait, not associated type {#sec:dec-026}
+
+**Date:** 2026-04-25
+**Status:** Accepted
+
+**Context:**
+4.7 Stage 2 requires abstracting hash width so users can choose between
+u64 (default, 12 trie levels) and u128 (wide, 25 trie levels). The impl
+plan's original sketch used an associated type (`type Bits`). The actual
+implementation uses a value-level trait where `H` itself is the hash value
+type (u64 or u128 implements HashWidth directly).
+
+**Decision:**
+`HashWidth` is implemented as a trait on the hash value type itself:
+```rust
+pub trait HashWidth: Copy + Eq + Hash + Default + Debug + Send + Sync + 'static {
+    fn from_hash64(hash: u64) -> Self;
+    fn trie_index(&self, shift: usize) -> usize;
+    fn ctrl_byte(&self) -> u8;
+    fn ctrl_group(&self) -> u64;
+    fn to_u64(&self) -> u64;
+}
+```
+Implemented for `u64` and `u128`. Generic parameter is `H: HashWidth = u64`
+on all hash-based types.
+
+**Alternatives considered:**
+- Associated type on trait (`type Bits`) — adds indirection, requires
+  `<W as HashWidth>::Bits` everywhere. The value-level approach is simpler:
+  `H` is both the trait bound and the concrete hash type.
+- Const generics for bit width — blocked by `generic_const_exprs` instability
+  (see DEC-011).
+
+**Consequences:**
+- All hash-based types gain an `H` parameter (breaking in v2.0.0 batch)
+- Existing code using `HashMap<K, V>` continues to work via `H = u64` default
+- Merkle hashing always uses u64 via `H::to_u64()` — Merkle equality is
+  hash-width-independent
+- Rayon parallel iterators are only implemented for `H = u64` (can be
+  generalised later if needed)
