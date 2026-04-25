@@ -36,6 +36,7 @@ use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
 
 use crate::config::{MERKLE_HASH_BITS, MERKLE_POSITIVE_EQ_MIN_BITS};
+use crate::hashmap::next_hasher_id;
 use crate::nodes::hamt::{
     hash_key, Drain as NodeDrain, Entry as NodeEntry, HashValue, Iter as NodeIter, Node,
     HASH_WIDTH,
@@ -138,17 +139,9 @@ pub type HashSet<A> = GenericHashSet<A, foldhash::fast::RandomState, DefaultShar
 /// [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html
 /// [std::collections::hash_map::RandomState]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
 pub struct GenericHashSet<A, S, P: SharedPointerKind> {
-    // The hasher is behind a SharedPointer so that cloning the set is a
-    // refcount bump rather than a real hasher clone.  This eliminates
-    // `S: Clone` from the entire public API.
-    //
-    // Performance note (benchmarked 2026-04-24): the extra pointer
-    // indirection on every `hash_key()` call adds ~1 ns of deref cost.
-    // This is measurable on i64 keys (3-5% regression) where the hash
-    // itself takes only ~2 ns, but is noise (<2%) for string keys and
-    // mutation-heavy workloads where hashing or tree operations dominate.
-    // See DEC-006 in docs/decisions.md.
-    pub(crate) hasher: SharedPointer<S, P>,
+    pub(crate) hasher: S,
+    /// Identifies the hasher lineage — see GenericHashMap::hasher_id.
+    pub(crate) hasher_id: u64,
     pub(crate) root: Option<SharedPointer<Node<Value<A>, P>, P>>,
     pub(crate) size: usize,
 }
@@ -183,7 +176,7 @@ where
 impl<A, S, P> GenericHashSet<A, S, P>
 where
     A: Hash + Eq + Clone,
-    S: BuildHasher + Default,
+    S: BuildHasher + Default + Clone,
     P: SharedPointerKind,
 {
     /// Construct a set with a single value.
@@ -277,7 +270,8 @@ impl<A, S, P: SharedPointerKind> GenericHashSet<A, S, P> {
         GenericHashSet {
             size: 0,
             root: None,
-            hasher: SharedPointer::new(hasher),
+            hasher,
+            hasher_id: next_hasher_id(),
         }
     }
 
@@ -295,11 +289,13 @@ impl<A, S, P: SharedPointerKind> GenericHashSet<A, S, P> {
     pub fn new_from<A2>(&self) -> GenericHashSet<A2, S, P>
     where
         A2: Hash + Eq + Clone,
+        S: Clone,
     {
         GenericHashSet {
             size: 0,
             root: None,
             hasher: self.hasher.clone(),
+            hasher_id: self.hasher_id,
         }
     }
 
@@ -372,9 +368,7 @@ where
                 // hardware error rates (~1e-15 per bit-hour for unprotected
                 // DRAM), so we treat Merkle match as equality — same reasoning
                 // as treating GUIDs as unique despite collision possibility.
-                let a_hasher = &*self.hasher as *const S as *const ();
-                let b_hasher = &*other.hasher as *const S2 as *const ();
-                if a_hasher == b_hasher {
+                if self.hasher_id == other.hasher_id {
                     // Negative check is always safe: different Merkle → not equal.
                     if a.merkle_hash != b.merkle_hash {
                         return false;
@@ -406,7 +400,7 @@ where
         Q: Hash + Equivalent<A> + ?Sized,
     {
         if let Some(root) = &self.root {
-            root.get(hash_key(&*self.hasher, value), 0, value).is_some()
+            root.get(hash_key(&self.hasher, value), 0, value).is_some()
         } else {
             false
         }
@@ -461,7 +455,7 @@ where
             match (&self.root, &other.root) {
                 (Some(old_root), Some(new_root)) => {
                     if !SharedPointer::ptr_eq(old_root, new_root) {
-                        if set_hashers_compatible(&*self.hasher, &*other.hasher) {
+                        if set_hashers_compatible(&self.hasher, &other.hasher) {
                             set_diff_hamt_nodes(old_root, new_root, &mut diffs);
                         } else {
                             set_diff_iterate_and_lookup(self, other, &mut diffs);
@@ -501,7 +495,7 @@ where
     /// Time: O(log n)
     #[inline]
     pub fn insert(&mut self, a: A) -> Option<A> {
-        let hash = hash_key(&*self.hasher, &a);
+        let hash = hash_key(&self.hasher, &a);
         let root = SharedPointer::make_mut(self.root.get_or_insert_with(Default::default));
         match root.insert(hash, 0, Value(a)) {
             None => {
@@ -520,7 +514,7 @@ where
         Q: Hash + Equivalent<A> + ?Sized,
     {
         let root = SharedPointer::make_mut(self.root.get_or_insert_with(Default::default));
-        let result = root.remove(hash_key(&*self.hasher, value), 0, value);
+        let result = root.remove(hash_key(&self.hasher, value), 0, value);
         if result.is_some() {
             self.size -= 1;
         }
@@ -688,7 +682,7 @@ where
 impl<A, S, P> GenericHashSet<A, S, P>
 where
     A: Hash + Eq + Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     /// Apply a diff to produce a new set.
@@ -852,15 +846,17 @@ where
 
 impl<A, S, P: SharedPointerKind> Clone for GenericHashSet<A, S, P>
 where
+    S: Clone,
     P: SharedPointerKind,
 {
     /// Clone a set.
     ///
-    /// Time: O(1)
+    /// Time: O(1), plus a cheap hasher clone.
     #[inline]
     fn clone(&self) -> Self {
         GenericHashSet {
             hasher: self.hasher.clone(),
+            hasher_id: self.hasher_id,
             root: self.root.clone(),
             size: self.size,
         }
@@ -895,7 +891,8 @@ where
 {
     fn default() -> Self {
         GenericHashSet {
-            hasher: SharedPointer::new(S::default()),
+            hasher: S::default(),
+            hasher_id: next_hasher_id(),
             root: None,
             size: 0,
         }
@@ -905,7 +902,7 @@ where
 impl<A, S, P> Add for GenericHashSet<A, S, P>
 where
     A: Hash + Eq + Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     type Output = GenericHashSet<A, S, P>;
@@ -918,7 +915,7 @@ where
 impl<A, S, P> Mul for GenericHashSet<A, S, P>
 where
     A: Hash + Eq + Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     type Output = GenericHashSet<A, S, P>;
@@ -931,7 +928,7 @@ where
 impl<A, S, P> Add for &GenericHashSet<A, S, P>
 where
     A: Hash + Eq + Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     type Output = GenericHashSet<A, S, P>;
@@ -944,7 +941,7 @@ where
 impl<A, S, P> Mul for &GenericHashSet<A, S, P>
 where
     A: Hash + Eq + Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     type Output = GenericHashSet<A, S, P>;
@@ -957,7 +954,7 @@ where
 impl<A, S, P: SharedPointerKind> Sum for GenericHashSet<A, S, P>
 where
     A: Hash + Eq + Clone,
-    S: BuildHasher + Default,
+    S: BuildHasher + Default + Clone,
     P: SharedPointerKind,
 {
     fn sum<I>(it: I) -> Self

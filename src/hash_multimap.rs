@@ -354,7 +354,7 @@ impl<K, V, S, P> Iterator for ConsumingIter<K, V, S, P>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     type Item = (K, V);
@@ -377,7 +377,7 @@ impl<K, V, S, P> IntoIterator for GenericHashMultiMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     type Item = (K, V);

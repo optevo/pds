@@ -1131,8 +1131,8 @@ require `V: Hash` and mark the hash invalid.
   `FromIterator`, `Extend`, serde `Deserialize`, quickcheck `Arbitrary`,
   `arbitrary::Arbitrary`, proptest `Arbitrary`, rayon `FromParallelIterator`
   and `ParallelExtend`.
-- Internal callers (set operations, `hash_multimap`, `bincode`) use
-  invalidating helpers — no `V: Hash` required.
+- Internal callers (set operations, `hash_multimap`) use invalidating
+  helpers — no `V: Hash` required.
 - Positive equality check in `PartialEq::eq` only fires when both maps have
   valid kv_merkle and the same hasher instance (pointer equality on
   `RandomState`).
@@ -1214,10 +1214,10 @@ When HashWidth is implemented, add a compile-time or runtime guard.
 
 ---
 
-## DEC-024: Consider unwrapping SharedPointer-wrapped hasher {#sec:dec-024}
+## DEC-024: Unwrap SharedPointer-wrapped hasher {#sec:dec-024}
 
 **Date:** 2026-04-25
-**Status:** Pending — needs user decision
+**Status:** Accepted
 
 **Context:**
 DEC-006 wrapped the hasher in `SharedPointer<S, P>` to eliminate ~50
@@ -1226,22 +1226,34 @@ regression on i64 lookups (pointer indirection on every hash call).
 
 Since then, DEC-021 (kv_merkle_hash) added `V: Hash` to all mutating
 HashMap methods. The user observed that requiring `V: Hash` for Merkle
-may weaken the original motivation for avoiding `S: Clone`, since
+weakens the original motivation for avoiding `S: Clone`, since
 `S: Clone` is a much lighter bound than `V: Hash`.
 
-**Trade-off:**
-- **Unwrap:** removes pointer indirection (3-5% i64 lookup improvement),
-  simplifies internal code, but re-adds `S: Clone` to clone/persistent
-  methods.
-- **Keep wrapped:** maintains the current API surface (no `S: Clone`
-  anywhere), but pays the indirection cost on every hash computation.
+**Decision:**
+Unwrap the hasher — store `hasher: S` directly instead of
+`hasher: SharedPointer<S, P>`. Re-add `S: Clone` to impl blocks that
+clone the map/set (persistent operations, Add for references, Sum).
 
-**Note:** `V: Hash` is only on mutation paths. Read-only methods (get,
-contains_key, iter) do NOT require `V: Hash`. So `S: Clone` would
-affect a broader surface than `V: Hash` does. However, all standard
-hashers implement `Clone`, so the practical burden is low.
+Hasher identity for Merkle equality gating (previously via pointer
+equality on SharedPointer) is replaced by a `hasher_id: u64` field
+backed by a global `AtomicU64` counter. Maps/sets cloned from the same
+ancestor share the same `hasher_id`; independently constructed instances
+get unique IDs.
 
-**Decision:** Deferred — awaiting user input.
+**Alternatives considered:**
+- Keep wrapped — maintains fewer bounds but pays pointer indirection on
+  every hash call. The practical burden of `S: Clone` is negligible since
+  all standard hashers (`RandomState`, `foldhash::fast::RandomState`)
+  implement `Clone` cheaply (just a couple of seed integers).
+
+**Consequences:**
+- ~3-5% improvement on i64 hash lookups (removes pointer chase)
+- `S: Clone` added to persistent-operation impl blocks (update, without,
+  alter, union, intersection, restrict, apply_diff, etc.) and operator
+  impls (Add for &Map, Sum)
+- Simpler internal code — no SharedPointer deref on hash paths
+- `hasher_id` field adds 8 bytes to map/set structs (same size as the
+  pointer that was removed from SharedPointer overhead)
 
 ---
 

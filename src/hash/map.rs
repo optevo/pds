@@ -32,6 +32,7 @@ use core::hash::{BuildHasher, Hash};
 use core::iter::{FromIterator, FusedIterator, Sum};
 use core::mem;
 use core::ops::{Add, Index, IndexMut};
+use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
@@ -157,17 +158,11 @@ pub type HashMap<K, V> =
 pub struct GenericHashMap<K, V, S, P: SharedPointerKind> {
     pub(crate) size: usize,
     pub(crate) root: Option<SharedPointer<Node<(K, V), P>, P>>,
-    // The hasher is behind a SharedPointer so that cloning the map is a
-    // refcount bump rather than a real hasher clone.  This eliminates
-    // `S: Clone` from the entire public API.
-    //
-    // Performance note (benchmarked 2026-04-24): the extra pointer
-    // indirection on every `hash_key()` call adds ~1 ns of deref cost.
-    // This is measurable on i64 keys (3-5% regression) where the hash
-    // itself takes only ~2 ns, but is noise (<2%) for string keys and
-    // mutation-heavy workloads where hashing or tree operations dominate.
-    // See DEC-006 in docs/decisions.md.
-    pub(crate) hasher: SharedPointer<S, P>,
+    pub(crate) hasher: S,
+    /// Identifies the hasher lineage. Maps cloned from a common ancestor
+    /// share the same `hasher_id`, enabling O(1) Merkle equality checks.
+    /// Independently-constructed maps get unique IDs.
+    pub(crate) hasher_id: u64,
     /// Merkle hash of keys AND values. When valid, enables O(1) positive
     /// equality: same hasher + same size + same kv_merkle → equal with
     /// probability 1 − 2⁻⁶⁴ (below hardware error rates).
@@ -177,6 +172,15 @@ pub struct GenericHashMap<K, V, S, P: SharedPointerKind> {
     /// mutations (`get_mut`, `index_mut`, `iter_mut`, entry API mutations)
     /// that bypass value hashing.
     pub(crate) kv_merkle_valid: bool,
+}
+
+/// Monotonic counter for hasher identity tracking. Maps cloned from the
+/// same source share a hasher_id; independently-constructed maps get
+/// distinct IDs. See DEC-024 in docs/decisions.md.
+static NEXT_HASHER_ID: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn next_hasher_id() -> u64 {
+    NEXT_HASHER_ID.fetch_add(1, Relaxed)
 }
 
 impl<K, V> HashValue for (K, V)
@@ -313,7 +317,8 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     pub fn with_hasher(hasher: S) -> Self {
         GenericHashMap {
             size: 0,
-            hasher: SharedPointer::new(hasher),
+            hasher,
+            hasher_id: next_hasher_id(),
             root: None,
             kv_merkle_hash: 0,
             kv_merkle_valid: true,
@@ -336,11 +341,13 @@ impl<K, V, S, P: SharedPointerKind> GenericHashMap<K, V, S, P> {
     where
         K1: Hash + Eq + Clone,
         V1: Clone,
+        S: Clone,
     {
         GenericHashMap {
             size: 0,
             root: None,
             hasher: self.hasher.clone(),
+            hasher_id: self.hasher_id,
             kv_merkle_hash: 0,
             kv_merkle_valid: true,
         }
@@ -626,9 +633,7 @@ where
                 if a_ptr == b_ptr {
                     return true;
                 }
-                let a_hasher = &*self.hasher as *const S as *const ();
-                let b_hasher = &*other.hasher as *const S2 as *const ();
-                if a_hasher == b_hasher {
+                if self.hasher_id == other.hasher_id {
                     // Merkle negative check: different key Merkle → different key sets.
                     if a.merkle_hash != b.merkle_hash {
                         return false;
@@ -675,7 +680,7 @@ where
         Q: Hash + Equivalent<K> + ?Sized,
     {
         if let Some(root) = &self.root {
-            root.get(hash_key(&*self.hasher, key), 0, key)
+            root.get(hash_key(&self.hasher, key), 0, key)
                 .map(|(_, v)| v)
         } else {
             None
@@ -703,7 +708,7 @@ where
         Q: Hash + Equivalent<K> + ?Sized,
     {
         if let Some(root) = &self.root {
-            root.get(hash_key(&*self.hasher, key), 0, key)
+            root.get(hash_key(&self.hasher, key), 0, key)
                 .map(|(k, v)| (k, v))
         } else {
             None
@@ -857,7 +862,7 @@ where
                         // seeds). Maps derived from a common ancestor share
                         // their hasher; independently-constructed maps may
                         // not. Probe with a sentinel to detect.
-                        if hashers_compatible(&*self.hasher, &*other.hasher) {
+                        if hashers_compatible(&self.hasher, &other.hasher) {
                             diff_hamt_nodes(old_root, new_root, &mut diffs);
                         } else {
                             diff_iterate_and_lookup(self, other, &mut diffs);
@@ -889,7 +894,7 @@ impl<K, V, S, P> GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
     V: Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     /// Apply a diff to produce a new map.
@@ -1069,7 +1074,7 @@ where
     /// Insert without maintaining kv_merkle (invalidates it).
     /// Used by internal code paths that don't have V: Hash.
     pub(crate) fn insert_invalidate_kv(&mut self, k: K, v: V) -> Option<V> {
-        let hash = hash_key(&*self.hasher, &k);
+        let hash = hash_key(&self.hasher, &k);
         let root = SharedPointer::make_mut(self.root.get_or_insert_with(SharedPointer::default));
         let result = root.insert(hash, 0, (k, v));
         if result.is_none() {
@@ -1085,7 +1090,7 @@ where
     where
         Q: Hash + Equivalent<K> + ?Sized,
     {
-        let hash = hash_key(&*self.hasher, k);
+        let hash = hash_key(&self.hasher, k);
         let Some(root) = &mut self.root else {
             return None;
         };
@@ -1180,7 +1185,7 @@ where
     {
         self.kv_merkle_valid = false;
         let root = self.root.as_mut()?;
-        match SharedPointer::make_mut(root).get_mut(hash_key(&*self.hasher, key), 0, key) {
+        match SharedPointer::make_mut(root).get_mut(hash_key(&self.hasher, key), 0, key) {
             None => None,
             Some((key, value)) => Some((key, value)),
         }
@@ -1212,7 +1217,7 @@ where
     where
         V: Hash,
     {
-        let hash = hash_key(&*self.hasher, &k);
+        let hash = hash_key(&self.hasher, &k);
         let value_hash = self.hasher.hash_one(&v);
         let root = SharedPointer::make_mut(self.root.get_or_insert_with(SharedPointer::default));
         let result = root.insert(hash, 0, (k, v));
@@ -1282,7 +1287,7 @@ where
         Q: Hash + Equivalent<K> + ?Sized,
         V: Hash,
     {
-        let hash = hash_key(&*self.hasher, k);
+        let hash = hash_key(&self.hasher, k);
         let Some(root) = &mut self.root else {
             return None;
         };
@@ -1341,7 +1346,7 @@ impl<K, V, S, P> GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
     V: Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     /// Get the [`Entry`][Entry] for a key in the map for in-place manipulation.
@@ -1351,7 +1356,7 @@ where
     /// [Entry]: enum.Entry.html
     #[must_use]
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V, S, P> {
-        let hash = hash_key(&*self.hasher, &key);
+        let hash = hash_key(&self.hasher, &key);
         if self
             .root
             .as_ref()
@@ -2449,17 +2454,19 @@ where
 
 impl<K, V, S, P> Clone for GenericHashMap<K, V, S, P>
 where
+    S: Clone,
     P: SharedPointerKind,
 {
     /// Clone a map.
     ///
-    /// Time: O(1)
+    /// Time: O(1), plus a cheap hasher clone.
     #[inline]
     fn clone(&self) -> Self {
         GenericHashMap {
             root: self.root.clone(),
             size: self.size,
             hasher: self.hasher.clone(),
+            hasher_id: self.hasher_id,
             kv_merkle_hash: self.kv_merkle_hash,
             kv_merkle_valid: self.kv_merkle_valid,
         }
@@ -2499,7 +2506,8 @@ where
         GenericHashMap {
             size: 0,
             root: None,
-            hasher: SharedPointer::new(S::default()),
+            hasher: S::default(),
+            hasher_id: next_hasher_id(),
             kv_merkle_hash: 0,
             kv_merkle_valid: true,
         }
@@ -2510,7 +2518,7 @@ impl<K, V, S, P> Add for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
     V: Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     type Output = GenericHashMap<K, V, S, P>;
@@ -2524,7 +2532,7 @@ impl<K, V, S, P> Add for &GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
     V: Clone,
-    S: BuildHasher,
+    S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
     type Output = GenericHashMap<K, V, S, P>;
@@ -2538,7 +2546,7 @@ impl<K, V, S, P> Sum for GenericHashMap<K, V, S, P>
 where
     K: Hash + Eq + Clone,
     V: Clone,
-    S: BuildHasher + Default,
+    S: BuildHasher + Default + Clone,
     P: SharedPointerKind,
 {
     fn sum<I>(it: I) -> Self

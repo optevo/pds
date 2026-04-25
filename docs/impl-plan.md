@@ -697,20 +697,9 @@ Rc support. Dead code and phantom feature flags confuse users.
 
 ---
 
-### 1.3 Deprecate bincode feature
+### ~~1.3 Deprecate bincode feature~~ — DONE
 
-**What:** The optional `bincode` feature depends on bincode 2.x (not 1.x as
-previously noted — the imports use `bincode::{Decode, Encode}` which is the
-2.x API). The bincode 2.x crate had ownership issues and is not considered
-well-maintained.
-
-**Approach:** Deprecate the feature with a `#[deprecated]` attribute on the
-bincode-specific impls. Remove entirely in v2.0.0. Users can implement
-bincode serialisation externally via serde.
-
-**Complexity:** Low.
-
-**References:** imbl issue #146.
+Removed entirely at v1.0.0 (DEC-025). See Done section.
 
 ---
 
@@ -2205,7 +2194,7 @@ Phase 0 (foundations)
 Phase 1 (housekeeping)             │ (parallel with Phase 0)              │
   1.1 dependabot PRs ◄── 0.4      │                                      │
   1.2 dead pool code               │                                      │
-  1.3 bincode deprecation          │                                      │
+  1.3 bincode removal    ✓ DONE    │                                      │
   1.4 edition 2021                 │                                      │
                                    ▼                                      │
 Phase 2 (correctness + API)                                               │

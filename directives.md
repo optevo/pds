@@ -624,7 +624,7 @@ at its integration points. When adding or evaluating a dependency:
 
 - Ensure tests cover the code paths that use it
 - If a dependency is used in unsafe code, ensure fuzz/miri coverage exists
-- If a dependency affects serialisation (serde, bincode), ensure round-trip
+- If a dependency affects serialisation (serde), ensure round-trip
   tests exist
 
 ### CI enforcement
