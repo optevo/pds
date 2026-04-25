@@ -181,3 +181,91 @@ bash bench.sh -- --baseline v7
 
 When updating this document, note the date, Rust version, and any
 significant changes that may have affected the numbers.
+
+---
+
+## Memory profiling (dhat) {#sec:memory-profiling}
+
+**Date:** 2026-04-25
+**Run:** `cargo bench --bench memory`
+
+Allocation counts and bytes per operation. Measures heap pressure, not
+peak RSS. Lower is better.
+
+### HashMap<i64, i64>
+
+| Operation | Allocs | Bytes |
+|-----------|--------|-------|
+| from_iter(1K) | 246 | 131 KB |
+| from_iter(10K) | 1,139 | 532 KB |
+| from_iter(100K) | 29,652 | 13.9 MB |
+| single insert (10K base) | 3 | 2.5 KB |
+| clone + modify (10K base) | 3 | 2.5 KB |
+| clone (10K) | 0 | 0 |
+
+~0.3 allocs/element at scale — inherent to HAMT structure (one
+Arc::new per node). Clone is O(1) / zero allocs. Single insert
+touches O(log n) nodes.
+
+### HashSet<i64>
+
+| Operation | Allocs | Bytes |
+|-----------|--------|-------|
+| from_iter(1K) | 293 | 110 KB |
+| from_iter(10K) | 1,150 | 382 KB |
+| from_iter(100K) | 29,692 | 9.8 MB |
+
+Smaller per-entry footprint than HashMap (no value stored).
+
+### OrdMap<i64, i64>
+
+| Operation | Allocs | Bytes |
+|-----------|--------|-------|
+| from_iter(1K) | 68 | 37 KB |
+| from_iter(10K) | 666 | 358 KB |
+| from_iter(100K) | 6,641 | 3.6 MB |
+| single insert (10K base) | 5 | 2.8 KB |
+| clone + modify (10K base) | 4 | 2.2 KB |
+
+B+ tree with chunk_size=32 → far fewer node allocations than HAMT.
+~0.07 allocs/element at scale.
+
+### OrdSet<i64>
+
+| Operation | Allocs | Bytes |
+|-----------|--------|-------|
+| from_iter(1K) | 68 | 20 KB |
+| from_iter(10K) | 666 | 198 KB |
+| from_iter(100K) | 6,641 | 2.0 MB |
+
+### Vector<i64>
+
+| Operation | Allocs | Bytes |
+|-----------|--------|-------|
+| push_back(1K) | 21 | 12 KB |
+| push_back(10K) | 169 | 95 KB |
+| push_back(100K) | 1,619 | 906 KB |
+| from_iter (same as push_back) | — | — |
+| clone + push_back (10K base) | 1 | 536 B |
+
+RRB tree has excellent allocation density: ~0.016 allocs/element.
+Clone + single push_back = 1 allocation (new leaf chunk).
+
+### Bag<i64>
+
+| Operation | Allocs | Bytes |
+|-----------|--------|-------|
+| from_iter(1K) | 273 | 144 KB |
+| from_iter(10K) | 1,146 | 539 KB |
+| from_iter(100K) | 29,653 | 13.9 MB |
+
+Backed by HashMap — similar allocation profile.
+
+### BiMap<i64, i64> / SymMap<i64>
+
+| Operation | Allocs | Bytes |
+|-----------|--------|-------|
+| BiMap from_iter(10K) | 2,297 | 1.1 MB |
+| SymMap from_iter(10K) | 2,284 | 1.1 MB |
+
+~2× HashMap allocations as expected (two internal maps).

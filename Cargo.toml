@@ -71,6 +71,7 @@ static_assertions = "1.1.0"
 criterion = "0.7"
 rpds = { version = "1.1.0" }
 half = "2.6"
+dhat = "0.3"
 
 # --- Profiles ---
 
@@ -111,5 +112,9 @@ harness = false
 
 [[bench]]
 name = "vector"
+harness = false
+
+[[bench]]
+name = "memory"
 harness = false
 

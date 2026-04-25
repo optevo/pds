@@ -19,6 +19,7 @@ result
 
 # Profiling artefacts
 *.json.gz
+dhat-heap.json
 
 # Local rustdoc output
 rustdocs/
