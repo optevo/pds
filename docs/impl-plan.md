@@ -57,6 +57,16 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] Directive conformance fixes (trie traits, serde, Send/Sync assertions).**
+  All missing standard traits added to `GenericTrie`: `Hash` (XOR-combine children),
+  `Extend<(Vec<K>, V)>`, `FromIterator`, `From<Vec/[T;N]/&[T]>`, `Add` (union, owned+ref),
+  `Sum`, `IntoIterator for &GenericTrie` (`TrieIter`), `IntoIterator for GenericTrie`
+  (`TrieConsumingIter`). `Serialize`/`Deserialize` for `GenericTrie` added to `src/ser.rs`
+  (sequence of (path, value) pairs). `assert_impl_all!(Type: Send, Sync)` added to test
+  modules of `Bag`, `BiMap`, `SymMap`, `HashMultiMap`, `InsertionOrderMap` and `Trie`.
+  Bare `#[allow(clippy::...)]` suppressions in `hash/map.rs` and `vector/focus.rs` now
+  have inline explanatory comments.
+
 - **[2026-04-25] 6.10 Merkle-keyed node deduplication in SSP serialisation.**
   `DedupPoolCollector<A, H>` added in `src/persist.rs`: extends the pointer-keyed
   `PoolCollector` with a secondary `merkle_index: HashMap<u64, Vec<u32>>`. On a
