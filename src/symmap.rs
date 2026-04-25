@@ -776,4 +776,35 @@ mod test {
         let sm: SymMap<i32> = SymMap::new();
         let _ = sm[&99];
     }
+
+    #[test]
+    fn sum_symmaps() {
+        let maps: Vec<SymMap<i32>> = vec![
+            {let mut m = SymMap::new(); m.insert(1, 10); m},
+            {let mut m = SymMap::new(); m.insert(2, 20); m},
+        ];
+        let total: SymMap<i32> = maps.into_iter().sum();
+        assert_eq!(total.len(), 2);
+        assert_eq!(total.get(Direction::Forward, &1), Some(&10));
+    }
+
+    #[test]
+    fn from_vec() {
+        let sm: SymMap<i32> = vec![(1i32, 10i32), (2, 20)].into();
+        assert_eq!(sm.len(), 2);
+    }
+
+    #[test]
+    fn from_slice() {
+        let sm: SymMap<i32> = [(1i32, 10i32)][..].into();
+        assert_eq!(sm.len(), 1);
+    }
+
+    #[test]
+    fn from_vec_ref() {
+        let v = vec![(1i32, 10i32), (2, 20)];
+        let sm: SymMap<i32> = SymMap::from(&v);
+        assert_eq!(sm.len(), 2);
+        assert_eq!(sm.get(Direction::Backward, &10), Some(&1));
+    }
 }

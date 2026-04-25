@@ -3932,7 +3932,7 @@ mod test {
         #[test]
         fn chunks_mut(ref mut input_src in vector(i32::ANY, 0..10000)) {
             let mut input = input_src.clone();
-            #[allow(clippy::map_clone)]
+            #[allow(clippy::map_clone)] // leaves_mut() yields &mut A; deref via `*v` is clearer than `Clone::clone` here.
             let output: Vector<_> = input.leaves_mut().flatten().map(|v| *v).collect();
             assert_eq!(input, output);
             let rev_in: Vector<_> = input.iter().rev().cloned().collect();
@@ -4688,5 +4688,20 @@ mod test {
         v.extend(vec![3, 4, 5]);
         assert_eq!(v.len(), 5);
         assert_eq!(v[4], 5);
+    }
+
+    #[test]
+    fn partial_ord_and_ord() {
+        let a: Vector<i32> = vector![1, 2, 3];
+        let b: Vector<i32> = vector![1, 2, 4];
+        let c: Vector<i32> = vector![1, 2, 3];
+        assert!(a < b);
+        assert!(b > a);
+        assert_eq!(a.partial_cmp(&c), Some(core::cmp::Ordering::Equal));
+        assert_eq!(a.cmp(&c), core::cmp::Ordering::Equal);
+        assert_eq!(a.cmp(&b), core::cmp::Ordering::Less);
+        // Shorter vector is less than longer with same prefix.
+        let d: Vector<i32> = vector![1, 2];
+        assert!(d < a);
     }
 }

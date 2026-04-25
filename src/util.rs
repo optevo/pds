@@ -68,7 +68,7 @@ impl Hasher for FnvHasher {
 #[cfg(test)]
 macro_rules! assert_covariant {
     ($name:ident<$($gen:tt),*> in $param:ident) => {
-        #[allow(dead_code, unused_assignments, unused_variables)]
+        #[allow(dead_code, unused_assignments, unused_variables)] // The variance proof function is never called; its body uses assignments to convince the compiler.
         const _: () = {
             type Tmp<$param> = $name<$($gen),*>;
             fn assign<'a, 'b: 'a>(src: Tmp<&'b i32>, mut dst: Tmp<&'a i32>) {

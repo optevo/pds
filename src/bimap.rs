@@ -770,4 +770,36 @@ mod test {
         let bm: BiMap<i32, i32> = BiMap::new();
         let _ = bm[&99];
     }
+
+    #[test]
+    fn sum_bimaps() {
+        let maps: Vec<BiMap<i32, i32>> = vec![
+            {let mut m = BiMap::new(); m.insert(1, 10); m},
+            {let mut m = BiMap::new(); m.insert(2, 20); m},
+        ];
+        let total: BiMap<i32, i32> = maps.into_iter().sum();
+        assert_eq!(total.len(), 2);
+        assert_eq!(total.get_by_key(&1), Some(&10));
+    }
+
+    #[test]
+    fn from_vec() {
+        let bm: BiMap<i32, i32> = vec![(1, 10), (2, 20)].into();
+        assert_eq!(bm.len(), 2);
+        assert_eq!(bm.get_by_value(&10), Some(&1));
+    }
+
+    #[test]
+    fn from_slice() {
+        let bm: BiMap<i32, i32> = [(1i32, 10i32), (2, 20)][..].into();
+        assert_eq!(bm.len(), 2);
+    }
+
+    #[test]
+    fn from_vec_ref() {
+        let v = vec![(1i32, 10i32), (2, 20)];
+        let bm: BiMap<i32, i32> = BiMap::from(&v);
+        assert_eq!(bm.len(), 2);
+        assert_eq!(bm.get_by_key(&1), Some(&10));
+    }
 }

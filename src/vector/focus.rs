@@ -594,12 +594,7 @@ where
     ///
     /// [slice::split_at]: https://doc.rust-lang.org/std/primitive.slice.html#method.split_at
     /// [Vector::split_at]: type.Vector.html#method.split_at
-    // `TreeFocusMut::split_at` clones internal view-range data to initialise
-    // the right half independently of the left. Clippy flags this as redundant
-    // because the original tree is consumed, but the clone is load-bearing:
-    // both halves need their own copy of the range to track their respective
-    // windows into the underlying vector.
-    #[allow(clippy::redundant_clone)]
+    #[allow(clippy::redundant_clone)] // TreeFocusMut::split_at clones view-range data for the right half; the clone is load-bearing because both halves need independent range windows into the underlying vector.
     pub fn split_at(self, index: usize) -> (Self, Self) {
         if index > self.len() {
             panic!("vector::FocusMut::split_at: index out of bounds");
@@ -688,7 +683,7 @@ where
     /// Get a mutable reference to the value at a given index.
     ///
     /// Panics if the index is out of bounds.
-    #[allow(clippy::should_implement_trait)] // would if I could
+    #[allow(clippy::should_implement_trait)] // Cannot implement IndexMut trait here: FocusMut is not Deref, so the trait's signature `fn index_mut(&mut self, index: Idx) -> &mut Self::Output` would conflict with the borrow checker constraints on the focus lifetime.
     pub fn index_mut(&mut self, index: usize) -> &mut A {
         self.get_mut(index).expect("index out of bounds")
     }

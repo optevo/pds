@@ -1,4 +1,4 @@
-#![allow(clippy::unit_arg)]
+#![allow(clippy::unit_arg)] // Property test combinators (e.g. `assert_eq!((), op())`) pass `()` as arguments; this is idiomatic in proptest-generated assertions.
 
 use core::fmt::{Debug, Error, Formatter, Write};
 use core::iter::FromIterator;

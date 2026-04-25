@@ -461,6 +461,18 @@ where
     }
 }
 
+impl<'a, K, V, S, P> From<&'a alloc::vec::Vec<(alloc::vec::Vec<K>, V)>> for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(v: &'a alloc::vec::Vec<(alloc::vec::Vec<K>, V)>) -> Self {
+        v.iter().map(|(p, val)| (p.clone(), val.clone())).collect()
+    }
+}
+
 impl<K, V, S, P> Index<&[K]> for GenericTrie<K, V, S, P>
 where
     K: Hash + Eq + Clone,
@@ -956,5 +968,24 @@ mod test {
     fn index_panics_on_missing() {
         let t: Trie<&str, i32> = Trie::new();
         let _ = t[&["missing"][..]];
+    }
+
+    #[test]
+    fn debug_format() {
+        let mut t = Trie::new();
+        t.insert(&["a", "b"], 1i32);
+        let s = format!("{:?}", t);
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn from_vec_ref() {
+        let v: Vec<(Vec<&str>, i32)> = vec![
+            (vec!["a", "b"], 1),
+            (vec!["x"], 2),
+        ];
+        let t: Trie<&str, i32> = Trie::from(&v);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t.get(&["a", "b"]), Some(&1));
     }
 }

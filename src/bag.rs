@@ -418,6 +418,17 @@ where
     }
 }
 
+impl<'a, A, S, P> From<&'a Vec<A>> for GenericBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(v: &'a Vec<A>) -> Self {
+        v.iter().cloned().collect()
+    }
+}
+
 impl<A, S, P> Add for GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
@@ -832,5 +843,25 @@ mod test {
     fn from_slice() {
         let b: Bag<i32> = [1i32, 2][..].into();
         assert_eq!(b.len(), 2);
+    }
+
+    #[test]
+    fn from_vec_ref() {
+        let v = vec![1i32, 1, 2];
+        let b: Bag<i32> = Bag::from(&v);
+        assert_eq!(b.count(&1), 2);
+        assert_eq!(b.count(&2), 1);
+    }
+
+    #[test]
+    fn sum_via_iterator() {
+        // Tests the Sum trait via Iterator::sum(), distinct from the sum() method.
+        let bags: Vec<Bag<i32>> = vec![
+            {let mut b = Bag::new(); b.insert(1); b.insert(1); b},
+            {let mut b = Bag::new(); b.insert(2); b},
+        ];
+        let total: Bag<i32> = bags.into_iter().sum();
+        assert_eq!(total.count(&1), 2);
+        assert_eq!(total.count(&2), 1);
     }
 }
