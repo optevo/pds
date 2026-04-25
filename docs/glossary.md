@@ -47,6 +47,31 @@ comments, and documentation — do not substitute synonyms.
   maps/sets have different root hashes, they are definitely unequal. Added in
   Phase 4.4 (DEC-009).
 
+**Hash consing** — A technique where structurally identical values share a
+  single allocation. In pds, hash consing is performed on HAMT nodes via
+  `InternPool`: nodes with matching Merkle hash and structural equality are
+  collapsed to share one `SharedPointer`. Avoids interning ephemeral
+  intermediates by using bottom-up, post-hoc interning (Appel's insight).
+  Behind the `hash-intern` feature flag.
+
+**InternPool** — The explicit deduplication table for hash consing
+  (`src/intern.rs`). Stores interned HAMT nodes keyed by Merkle hash.
+  Uses strong references with `purge()` eviction (removes entries where
+  `strong_count == 1`). Purge loops until stable to handle parent→child
+  cascading eviction. See `HashSetInternPool` for the HashSet-specific
+  type alias.
+
+**SSP serialisation** — Structural-sharing-preserving serialisation.
+  Pool-based serde format that writes each HAMT node once and references
+  shared nodes by integer ID. Implemented in `src/persist.rs` via
+  `HashMapPool`. Deserialisation extracts leaf pairs and rebuilds via
+  `FromIterator` (hasher-independent). Behind the `persist` feature flag.
+
+**HashMapPool** — The pool type for SSP serialisation (`src/persist.rs`).
+  `from_maps()` serialises one or more HashMaps into a shared node pool;
+  `to_maps()` deserialises back. Shared subtrees are written once in the
+  serialised form. See DEC-027.
+
 **BuildHasher** — The `core::hash::BuildHasher` trait, parameterised as `S`
   on all hash-based collections. In `std` mode, defaults to
   `std::collections::hash_map::RandomState`. In `no_std` mode, users supply

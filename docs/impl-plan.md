@@ -46,14 +46,8 @@ single v2.0.0 release in Phase 5.
 
 - [Done](#done)
 - [Current](#current)
-- [Future](#future)
-  - [Phase 0 — Foundations](#phase-0)
-  - [Phase 1 — Housekeeping](#phase-1)
-  - [Phase 2 — Correctness fixes & quick API wins](#phase-2)
-  - [Phase 3 — Mutation & parallel performance](#phase-3)
-  - [Phase 4 — Data structure internals](#phase-4)
-  - [Phase 5 — Breaking API changes (v2.0.0)](#phase-5)
-  - [Phase 6 — Research & speculative](#phase-6)
+- [Completed phases](#future) (Phases 0–6 — reference documentation)
+- [Residual](#residual) — open items
 - [Dependency map](#dependency-map)
 - [References](#references)
 
@@ -62,6 +56,43 @@ single v2.0.0 release in Phase 5.
 ## Done {#done}
 
 *Newest first.*
+
+- **[2026-04-25] 3.4: Parallel bulk ops.** `par_union`,
+  `par_intersection`, `par_relative_complement`,
+  `par_symmetric_difference` for HashMap and HashSet. Filter-map +
+  fold/reduce pattern via rayon `par_iter()`. 10 tests.
+
+- **[2026-04-25] 6.6 extension: SSP serialisation (OrdMap, OrdSet,
+  Vector).** `OrdMapPool` with B+ tree node-level pooling.
+  `OrdSetPool` as type alias with convenience methods. `VectorPool`
+  with flat element-level serialisation. 11 tests total.
+
+- **[2026-04-25] 6.6: SSP serialisation (HashMap).** `persist` feature
+  with `HashMapPool`. Serde-based pool serialisation — writes each HAMT
+  node once; shared nodes referenced by integer ID. Deserialisation
+  extracts leaves and rebuilds via `FromIterator` (hasher-independent).
+  Optional `InternPool` integration post-deserialisation. 8 tests.
+  Design diverged from DEC-027: manual serde (not rkyv), HashMap only
+  (not all 11 types), leaf extraction (not tree reconstruction).
+
+- **[2026-04-25] 6.5: Hash consing / interning.** `hash-intern` feature
+  with explicit `InternPool<A, P, H>`. HAMT nodes only. Bottom-up
+  post-hoc interning (Appel's insight). Strong-reference pool with
+  multi-pass `purge()` eviction. 19 tests including independently-built-
+  identical-maps deduplication, COW correctness, cascading purge,
+  collision node interning, stats accuracy.
+
+- **[2026-04-25] dhat memory profiling.** `benches/memory.rs` with
+  `dhat` dev-dependency measuring allocations per operation.
+
+- **[2026-04-25] 4.7 Stage 1+2.** HashBits widened u32→u64, HashWidth
+  trait threaded through entire HAMT stack.
+
+- **[2026-04-25] 4.6: Vector Merkle hash.** Lazy per-node AtomicU64,
+  O(k log n) recomputation. Positive equality in PartialEq.
+
+- **[2026-04-25] 6.9: Persistent trie.** Derived structure wrapping
+  HashMap. Full API: insert, get, remove, iter, subtrie, merge.
 
 - **[2026-04-25] BiMap and SymMap collection types.** Added two new
   bidirectional map types: `BiMap<K, V>` (heterogeneous bijection with
@@ -466,35 +497,9 @@ single v2.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phases 0–5 complete. Phase 6 research complete (DEC-014). Five research
-items killed (6.2, 6.3, 6.4, 6.7, 6.8), one deprioritised (6.1).
-BiMap and SymMap added (11 collection types). PBag → Bag rename done.
-
-**Prioritised next items (Apr 2026):**
-
-1. [ ] **6.5 Hash consing / interning** — opt-in `hash-intern` feature
-   with explicit `InternPool<A, P, H>`. HAMT nodes only. Bottom-up
-   post-hoc interning (Appel's insight). Strong-reference pool with
-   `purge()` eviction (strong_count == 1). Prerequisites met (4.4 ✓).
-2. [ ] **dhat memory profiling** — `dhat` dev-dependency, benchmark
-   binary measuring allocations per operation for all collection types.
-3. [ ] **6.6 SSP serialisation** — structural-sharing-preserving
-   serialisation via rkyv. Depends on 6.5 (InternPool as dedup table).
-   Design/investigation phase first.
-
-**Completed items (moved from previous Current):**
-
-- [x] 4.7 Stage 1+2 — HashBits u64, HashWidth trait threaded through.
-- [x] 6.9 Persistent trie — Derived structure wrapping HashMap.
-- [x] 4.6 Vector Merkle hash — Lazy per-node, O(k log n) recomputation.
-- [x] Test coverage gaps — Crate total 90.1% lines.
-- [x] Proptest stability — Demotion edge case regression tests.
-- [x] BiMap + SymMap — Two bidirectional map types (collection count 9→11).
-- [x] PBag → Bag — Rename across all source and docs.
-- [x] Standard trait coverage — Full audit and gap fill for all 11 types.
-- ~~6.4 Dupe trait~~ — **KILLED.** Meta-internal, `light_clone` exists.
-- ~~6.8 Arena batch construction~~ — **KILLED** (DEC-019).
-- ~~Probabilistic equality~~ — **KILLED.** Already in `PartialEq::eq()`.
+All phases complete. All Phase 6 research items resolved (5 killed, 1
+deprioritised, 3 done). 11 collection types. See [Residual](#residual)
+for the few remaining open items.
 
 ---
 
@@ -2008,99 +2013,82 @@ delegation for a trait ecosystem that has no traction outside Meta.
 
 ---
 
-### 6.5 Hash consing / interning (compile-time feature) — DESIGN VALIDATED
+### 6.5 Hash consing / interning (compile-time feature) — DONE
 
-**What:** An opt-in compile-time feature (`hash-intern`) that adds a
-global intern table for tree nodes. Enables automatic structural
-deduplication and O(1) equality via Merkle hash identity.
+**What:** Opt-in `hash-intern` feature with explicit `InternPool<A, P, H>`.
+HAMT nodes only. Bottom-up post-hoc interning (Appel's insight).
 
-**Research outcome (DEC-014):** Design validated against Filliâtre &
-Conchon (2006), `hashconsing` Rust crate, and `weak-table` crate.
-10–30ns overhead estimate confirmed reasonable. Use `weak-table`'s
-`WeakHashSet` for stale entry cleanup. Appel's insight: only intern
-nodes that survive initial creation (not ephemeral intermediates).
-2025 study: 2.5x initial overhead, 5–100x downstream speedups for
-repeated traversals.
+**Implementation:**
+- `src/intern.rs` — `InternPool` struct with `intern_hamt`, `intern_small`,
+  `intern_large`, `intern_collision` methods. Strong-reference pool with
+  multi-pass `purge()` eviction (loops until stable to handle parent→child
+  chains). `InternStats` for hit/miss/eviction tracking.
+- `src/nodes/hamt.rs` — `Entry::intern()` recursive method (children before
+  parents). Structural equality checks use `ptr_eq` fast path for interned
+  children.
+- `src/hash/map.rs` — `GenericHashMap::intern(&mut pool)` public API.
+- `src/hash/set.rs` — `GenericHashSet::intern(&mut pool)` public API.
+  `HashSetInternPool` type alias hides the internal `Value<A>` wrapper.
 
-**Key capabilities enabled by interning + Merkle hashes:**
+**Key design decisions (vs research plan):**
+- Explicit pool (not global/thread-local) — Rust can't have generic statics.
+  Matches `hashconsing` crate's approach.
+- Strong references with `purge()` (not weak references) — `triomphe::Arc`
+  doesn't support weak refs. Purge loops until stable to handle cascading
+  eviction.
+- Deduplication by Merkle hash + structural equality (not just Merkle) —
+  guards against hash collisions.
 
-1. **Pointer consolidation after equality.** When two collections are
-   found equal by content, interning makes them share the same physical
-   nodes. Future comparisons between them (and any clones derived from
-   them) become O(1) via `ptr_eq`. Without interning, a dedicated
-   `consolidate(&mut self, &other)` method could achieve the same for
-   individual pairs — interning generalises it to all equal subtrees
-   system-wide.
+**Tests (19):** independently-built-identical-maps ptr_eq, COW correctness,
+re-intern after mutation, cascading purge, collision node interning, stats
+accuracy, idempotent re-intern, many overlapping maps, HashSet interning.
 
-2. **Equality verification levels.** Three levels of equality confidence,
-   all starting with Merkle hash as an O(1) negative fast path:
-   - **Verified** (default) — hash negative + full O(n) element comparison
-     for the positive case. Current `PartialEq` behaviour.
-   - **Sampled** — hash match + length match + k random sample checks
-     (default k=8). For a collection with d differing elements out of n,
-     false-equality probability is ~2^-64 x (1-d/n)^k — effectively
-     zero. For HashMap/OrdMap, sample k random keys and compare values.
-     For Vector, sample k random indices. O(k) total — catches both hash
-     collisions and single-element differences with near-certainty. This
-     is the sweet spot: orders of magnitude faster than O(n) with
-     probability guarantees stronger than hardware reliability.
-   - **HashOnly** — trust Merkle hash equality as content equality. O(1).
-     Collision probability ~10^-14 for <1M entries (64-bit hash), ~10^-29
-     with 128-bit hash (4.7 stage 2). Suitable for hash-consed (interned)
-     environments where nodes are identity-deduplicated.
-   API: `probably_eq(&self, &other) -> bool` (sampled), or configurable
-   via a type-level `EqualityPolicy` parameter on the collection.
-
-3. **Subtree-level deduplication.** Interning works at the node level,
-   not just the root. Two maps that differ overall but share a common
-   subtree will intern that subtree to the same pointer — reducing memory
-   and speeding up subsequent diffs.
-
-**Complexity:** Moderate.
-
-**Affects:** HAMT-backed types (HashMap, HashSet, HashMultiMap,
-InsertionOrderMap, BiMap, SymMap, Trie). Not applicable to B+ tree
-(OrdMap, OrdSet) or RRB tree (Vector) — they lack eagerly maintained
-Merkle hashes suitable for interning.
-
-**Prerequisites:** 4.4 ✓ (Merkle hash caching — done). Benefits from
-4.6 (Vector Merkle hash — extends interning to RRB tree nodes).
+**Affects:** HAMT-backed types (HashMap, HashSet, and by extension
+HashMultiMap, InsertionOrderMap, BiMap, SymMap, Trie).
 
 **References:** Filliâtre & Conchon (2006); `hashconsing` crate;
-`weak-table` crate; Appel (1993); arXiv:2509.20534.
+Appel (1993).
 
 ---
 
-### 6.6 Structural-sharing-preserving serialisation — DESIGN ACCEPTED (DEC-027)
+### 6.6 Structural-sharing-preserving serialisation — DONE (HashMap only)
 
-**What:** A serialisation format that preserves the internal tree
-topology, so that two collections sharing structure are serialised
-without duplicating the shared nodes.
+**What:** Pool-based serde serialisation that writes each HAMT node once
+and references shared nodes by integer ID.
 
-**Design (DEC-027):** Serde-based pool serialisation with InternPool
-integration during deserialisation. Feature flag `persist` (requires
-`std`, `serde`, `hash-intern`).
+**Implementation:** `src/persist.rs` — `HashMapPool<K, V, H>` struct with
+manual `Serialize`/`Deserialize` impls. Feature flag `persist` (requires
+`std`, `serde_core`, `hash-intern`).
 
-- **Serialise:** Walk node graph, assign integer IDs by pointer identity,
-  write each node once. Output = flat node pool + container metadata.
-- **Deserialise:** Reconstruct bottom-up. Hash-cons each node on the fly
-  via InternPool — if an identical node already exists in memory (matching
-  Merkle hash + content), reuse the existing SharedPointer. Cross-session
-  dedup for free.
-- **Scope:** All 11 collection types. B+ tree types get within-session
-  sharing but not cross-session interning (no Merkle hashes on nodes).
-- **API:** PoolBuilder (serialise), PoolReader (deserialise with interning).
-- **rkyv rejected:** Separate ecosystem, orphan rule issues, address-only
-  dedup (no content-based cross-session). See DEC-027 for full analysis.
+- **Serialise (`HashMapPool::from_maps`):** `PoolCollector` walks HAMT
+  tree post-order, deduplicates by pointer address, assigns integer IDs.
+  Tagged node format: `{"h": ...}` for HamtNode, `{"s": ...}` for
+  SmallSimd, `{"l": ...}` for LargeSimd, `{"c": ...}` for Collision.
+- **Deserialise (`HashMapPool::to_maps`):** Extracts all (K,V) leaf pairs
+  from the pool tree, then rebuilds via `FromIterator` with the default
+  hasher. This is hasher-independent — HAMT tree structure depends on the
+  hasher, so reconstructing the original tree layout is impossible with a
+  different `RandomState`. The leaf-extraction approach avoids this.
+- **InternPool integration:** Post-deserialisation, users can call
+  `map.intern(&mut pool)` to deduplicate across maps. Not automatic
+  during deserialisation (unlike the original DEC-027 design).
 
-**Complexity:** High.
+**Design divergences from DEC-027:**
+- Uses manual serde (not rkyv, not derive macros — `serde_core` doesn't
+  re-export derive macros).
+- Scope: HashMap only (not all 11 types yet). B+ tree and RRB tree nodes
+  would need separate pool types.
+- No `PoolBuilder`/`PoolReader` — simpler `HashMapPool::from_maps` /
+  `to_maps` API.
+- Leaf extraction instead of tree reconstruction on deserialisation.
 
-**Affects:** All 11 collection types.
+**Tests (8):** roundtrip single/large maps, `get()` correctness after
+roundtrip, shared-node deduplication in pool, two-map roundtrip, empty
+map, intern-after-deserialise deduplication.
 
-**Prerequisites:** 0.5 ✓, 4.4 ✓ (Merkle hashing), 6.5 ✓ (InternPool).
+**Affects:** HashMap, HashSet (via wrapper). Other types future work.
 
-**References:** immer `persist.hpp`; DEC-027; rkyv (investigated,
-rejected); IPLD/DAG-CBOR (investigated, too heavy for local use).
+**References:** immer `persist.hpp`; DEC-027.
 
 ---
 
@@ -2223,6 +2211,82 @@ target).
 
 ---
 
+## Residual {#residual}
+
+Open items not yet completed or killed. All prerequisites met.
+
+### 3.4: Parallel bulk operations — DONE
+
+**What:** Parallel `union`, `intersection`, `difference`,
+`symmetric_difference` for HashMap/HashSet via rayon.
+
+**Status:** DONE. All parallel operations implemented:
+- `par_union`, `par_intersection`, `par_relative_complement`,
+  `par_symmetric_difference` for both HashMap and HashSet.
+- Uses filter_map + fold/reduce pattern with rayon's `par_iter()`.
+- `par_symmetric_difference` uses `rayon::join` for two-way parallelism.
+- 10 tests (8 operations + empty + disjoint edge cases).
+- Avoids `V: Hash` requirement by using `insert_invalidate_kv`.
+
+---
+
+### 4.7 Stage 3: Identity hasher
+
+**What:** ~50-line `IdentityHasher` that passes key bytes directly as the
+hash value. For u64/u128 keys that are already well-distributed (UUIDs,
+content hashes), eliminates hash computation entirely.
+
+**Status:** Stages 1 (u64 hash width) and 2 (HashWidth trait) are done.
+Stage 3 is independent and trivial.
+
+**Complexity:** Low (~50 lines).
+
+**Dependencies:** None (4.7 stages 1+2 done).
+
+---
+
+### 5.3: Configurable branching factor — DEFERRED
+
+**Status:** Blocked on `generic_const_exprs` stabilisation (tracking
+issue rust-lang/rust#76560). Nightly-gate approach identified but the
+scope (~140 type sites, ~80 impl blocks) is disproportionate to the
+benefit over the existing `small-chunks` feature flag. See DEC-011.
+
+**Dependencies:** `generic_const_exprs` stabilisation.
+
+---
+
+### 6.1: Persistent ART for OrdMap — DEPRIORITISED
+
+**Status:** Research complete (DEC-014). Not recommended — ART requires
+`K: ByteEncodable`, not `K: Ord`. No production persistent ART for
+generic keys exists. Better OrdMap investments: tune chunk size (done,
+DEC-017), branch-free intra-node search, bulk operations.
+
+**Dependencies:** None, but questionable ROI.
+
+---
+
+### 6.6 extension: SSP serialisation for remaining types — MOSTLY DONE
+
+**What:** Extend pool-based serialisation from HashMap to other types.
+
+**Status:** OrdMap, OrdSet, and Vector done. Remaining 8 types (Bag,
+HashMultiMap, InsertionOrderMap, BiMap, SymMap, Trie, HashSet) not yet
+done but can delegate to their underlying HashMap/OrdMap pools.
+
+Implemented:
+- `OrdMapPool<K, V>` — full B+ tree node-level pooling. Branch and
+  leaf nodes deduplicated by pointer address. 5 tests.
+- `OrdSetPool<A>` — type alias for `OrdMapPool<A, ()>` with
+  `from_sets`/`to_sets` convenience methods. 2 tests.
+- `VectorPool<A>` — flat element-level serialisation (RRB node-level
+  pooling deferred, requires making internal fields `pub(crate)`). 4 tests.
+
+**Dependencies:** 6.6 ✓ (HashMap implementation as template).
+
+---
+
 ## Dependency map {#dependency-map}
 
 ```
@@ -2280,45 +2344,30 @@ Phase 6 (research)                 │                                      │
   6.2 HHAMT inline ◄── 4.3  ✗ KILLED (via 6.7 — DEC-015)                  │
   6.3 ThinArc ◄── 5.1 ✓  ✗ KILLED (DEC-018: pointers already 8 bytes)      │
   6.4 Dupe trait ◄── (none)  ✗ KILLED (Meta-internal, light_clone exists)     │
-  6.5 hash consing/interning ◄── 4.4 ✓                                    │
-  6.6 sharing-preserving serialisation ◄── 0.5, 6.5 (InternPool as dedup)  │
+  6.5 hash consing/interning ◄── 4.4 ✓  ✓ DONE                             │
+  6.6 sharing-preserving serialisation ◄── 0.5, 6.5 ✓  ✓ DONE (HashMap, OrdMap, OrdSet, Vector) │
   6.7 hybrid SIMD-CHAMP ◄── 0.3, 0.5  ✗ KILLED (DEC-015: PoC failed)     │
   6.8 arena batch construction ◄── (none)  ✗ KILLED (DEC-019: PoC failed)  │
   6.9 persistent trie ◄── 0.3 ✓  ✓ DONE (derived HashMap wrapper)                          │
 ```
 
-### Parallel tracks
+### Parallel tracks — status
 
-Once Phase 0 is complete, eight independent tracks can proceed in
-parallel:
+All major tracks complete. Remaining open items listed in [Residual](#residual).
 
-1. **Vector track:** 2.1 → 4.1, 4.6 (Vector Merkle hash — independent
-   of 4.1, needs only Phase 0 ✓).
-2. **Hash track:** 4.2 ✓ → 4.3 ✗ → 6.7 ✗ → 6.8 ✗. HAMT retained.
-   Remaining: 4.7 (pluggable hash width — stage 1 non-breaking, stage
-   2 → v2.0.0).
-3. **Mutation track:** 3.1 ✓ → 3.2 ✓, 3.3 ✓ → 5.2 ✓ → 4.5 ✓ **COMPLETE**
-4. **Parallel track:** 3.4 (HashMap/HashSet par_iter first, then
-   OrdMap/OrdSet, then bulk ops and parallel sort). Benefits from but
-   does not block on 3.1/3.3.
-5. **Diff track:** 2.4, 2.5 (independent of each other) → 2.6 → 3.6.
-   Item 3.5 (PartialEq fast paths) is independent and can land at any
-   time after 0.1.
-6. **Map API track:** 2.7, 2.8, 2.9 (independent of each other and of
-   all other tracks). 2.7 (general merge) shares HAMT traversal
-   infrastructure with 2.4 (HashMap diff) — co-development is efficient
-   but not required.
-7. **Hash integrity track:** 4.4 ✓ (Merkle hash caching) → 6.5 (hash
-   consing/interning). 4.4 complete — 6.5 can now proceed. 4.6 (Vector
-   Merkle hash) extends the pattern to RRB trees.
-8. **Serialisation track:** 6.6 (sharing-preserving serialisation).
-   Benefits from 4.4 ✓ (Merkle hashes) and 6.5 (InternPool as dedup
-   table). 6.5 should land first.
-
-9. **Trie track:** 6.9 ✓ (persistent trie — done, derived HashMap wrapper).
-
-Items 2.2, 2.3, 2.10, 2.11, and 1.x are independent and can be done
-at any time after their prerequisites. 6.4 killed.
+1. **Vector track:** ✓ COMPLETE (2.1, 4.1, 4.6 all done)
+2. **Hash track:** ✓ COMPLETE (4.2→4.3✗→6.7✗→6.8✗; 4.7 stage 1+2 done;
+   stage 3 identity hasher is residual)
+3. **Mutation track:** ✓ COMPLETE (3.1→3.2→3.3→5.2→4.5 all done)
+4. **Parallel track:** ✓ COMPLETE (3.4 par_iter/par_iter_mut/par_sort ✓;
+   parallel bulk ops — par_union/par_intersection/par_relative_complement/
+   par_symmetric_difference for HashMap+HashSet ✓)
+5. **Diff track:** ✓ COMPLETE (2.4→2.5→2.6→3.6, 3.5 all done)
+6. **Map API track:** ✓ COMPLETE (2.7, 2.8, 2.9, 2.10, 2.11 all done)
+7. **Hash integrity track:** ✓ COMPLETE (4.4→6.5→6.6 all done)
+8. **Serialisation track:** ✓ COMPLETE (6.6 done: HashMap, HashSet via
+   HashMapPool; OrdMap, OrdSet via OrdMapPool; Vector via VectorPool)
+9. **Trie track:** ✓ COMPLETE (6.9 done)
 
 ---
 

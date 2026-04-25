@@ -1326,7 +1326,7 @@ on all hash-based types.
 ## DEC-027: Structural-sharing-preserving serialisation — serde pool design {#sec:dec-027}
 
 **Date:** 2026-04-25
-**Status:** Accepted (design phase — implementation pending)
+**Status:** Accepted (implemented — HashMap, OrdMap, OrdSet, Vector; see DEC-029 for extension)
 
 **Context:**
 Current serde impls serialise collections as flat sequences/maps, discarding
@@ -1526,3 +1526,89 @@ systems. pds targets local persistence and checkpointing.
 - B+ tree types get pool serialisation (preserving within-session sharing)
   but not cross-session interning (no Merkle hashes)
 - InternPool gains a clear second use case beyond manual `map.intern()`
+
+---
+
+## DEC-028: Parallel bulk ops — filter+fold pattern, not tree-level merge {#sec:dec-028}
+
+**Date:** 2026-04-25
+**Status:** Accepted (implemented)
+
+**Context:**
+Parallel union/intersection/difference/symmetric_difference for HashMap and
+HashSet (item 3.4 residual). Two design approaches: (a) tree-level HAMT merge
+operating on subtrees in parallel, or (b) element-level filter_map + fold/reduce
+over rayon's `par_iter()`.
+
+**Decision:**
+Element-level filter_map + fold/reduce.
+
+Each parallel op filters one collection's elements against the other (using
+`contains_key`/`contains`), folds matching elements into thread-local partial
+maps, then reduces via sequential `union`. `par_symmetric_difference` uses
+`rayon::join` to run both halves (self−other and other−self) concurrently.
+
+HashMap methods use `insert_invalidate_kv` (pub(crate)) to avoid requiring
+`V: Hash` — the kv_merkle hash is invalidated but not recomputed, keeping
+trait bounds consistent with the sequential API. The collection-level Merkle
+hash is rebuilt lazily on next access.
+
+**Alternatives considered:**
+- Tree-level HAMT merge — rejected: complex (needs subtree-parallel recursive
+  descent into node types), difficult to test incrementally, and the element-
+  level approach already saturates cores for collections above ~10K elements
+  where parallelism matters.
+
+**Consequences:**
+- 8 new public methods (4 on HashMap, 4 on HashSet)
+- Trait bounds require `Send + Sync` on key/value types (standard for rayon)
+- Performance: parallel overhead makes these slower than sequential below ~5K
+  elements; above ~50K they scale well. Users should benchmark their workloads.
+- `insert_invalidate_kv` remains pub(crate) — it's an internal efficiency
+  mechanism, not a public API commitment.
+
+---
+
+## DEC-029: SSP serialisation extension — OrdMap node pooling, Vector flat {#sec:dec-029}
+
+**Date:** 2026-04-25
+**Status:** Accepted (implemented)
+
+**Context:**
+DEC-027 designed pool-based serialisation for HashMap. Extending to OrdMap,
+OrdSet, and Vector (item 6.6 extension).
+
+**Decision:**
+
+**OrdMap/OrdSet:** Full B+ tree node-level pooling. `OrdMapPool<K, V>` walks
+the B+ tree depth-first, deduplicating nodes by pointer address (same pattern
+as `HashMapPool`). Three node variants: `BranchLeaves` (branch whose children
+are leaves), `BranchBranches` (branch whose children are branches), and `Leaf`.
+Deserialisation extracts all leaf key-value pairs and rebuilds via
+`FromIterator`, which produces a balanced B+ tree. Structural sharing within
+a pool is preserved during serialisation; cross-session interning is not
+available (B+ tree nodes lack Merkle hashes, as noted in DEC-027).
+
+`OrdSetPool<A>` is a type alias for `OrdMapPool<A, ()>` with convenience
+methods (`from_sets`, `to_sets`), avoiding a separate struct.
+
+**Vector:** Flat element-level serialisation. `VectorPool<A>` stores each
+vector as a `Vec<A>` of its elements. RRB node-level pooling was investigated
+but deferred: `VectorInner` and `RRB` fields are private to `vector/mod.rs`,
+so accessing them from `persist.rs` would require making them `pub(crate)` or
+adding accessor methods — a larger refactor than justified for v1.
+
+**Alternatives considered:**
+- RRB node pooling for Vector — deferred due to visibility constraints (see
+  above). Can be added later if Vector sharing preservation becomes important.
+- Separate `OrdSetPool` struct — rejected: would duplicate `OrdMapPool` logic
+  since OrdSet is backed by `OrdMap<A, ()>`.
+
+**Consequences:**
+- Three new public types: `OrdMapPool<K, V>`, `OrdSetPool<A>` (alias),
+  `VectorPool<A>`
+- All behind `persist` feature flag
+- Vector pools do not preserve structural sharing — they round-trip through
+  flat element arrays. This is functionally correct but loses RRB tree sharing.
+- OrdMap pools preserve within-pool sharing but not cross-session (no Merkle
+  hashes on B+ tree nodes)
