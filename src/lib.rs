@@ -260,6 +260,8 @@
 //! | [`Bag<A>`][crate::Bag] | Persistent multiset (bag) — tracks element counts | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`HashMultiMap<K, V>`][crate::HashMultiMap] | Key → set of values multimap | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`InsertionOrderMap<K, V>`][crate::InsertionOrderMap] | Map that iterates in insertion order | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//! | [`BiMap<K, V>`][crate::BiMap] | Bidirectional map — bijection between two types | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//! | [`SymMap<A>`][crate::SymMap] | Symmetric bidirectional map with O(1) swap | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`Trie<K, V>`][crate::Trie] | Persistent prefix tree (trie) — paths to values | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //!
 //! ## In-place Mutation
@@ -405,6 +407,8 @@ pub mod atom;
 pub mod hash_multimap;
 pub mod insertion_order_map;
 pub mod bag;
+pub mod bimap;
+pub mod symmap;
 pub mod trie;
 
 pub use crate::hash_multimap::GenericHashMultiMap;
@@ -424,6 +428,12 @@ pub use crate::ordset::{GenericOrdSet, OrdSet};
 pub use crate::bag::GenericBag;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::bag::Bag;
+pub use crate::bimap::GenericBiMap;
+#[cfg(any(feature = "std", feature = "foldhash"))]
+pub use crate::bimap::BiMap;
+pub use crate::symmap::GenericSymMap;
+#[cfg(any(feature = "std", feature = "foldhash"))]
+pub use crate::symmap::{SymMap, Direction};
 pub use crate::trie::GenericTrie;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::trie::Trie;

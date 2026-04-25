@@ -19,6 +19,8 @@ SIMD-accelerated HAMT nodes, and no_std support.
 | `Bag<A>` | SIMD HAMT | Persistent multiset (bag) with element counts |
 | `HashMultiMap<K, V>` | SIMD HAMT | Key → set of values multimap |
 | `InsertionOrderMap<K, V>` | SIMD HAMT + B+ tree | Map iterating in insertion order |
+| `BiMap<K, V>` | 2× SIMD HAMT | Bidirectional map (bijection between two types) |
+| `SymMap<A>` | 2× SIMD HAMT | Symmetric bidirectional map with O(1) swap |
 | `Trie<K, V>` | HAMT of HAMTs | Hierarchical path-keyed map |
 
 All collections use structural sharing for efficient cloning — cloning a
@@ -45,6 +47,8 @@ a different collection set and design philosophy.
 | **Bag** | yes | — | — | — |
 | **HashMultiMap** | yes | — | — | — |
 | **InsertionOrderMap** | yes | — | — | — |
+| **BiMap** | yes | — | — | — |
+| **SymMap** | yes | — | — | — |
 | **Trie** | yes | — | — | — |
 | **List / Stack / Queue** | — | — | — | yes |
 | **Merkle hashing** | O(1) equality | — | — | — |
@@ -58,7 +62,7 @@ a different collection set and design philosophy.
 **Key differences from imbl:**
 - SIMD-accelerated HAMT nodes for faster hash map/set operations
 - Merkle hashing on all collections for O(1) structural equality checks
-- Four additional collection types (Bag, HashMultiMap, InsertionOrderMap, Trie)
+- Six additional collection types (Bag, HashMultiMap, InsertionOrderMap, BiMap, SymMap, Trie)
 - `no_std` support via the `foldhash` feature flag
 - `triomphe::Arc` support (no weak count, 8 bytes smaller per node)
 - Deprecated API aliases removed; breaking changes for correctness accepted

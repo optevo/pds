@@ -22,6 +22,8 @@ adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
  - Persistent Trie as derived structure
  - O() complexity documentation comparing to std equivalents
  - IntoIterator for Bag, HashMultiMap, InsertionOrderMap
+ - BiMap: persistent bidirectional map (bijection between two types)
+ - SymMap: persistent symmetric bidirectional map with O(1) swap and Direction enum
 
 ### Removed
 

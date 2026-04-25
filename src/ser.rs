@@ -17,6 +17,8 @@ use crate::insertion_order_map::GenericInsertionOrderMap;
 use crate::ordmap::GenericOrdMap;
 use crate::ordset::GenericOrdSet;
 use crate::bag::GenericBag;
+use crate::bimap::GenericBiMap;
+use crate::symmap::GenericSymMap;
 use crate::vector::GenericVector;
 
 struct SeqVisitor<'de, S, A> {
@@ -358,6 +360,80 @@ where
         let mut s = ser.serialize_seq(Some(self.len()))?;
         for (k, v) in self.iter() {
             s.serialize_element(&(k, v))?;
+        }
+        s.end()
+    }
+}
+
+// BiMap — serialises as a sequence of (key, value) pairs.
+
+impl<'de, K, V, S, P, H: HashWidth> Deserialize<'de> for GenericBiMap<K, V, S, P, H>
+where
+    K: Deserialize<'de> + Hash + Eq + Clone,
+    V: Deserialize<'de> + Hash + Eq + Clone,
+    S: BuildHasher + Default + Clone,
+    P: SharedPointerKind,
+{
+    fn deserialize<D>(des: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        des.deserialize_seq(
+            SeqVisitor::<'de, GenericBiMap<K, V, S, P, H>, (K, V)>::new(),
+        )
+    }
+}
+
+impl<K, V, S, P, H: HashWidth> Serialize for GenericBiMap<K, V, S, P, H>
+where
+    K: Serialize + Hash + Eq + Clone,
+    V: Serialize + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn serialize<Ser>(&self, ser: Ser) -> Result<Ser::Ok, Ser::Error>
+    where
+        Ser: Serializer,
+    {
+        let mut s = ser.serialize_seq(Some(self.len()))?;
+        for (k, v) in self.iter() {
+            s.serialize_element(&(k, v))?;
+        }
+        s.end()
+    }
+}
+
+// SymMap — serialises as a sequence of (A, A) pairs.
+
+impl<'de, A, S, P, H: HashWidth> Deserialize<'de> for GenericSymMap<A, S, P, H>
+where
+    A: Deserialize<'de> + Hash + Eq + Clone,
+    S: BuildHasher + Default + Clone,
+    P: SharedPointerKind,
+{
+    fn deserialize<D>(des: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        des.deserialize_seq(
+            SeqVisitor::<'de, GenericSymMap<A, S, P, H>, (A, A)>::new(),
+        )
+    }
+}
+
+impl<A, S, P, H: HashWidth> Serialize for GenericSymMap<A, S, P, H>
+where
+    A: Serialize + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn serialize<Ser>(&self, ser: Ser) -> Result<Ser::Ok, Ser::Error>
+    where
+        Ser: Serializer,
+    {
+        let mut s = ser.serialize_seq(Some(self.len()))?;
+        for (a, b) in self.iter() {
+            s.serialize_element(&(a, b))?;
         }
         s.end()
     }
