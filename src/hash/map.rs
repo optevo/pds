@@ -2580,6 +2580,12 @@ where
     /// construction deduplicates nodes but leaves the O(1) positive
     /// equality fast-path disabled.
     ///
+    /// **Hasher-lineage requirement.** Fast-paths 1 and 2 require maps to
+    /// share the same hasher lineage (same `hasher_id`). Maps cloned from a
+    /// common ancestor share a lineage automatically. Two maps constructed
+    /// independently via `new()` or `collect()` have different `hasher_id`
+    /// values and will not benefit from those fast-paths even after sealing.
+    ///
     /// Time: O(n)
     ///
     /// # Example
@@ -2591,13 +2597,21 @@ where
     /// use pds::intern::InternPool;
     ///
     /// let mut pool = InternPool::new();
-    /// let mut map1: HashMap<i32, i32> = (0..1000).map(|i| (i, i)).collect();
-    /// let mut map2: HashMap<i32, i32> = (0..1000).map(|i| (i, i)).collect();
+    ///
+    /// // Both maps cloned from the same base — same hasher lineage.
+    /// let base: HashMap<i32, i32> = (0..1000).map(|i| (i, i)).collect();
+    /// let mut map1 = base.clone();
+    /// let mut map2 = base.clone();
+    ///
+    /// // Apply the same bulk mutations independently (invalidates kv_merkle).
+    /// for i in 1000..1100 { map1.insert(i, i); }
+    /// for i in 1000..1100 { map2.insert(i, i); }
     ///
     /// map1.intern_and_seal(&mut pool);
     /// map2.intern_and_seal(&mut pool);
     ///
-    /// // kv_merkle is now valid on both — O(1) equality and empty diff.
+    /// // kv_merkle is valid and both maps share a lineage — O(1) fast-paths
+    /// // fire for equality and diff.
     /// assert!(map1.kv_merkle_valid());
     /// assert_eq!(map1, map2);
     /// assert_eq!(map1.diff(&map2).count(), 0);

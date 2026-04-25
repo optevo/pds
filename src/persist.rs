@@ -465,11 +465,25 @@ impl<K: Clone + PartialEq, V: Clone + PartialEq, H: HashWidth> HashMapPool<K, V,
     /// Unlike [`from_maps`][Self::from_maps], which deduplicates by pointer
     /// identity alone, this variant uses the HAMT node Merkle hash as a
     /// secondary index and performs a structural equality check on matches.
-    /// This catches content-equal nodes that arise from:
     ///
-    /// - Independently-built maps containing the same data
-    /// - Maps reconstructed from a deserialised pool (all pointers are fresh)
-    /// - Cross-session serialisation of replicated data sets
+    /// **Hasher-lineage requirement.** Deduplication beyond pointer identity
+    /// only fires when maps share the same hasher seed. Two maps cloned from
+    /// a common ancestor always share a seed (cloning preserves the hasher).
+    /// Maps constructed independently via `HashMap::new()` or `collect()`
+    /// each get a fresh `RandomState` seed — their HAMT structures differ
+    /// even for identical content, so no Merkle-keyed match is possible.
+    ///
+    /// This variant is useful for:
+    ///
+    /// - Maps cloned from a common source that were subsequently mutated
+    ///   identically but independently, losing pointer sharing in the
+    ///   modified subtrees.
+    /// - Any scenario where the same series of inserts was applied to
+    ///   multiple clones of the same base map.
+    ///
+    /// For cross-session or cross-process deduplication, use a deterministic
+    /// hasher (e.g. `foldhash::fast::FixedState`) so all maps share the same
+    /// hash function regardless of construction order.
     ///
     /// Requires `K: PartialEq, V: PartialEq`. If the extra bound is not
     /// available, use [`from_maps`][Self::from_maps] instead.
