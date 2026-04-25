@@ -57,6 +57,16 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] Cross-feature improvements: Merkle × diff, intern_and_seal.**
+  `HashMap::diff()` gains a kv_merkle fast-path (O(1) empty diff for equal maps).
+  `HashSet::diff()` gains a root-Merkle fast-path (same semantics, sets only)
+  plus per-node Merkle subtree pruning in `set_diff_hamt_nodes` (skips content-
+  equal subtrees that aren't pointer-equal). `GenericHashMap::intern_and_seal()`
+  combines `intern()` + `recompute_kv_merkle()`, sealing all three fast-paths
+  (ptr_eq, kv_merkle, node-level ptr_eq after interning) in one call. Doc notes
+  added to `intern()` and `diff()` on both types. 7 new tests across
+  `hash/map.rs`, `hash/set.rs`, and `intern.rs`.
+
 - **[2026-04-25] 4.7 Stage 3: Identity hasher.** `IdentityHasher` +
   `IdentityBuildHasher` in `src/identity_hasher.rs`. All integer `write_*`
   methods specialised; XOR-fold fallback for bytes. Zero-sized `Copy`
@@ -2220,6 +2230,65 @@ test/bench/fuzz/proptest coverage. Reuses SharedPointer infrastructure.
 
 **Prerequisites:** 0.1 ✓ (CI), 0.3 ✓ (benchmarks for comparison
 target).
+
+---
+
+### 6.10 Merkle-keyed node deduplication in SSP serialisation
+
+**What:** Extend `PoolCollector` in `src/persist.rs` to use Merkle hash as a
+secondary deduplication key in addition to pointer address. Currently the pool
+only deduplicates nodes that are literally the same allocation (same pointer).
+This means a round-trip through serialisation — or independently-built maps
+with identical content — produces a pool with redundant node copies.
+
+**Current behaviour:**
+```
+PoolCollector.seen: HashMap<usize, u32>   ← keyed by pointer address
+```
+Two nodes with identical content but different addresses each get their own
+pool entry, even though they are semantically identical.
+
+**Proposed change:** Add a secondary index keyed by Merkle hash:
+```
+PoolCollector.merkle_index: HashMap<u64, Vec<u32>>  ← merkle_hash → pool entry IDs
+```
+When a node's pointer is not in `seen`, check `merkle_index`. If a pool entry
+with the same Merkle hash passes a structural equality test, reuse that entry's
+ID instead of allocating a new one. This is essentially inline interning during
+serialisation — the same algorithm `InternPool` uses for runtime deduplication.
+
+**Why this is deferred:** Structural equality during serialisation requires a
+full subtree comparison (same as `InternPool`'s per-node `PartialEq`). For
+deeply nested trees this is O(subtree size) per lookup in the worst case (hash
+collision). The incremental benefit over the existing "intern then serialise"
+workflow (call `intern()` before `from_maps()`) is limited to cases where
+intering isn't viable — e.g., cross-session data where pointers are always
+new. The complexity is non-trivial and the use case is narrow.
+
+**Go/no-go question:** Does the existing "intern before serialise" workflow
+cover 90%+ of practical use cases? If yes, this item remains deferred.
+
+**Approach:**
+1. Add `merkle_index: StdHashMap<u64, Vec<u32>>` to `PoolCollector`.
+2. In each `visit_*` method: after the `seen` miss, scan `merkle_index[hash]`
+   for a structurally-equal entry using the existing node equality functions
+   from `intern.rs`.
+3. If found: add `seen.insert(addr, existing_id)` and return `existing_id`.
+4. If not found: allocate new entry, update both `seen` and `merkle_index`.
+5. The equality check requires `A: PartialEq` — same bound as `InternPool`.
+
+**Alternative approach (simpler, less precise):** Accept Merkle collisions as
+false-positives (two nodes with same Merkle get merged even if content
+differs). This would produce incorrect serialised data on a collision —
+unacceptable for a serialisation format, so the full equality check is required.
+
+**Complexity:** Medium. Touches `PoolCollector`, `SetPoolCollector`, and all
+four `visit_*` methods. Requires adding `A: PartialEq` bounds to
+`HashMapPool::from_maps` and `HashSetPool::from_sets`. Benchmark before/after
+to verify the overhead doesn't regress the common (already-shared-pointers) case.
+
+**Prerequisites:** 6.5 ✓ (InternPool — equality functions reusable), 6.6 ✓
+(SSP serialisation implemented).
 
 ---
 

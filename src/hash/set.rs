@@ -448,6 +448,20 @@ where
     /// [`ptr_eq`][GenericHashSet::ptr_eq] returns true), the iterator
     /// is empty without traversing any elements.
     ///
+    /// When both sets are same-lineage (same `hasher_id`), same size,
+    /// and their root Merkle hashes match, the diff is known to be empty
+    /// without any tree traversal. This fires after `insert`/`remove`
+    /// that leave the set unchanged, or after a round-trip through
+    /// insert+remove that restores the original key set.
+    ///
+    /// ## Performance tip
+    ///
+    /// For independently-constructed sets with high content overlap,
+    /// call `intern` (requires the `hash-intern` feature) on both before
+    /// diffing. After interning, content-equal subtrees share the same
+    /// allocation and are skipped in O(1), reducing diff complexity from
+    /// O(n + m) to O(changes × depth).
+    ///
     /// When the two sets share structure (one was derived from the other
     /// via insert/remove), shared subtrees are detected via pointer
     /// comparison and skipped in O(1), reducing complexity to
@@ -457,6 +471,25 @@ where
     pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, A, S, P, H> {
         let mut diffs = Vec::new();
         if !self.ptr_eq(other) {
+            // Root Merkle fast-path: same-lineage sets (same hasher_id) with the
+            // same size and matching root Merkle hash are almost certainly equal.
+            // For sets, node Merkle covers all keys (no values that could silently
+            // differ), so the root Merkle is a full content fingerprint. Same
+            // probabilistic argument as PartialEq (DEC-023): false positive ≈ 2^-64.
+            if self.len() == other.len()
+                && self.hasher_id == other.hasher_id
+                && MERKLE_HASH_BITS >= MERKLE_POSITIVE_EQ_MIN_BITS
+            {
+                if let (Some(a), Some(b)) = (&self.root, &other.root) {
+                    if a.merkle_hash == b.merkle_hash {
+                        return DiffIter {
+                            diffs,
+                            index: 0,
+                            _phantom: core::marker::PhantomData,
+                        };
+                    }
+                }
+            }
             match (&self.root, &other.root) {
                 (Some(old_root), Some(new_root)) => {
                     if !SharedPointer::ptr_eq(old_root, new_root) {
@@ -877,6 +910,14 @@ where
     /// Intern the internal HAMT nodes of this set into the given pool.
     ///
     /// See [`GenericHashMap::intern`](crate::hashmap::GenericHashMap::intern) for details on how interning works.
+    ///
+    /// ## Performance tip — diff across independently-constructed sets
+    ///
+    /// After interning two sets built from the same data (even if
+    /// constructed independently), content-equal subtrees share the same
+    /// allocation. Subsequent `diff` calls reduce from O(n + m) to
+    /// O(changes × depth) because shared subtrees are skipped in O(1)
+    /// via pointer comparison.
     ///
     /// # Example
     ///
@@ -1358,6 +1399,16 @@ fn set_diff_hamt_nodes<'a, 'b, A, P, H: HashWidth>(
     A: Eq,
     P: SharedPointerKind,
 {
+    // Per-node Merkle pruning: same Merkle hash → same key set in this
+    // subtree. Safe for sets because node Merkle is a full content
+    // fingerprint (no values to silently differ). This catches content-
+    // equal subtrees that aren't pointer-equal, e.g. after independent
+    // construction or a persistence round-trip.
+    if MERKLE_HASH_BITS >= MERKLE_POSITIVE_EQ_MIN_BITS
+        && old_node.merkle_hash == new_node.merkle_hash
+    {
+        return;
+    }
     for i in 0..HASH_WIDTH {
         match (old_node.data.get(i), new_node.data.get(i)) {
             (None, None) => {}
@@ -1686,6 +1737,53 @@ mod test {
         assert!(iter.next().is_some());
         assert!(iter.next().is_none());
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn diff_root_merkle_fast_path_equal_sets() {
+        // Cloned sets share hasher_id and have the same root Merkle hash.
+        // The root Merkle fast-path should fire and return an empty diff.
+        let mut set = HashSet::new();
+        for i in 0..500 {
+            set.insert(i);
+        }
+        let other = set.clone();
+        assert_eq!(set.diff(&other).count(), 0);
+    }
+
+    #[test]
+    fn diff_root_merkle_fast_path_after_insert_remove() {
+        // Insert + remove restores the original key set and Merkle hash.
+        // The resulting set is equal to the original, diff should be empty.
+        let mut set1 = HashSet::new();
+        for i in 0..200 {
+            set1.insert(i);
+        }
+        let set2 = {
+            let mut s = set1.clone();
+            s.insert(9999);
+            s.remove(&9999);
+            s
+        };
+        assert_eq!(set1.diff(&set2).count(), 0);
+    }
+
+    #[test]
+    fn diff_merkle_subtree_pruning_correctness() {
+        // Two large sets that differ in only a few elements. After a clone +
+        // mutation, some subtrees are content-equal but not pointer-equal.
+        // The per-node Merkle pruning should skip those, yielding the same
+        // result as a full tree walk.
+        let mut set1 = HashSet::new();
+        for i in 0..1000 {
+            set1.insert(i);
+        }
+        let mut set2 = set1.clone();
+        set2.remove(&42);
+        set2.insert(9999);
+
+        let diffs: Vec<_> = set1.diff(&set2).collect();
+        assert_eq!(diffs.len(), 2);
     }
 
     #[test]

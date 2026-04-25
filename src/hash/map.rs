@@ -849,6 +849,14 @@ where
     /// comparison and skipped in O(1), reducing complexity to
     /// O(changes × tree_depth). For independently-constructed maps with
     /// different hasher states, falls back to O(n + m).
+    ///
+    /// ## Performance tip
+    ///
+    /// For independently-constructed maps with high content overlap,
+    /// call `intern` (requires the `hash-intern` feature) on both before
+    /// diffing. After interning, content-equal subtrees share the same
+    /// allocation and are skipped in O(1), reducing diff complexity from
+    /// O(n + m) to O(changes × depth).
     #[must_use]
     pub fn diff<'a, 'b>(&'a self, other: &'b Self) -> DiffIter<'a, 'b, K, V, S, P, H>
     where
@@ -856,6 +864,23 @@ where
     {
         let mut diffs = Vec::new();
         if !self.ptr_eq(other) {
+            // kv_merkle fast-path: same-lineage maps (same hasher_id) with
+            // valid, matching kv_merkle hashes are almost certainly equal —
+            // skip the tree walk entirely. Same probabilistic argument as
+            // PartialEq (DEC-023): false positive rate ≈ 2^-64.
+            if self.size == other.size
+                && self.hasher_id == other.hasher_id
+                && MERKLE_HASH_BITS >= MERKLE_POSITIVE_EQ_MIN_BITS
+                && self.kv_merkle_valid
+                && other.kv_merkle_valid
+                && self.kv_merkle_hash == other.kv_merkle_hash
+            {
+                return DiffIter {
+                    diffs,
+                    index: 0,
+                    _phantom: core::marker::PhantomData,
+                };
+            }
             match (&self.root, &other.root) {
                 (Some(old_root), Some(new_root)) => {
                     if !SharedPointer::ptr_eq(old_root, new_root) {
@@ -2498,6 +2523,14 @@ where
     /// Mutation after interning works normally — `make_mut` clones the
     /// shared node (standard COW semantics).
     ///
+    /// ## Performance tip — diff across independently-constructed maps
+    ///
+    /// After interning two maps built from the same data (even if
+    /// constructed independently), content-equal subtrees share the same
+    /// allocation. Subsequent `diff` calls reduce from O(n + m) to
+    /// O(changes × depth) because shared subtrees are skipped in O(1)
+    /// via pointer comparison.
+    ///
     /// # Example
     ///
     /// ```
@@ -2519,6 +2552,60 @@ where
             }
             *root = pool.intern_hamt(root.clone());
         }
+    }
+}
+
+#[cfg(feature = "hash-intern")]
+impl<K, V, S, P, H: HashWidth> GenericHashMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Clone + PartialEq,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    /// Intern the HAMT nodes and seal the kv_merkle hash in one pass.
+    ///
+    /// Equivalent to calling [`intern`][Self::intern] followed by
+    /// [`recompute_kv_merkle`][Self::recompute_kv_merkle]. After this
+    /// call the map has both deduplicated nodes and a valid kv_merkle,
+    /// enabling all three fast-paths in `diff` and `PartialEq`:
+    ///
+    /// 1. O(1) `ptr_eq` for maps sharing structure
+    /// 2. O(1) kv_merkle equality check for same-lineage maps
+    /// 3. O(1) subtree skipping via pointer comparison in the tree walk
+    ///
+    /// Use this instead of `intern()` when the map was constructed via
+    /// bulk insertion (`from_iter`, repeated `insert_bulk`) that leaves
+    /// `kv_merkle` invalid. Calling `intern()` alone after bulk
+    /// construction deduplicates nodes but leaves the O(1) positive
+    /// equality fast-path disabled.
+    ///
+    /// Time: O(n)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # #[cfg(feature = "hash-intern")]
+    /// # {
+    /// use pds::HashMap;
+    /// use pds::intern::InternPool;
+    ///
+    /// let mut pool = InternPool::new();
+    /// let mut map1: HashMap<i32, i32> = (0..1000).map(|i| (i, i)).collect();
+    /// let mut map2: HashMap<i32, i32> = (0..1000).map(|i| (i, i)).collect();
+    ///
+    /// map1.intern_and_seal(&mut pool);
+    /// map2.intern_and_seal(&mut pool);
+    ///
+    /// // kv_merkle is now valid on both — O(1) equality and empty diff.
+    /// assert!(map1.kv_merkle_valid());
+    /// assert_eq!(map1, map2);
+    /// assert_eq!(map1.diff(&map2).count(), 0);
+    /// # }
+    /// ```
+    pub fn intern_and_seal(&mut self, pool: &mut crate::intern::InternPool<(K, V), P, H>) {
+        self.intern(pool);
+        self.recompute_kv_merkle();
     }
 }
 
@@ -3947,6 +4034,58 @@ mod test {
 
         let iter = base.diff(&modified);
         assert_eq!(iter.len(), 2);
+    }
+
+    #[test]
+    fn diff_kv_merkle_fast_path_equal_maps() {
+        // Maps built via public insert maintain kv_merkle. Diffing an equal
+        // clone should return empty without a tree walk (kv_merkle fast-path).
+        let mut base = HashMap::new();
+        for i in 0..500 {
+            base.insert(i, i * 2);
+        }
+        assert!(base.kv_merkle_valid());
+        let other = base.clone();
+        assert!(other.kv_merkle_valid());
+        assert_eq!(base.diff(&other).count(), 0);
+    }
+
+    #[test]
+    fn diff_kv_merkle_fast_path_after_roundtrip() {
+        // Insert then remove the same key returns the map to its prior state.
+        // The kv_merkle is maintained incrementally, so the resulting map has
+        // the same kv_merkle as the original and diff should be empty.
+        let mut map1 = HashMap::new();
+        for i in 0..200 {
+            map1.insert(i, i);
+        }
+        let map2 = {
+            let mut m = map1.clone();
+            m.insert(9999, 9999);
+            m.remove(&9999);
+            m
+        };
+        assert!(map1.kv_merkle_valid());
+        assert!(map2.kv_merkle_valid());
+        assert_eq!(map1.diff(&map2).count(), 0);
+    }
+
+    #[test]
+    fn diff_kv_merkle_invalidated_still_correct() {
+        // When kv_merkle is invalid (after get_mut), diff falls back to tree
+        // walk and still produces correct results.
+        let mut map1 = HashMap::new();
+        for i in 0..100 {
+            map1.insert(i, i);
+        }
+        let mut map2 = map1.clone();
+        // get_mut invalidates kv_merkle
+        if let Some(v) = map2.get_mut(&0) {
+            *v = 999;
+        }
+        assert!(!map2.kv_merkle_valid());
+        let diffs: Vec<_> = map1.diff(&map2).collect();
+        assert_eq!(diffs.len(), 1);
     }
 
     #[test]

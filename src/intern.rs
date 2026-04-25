@@ -705,6 +705,47 @@ mod tests {
     }
 
     #[test]
+    fn intern_and_seal_restores_kv_merkle() {
+        // get_mut invalidates kv_merkle; intern_and_seal must restore it.
+        let mut pool = InternPool::new();
+        let mut map: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+        if let Some(v) = map.get_mut(&0) {
+            *v = 999;
+        }
+        assert!(!map.kv_merkle_valid());
+        map.intern_and_seal(&mut pool);
+        assert!(map.kv_merkle_valid());
+    }
+
+    #[test]
+    fn intern_and_seal_enables_fast_path_diff() {
+        // Two independently-built equal maps: intern_and_seal gives each a
+        // valid kv_merkle. Since they're equal, diff should be empty.
+        let mut pool = InternPool::new();
+        let mut map1: HashMap<i32, i32> = (0..500).map(|i| (i, i)).collect();
+        let mut map2: HashMap<i32, i32> = (0..500).map(|i| (i, i)).collect();
+        map1.intern_and_seal(&mut pool);
+        map2.intern_and_seal(&mut pool);
+        assert!(map1.kv_merkle_valid());
+        assert!(map2.kv_merkle_valid());
+        assert_eq!(map1, map2);
+        assert_eq!(map1.diff(&map2).count(), 0);
+    }
+
+    #[test]
+    fn intern_and_seal_diverged_maps_diff_correct() {
+        // Verify correctness is preserved when maps differ after sealing.
+        let mut pool = InternPool::new();
+        let mut map1: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+        let mut map2: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+        map2.insert(50, 999);
+        map1.intern_and_seal(&mut pool);
+        map2.intern_and_seal(&mut pool);
+        let diffs: Vec<_> = map1.diff(&map2).collect();
+        assert_eq!(diffs.len(), 1);
+    }
+
+    #[test]
     fn default_pool() {
         let pool: InternPool<(i32, i32)> = InternPool::default();
         assert!(pool.is_empty());
