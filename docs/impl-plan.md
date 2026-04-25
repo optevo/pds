@@ -57,6 +57,13 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] Directive conformance pass 3 — From<&Vec>, #[allow] comments, missing tests.**
+  `From<&Vec<A>>` added to `Bag`; `From<&Vec<(Vec<K>,V)>>` added to `Trie`. Tests added:
+  `Bag` (from_vec_ref, sum_via_iterator), `BiMap` (sum, from_vec/slice/vec_ref), `SymMap`
+  (same), `Trie` (debug_format, from_vec_ref), `Vector` (partial_ord_and_ord). Bare
+  `#[allow]` comments fixed in util.rs, vector/mod.rs, vector/focus.rs (×2), and
+  tests/{ordset,vector,hashset}.rs.
+
 - **[2026-04-25] Directive conformance pass 2 — Index, serde tests, Hash tests, allow comments, From<&Vec>.**
   `Index` added for HashMultiMap (returns `&HashSet`), InsertionOrderMap (returns `&V`),
   BiMap (forward direction), SymMap (forward direction), Trie (`&[K]` path). `IndexMut`
