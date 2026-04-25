@@ -129,12 +129,22 @@ impl<A, P: SharedPointerKind, H: HashWidth> InternPool<A, P, H> {
     /// Evict entries where `strong_count == 1` (only the pool holds
     /// them). Call this periodically to reclaim memory from nodes that
     /// are no longer referenced by any collection.
+    ///
+    /// Runs iteratively until stable: evicting a parent HAMT node
+    /// decrements its children's refcount, which may make them eligible
+    /// for eviction in the next pass.
     pub fn purge(&mut self) {
         let before = self.len();
-        purge_map(&mut self.hamt);
-        purge_map(&mut self.small);
-        purge_map(&mut self.large);
-        purge_map(&mut self.collision);
+        loop {
+            let before_pass = self.len();
+            purge_map(&mut self.hamt);
+            purge_map(&mut self.small);
+            purge_map(&mut self.large);
+            purge_map(&mut self.collision);
+            if self.len() == before_pass {
+                break;
+            }
+        }
         let after = self.len();
         self.stats.evictions += (before - after) as u64;
     }

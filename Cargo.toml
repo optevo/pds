@@ -40,6 +40,7 @@ triomphe = ["archery/triomphe"]
 atom = ["dep:arc-swap", "std"]
 foldhash = ["dep:foldhash"]
 hash-intern = ["std"]
+persist = ["std", "dep:serde_core", "hash-intern"]
 
 [dependencies]
 bitmaps = { version = "3", default-features = false }

@@ -223,6 +223,27 @@ where
         let (val, hash) = self.data.pop().unwrap();
         Entry::Value(val, hash)
     }
+
+    /// Reconstruct a SIMD node from serialised (slot_index, value, hash)
+    /// entries. Rebuilds the control bytes from the hashes. Used by the
+    /// `persist` module during pool deserialisation.
+    #[cfg(feature = "persist")]
+    pub(crate) fn from_entries(entries: &[(usize, A, H)]) -> Self
+    where
+        A: Clone,
+    {
+        let mut node = Self::new();
+        for (index, val, hash) in entries {
+            node.data.insert(*index, (val.clone(), *hash));
+            let group = *index / GROUP_WIDTH;
+            let offset = *index % GROUP_WIDTH;
+            let mut ctrl_array = node.control[group].to_array();
+            ctrl_array[offset] = hash.ctrl_byte();
+            node.control[group] = SimdGroup::from(ctrl_array);
+            node.merkle_hash = node.merkle_hash.wrapping_add(fmix64(hash.to_u64()));
+        }
+        node
+    }
 }
 
 impl<A: HashValue, H: HashWidth, const WIDTH: usize, const GROUPS: usize>
@@ -361,6 +382,19 @@ where
 
     fn pop(&mut self) -> Entry<A, P, H> {
         self.data.pop().unwrap()
+    }
+
+    /// Reconstruct a HamtNode from serialised (slot_index, entry) pairs.
+    /// Recomputes merkle_hash from entry contributions. Used by the
+    /// `persist` module during pool deserialisation.
+    #[cfg(feature = "persist")]
+    pub(crate) fn from_entries(entries: Vec<(usize, Entry<A, P, H>)>) -> Self {
+        let mut node = Self::new();
+        for (index, entry) in entries {
+            node.merkle_hash = node.merkle_hash.wrapping_add(entry.merkle_contribution());
+            node.data.insert(index, entry);
+        }
+        node
     }
 }
 

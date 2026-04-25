@@ -407,6 +407,9 @@ pub mod atom;
 #[cfg(feature = "hash-intern")]
 pub mod intern;
 
+#[cfg(feature = "persist")]
+pub mod persist;
+
 pub mod hash_multimap;
 pub mod insertion_order_map;
 pub mod bag;
