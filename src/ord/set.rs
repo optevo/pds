@@ -22,8 +22,8 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::{FromIterator, FusedIterator, Sum};
-use core::ops::{Add, Mul, RangeBounds};
+use core::iter::{FromIterator, FusedIterator};
+use core::ops::RangeBounds;
 
 use archery::SharedPointerKind;
 use equivalent::Comparable;
@@ -941,47 +941,6 @@ impl<A, P: SharedPointerKind> Default for GenericOrdSet<A, P> {
     }
 }
 
-impl<A: Ord + Clone, P: SharedPointerKind> Add for GenericOrdSet<A, P> {
-    type Output = GenericOrdSet<A, P>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.union(other)
-    }
-}
-
-impl<A: Ord + Clone, P: SharedPointerKind> Add for &GenericOrdSet<A, P> {
-    type Output = GenericOrdSet<A, P>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.clone().union(other.clone())
-    }
-}
-
-impl<A: Ord + Clone, P: SharedPointerKind> Mul for GenericOrdSet<A, P> {
-    type Output = GenericOrdSet<A, P>;
-
-    fn mul(self, other: Self) -> Self::Output {
-        self.intersection(other)
-    }
-}
-
-impl<A: Ord + Clone, P: SharedPointerKind> Mul for &GenericOrdSet<A, P> {
-    type Output = GenericOrdSet<A, P>;
-
-    fn mul(self, other: Self) -> Self::Output {
-        self.clone().intersection(other.clone())
-    }
-}
-
-impl<A: Ord + Clone, P: SharedPointerKind> Sum for GenericOrdSet<A, P> {
-    fn sum<I>(it: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        it.fold(Self::new(), |a, b| a + b)
-    }
-}
-
 impl<A, R, P> Extend<R> for GenericOrdSet<A, P>
 where
     A: Ord + Clone + From<R>,
@@ -1707,28 +1666,6 @@ mod test {
         assert_eq!(set.take(0), OrdSet::new());
         assert_eq!(set.skip(5), OrdSet::new());
         assert_eq!(set.take(10), set); // take more than len
-    }
-
-    #[test]
-    fn add_mul_operators() {
-        // Add (union)
-        let a = ordset![1, 2];
-        let b = ordset![2, 3];
-        let union: OrdSet<i32> = a + b;
-        assert_eq!(union, ordset![1, 2, 3]);
-
-        // Mul (intersection)
-        let a = ordset![1, 2, 3];
-        let b = ordset![2, 3, 4];
-        let inter: OrdSet<i32> = a * b;
-        assert_eq!(inter, ordset![2, 3]);
-    }
-
-    #[test]
-    fn sum_trait() {
-        let sets = vec![ordset![1, 2], ordset![2, 3], ordset![3, 4]];
-        let union: OrdSet<i32> = sets.into_iter().sum();
-        assert_eq!(union, ordset![1, 2, 3, 4]);
     }
 
     #[test]

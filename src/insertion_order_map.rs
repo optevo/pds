@@ -28,8 +28,8 @@
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::{FromIterator, Sum};
-use core::ops::{Add, Index, IndexMut};
+use core::iter::FromIterator;
+use core::ops::{Index, IndexMut};
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -420,49 +420,6 @@ where
     }
 }
 
-impl<K, V, S, P, H: HashWidth> Add for GenericInsertionOrderMap<K, V, S, P, H>
-where
-    K: Hash + Eq + Clone,
-    V: Clone,
-    S: BuildHasher + Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericInsertionOrderMap<K, V, S, P, H>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.union(other)
-    }
-}
-
-impl<K, V, S, P, H: HashWidth> Add for &GenericInsertionOrderMap<K, V, S, P, H>
-where
-    K: Hash + Eq + Clone,
-    V: Clone,
-    S: BuildHasher + Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericInsertionOrderMap<K, V, S, P, H>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.clone() + other.clone()
-    }
-}
-
-impl<K, V, S, P: SharedPointerKind, H: HashWidth> Sum for GenericInsertionOrderMap<K, V, S, P, H>
-where
-    K: Hash + Eq + Clone,
-    V: Clone,
-    S: BuildHasher + Default + Clone,
-    P: SharedPointerKind,
-{
-    fn sum<I>(it: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        it.fold(Self::default(), |a, b| a + b)
-    }
-}
-
 impl<K, V, S, P, H: HashWidth> Extend<(K, V)> for GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
@@ -771,28 +728,6 @@ mod test {
     }
 
     #[test]
-    fn add_union_owned() {
-        let mut a = InsertionOrderMap::new();
-        a.insert("x", 1i32);
-        let mut b = InsertionOrderMap::new();
-        b.insert("y", 2);
-        let c = a + b;
-        assert_eq!(c.len(), 2);
-        assert_eq!(c.get("x"), Some(&1));
-        assert_eq!(c.get("y"), Some(&2));
-    }
-
-    #[test]
-    fn add_union_ref() {
-        let mut a = InsertionOrderMap::new();
-        a.insert("x", 1i32);
-        let mut b = InsertionOrderMap::new();
-        b.insert("y", 2);
-        let c = &a + &b;
-        assert_eq!(c.len(), 2);
-    }
-
-    #[test]
     fn union_method() {
         let mut a = InsertionOrderMap::new();
         a.insert("x", 1i32);
@@ -834,16 +769,6 @@ mod test {
         assert!(c.contains_key("y"));
         assert_eq!(c.get("y"), Some(&2)); // self's value is kept
         assert!(!c.contains_key("x"));
-    }
-
-    #[test]
-    fn sum_maps() {
-        let maps: Vec<InsertionOrderMap<i32, i32>> = vec![
-            {let mut m = InsertionOrderMap::new(); m.insert(1, 10); m},
-            {let mut m = InsertionOrderMap::new(); m.insert(2, 20); m},
-        ];
-        let total: InsertionOrderMap<i32, i32> = maps.into_iter().sum();
-        assert_eq!(total.len(), 2);
     }
 
     #[test]

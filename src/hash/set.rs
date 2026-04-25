@@ -29,8 +29,8 @@ use core::borrow::Borrow;
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::{FromIterator, FusedIterator, Sum};
-use core::ops::{Add, Deref, Mul};
+use core::iter::{FromIterator, FusedIterator};
+use core::ops::Deref;
 
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Equivalent;
@@ -998,72 +998,6 @@ where
     }
 }
 
-impl<A, S, P, H: HashWidth> Add for GenericHashSet<A, S, P, H>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericHashSet<A, S, P, H>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.union(other)
-    }
-}
-
-impl<A, S, P, H: HashWidth> Mul for GenericHashSet<A, S, P, H>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericHashSet<A, S, P, H>;
-
-    fn mul(self, other: Self) -> Self::Output {
-        self.intersection(other)
-    }
-}
-
-impl<A, S, P, H: HashWidth> Add for &GenericHashSet<A, S, P, H>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericHashSet<A, S, P, H>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.clone().union(other.clone())
-    }
-}
-
-impl<A, S, P, H: HashWidth> Mul for &GenericHashSet<A, S, P, H>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericHashSet<A, S, P, H>;
-
-    fn mul(self, other: Self) -> Self::Output {
-        self.clone().intersection(other.clone())
-    }
-}
-
-impl<A, S, P: SharedPointerKind, H: HashWidth> Sum for GenericHashSet<A, S, P, H>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Default + Clone,
-    P: SharedPointerKind,
-{
-    fn sum<I>(it: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        it.fold(Self::default(), |a, b| a + b)
-    }
-}
-
 impl<A, S, R, P: SharedPointerKind, H: HashWidth> Extend<R> for GenericHashSet<A, S, P, H>
 where
     A: Hash + Eq + Clone + From<R>,
@@ -1989,26 +1923,6 @@ mod test {
         assert!(set.contains(&1));
         assert!(set.contains(&3));
         assert!(set.contains(&5));
-    }
-
-    #[test]
-    fn add_mul_operators() {
-        let a = hashset! {1, 2};
-        let b = hashset! {2, 3};
-        let union: HashSet<i32> = a + b;
-        assert_eq!(union.len(), 3);
-
-        let a = hashset! {1, 2, 3};
-        let b = hashset! {2, 3, 4};
-        let inter: HashSet<i32> = a * b;
-        assert_eq!(inter.len(), 2);
-    }
-
-    #[test]
-    fn sum_trait() {
-        let sets = vec![hashset! {1, 2}, hashset! {2, 3}, hashset! {3, 4}];
-        let union: HashSet<i32> = sets.into_iter().sum();
-        assert_eq!(union.len(), 4);
     }
 
     #[test]

@@ -29,8 +29,8 @@
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::{FromIterator, Sum};
-use core::ops::{Add, Index, IndexMut};
+use core::iter::FromIterator;
+use core::ops::{Index, IndexMut};
 
 use archery::SharedPointerKind;
 
@@ -532,50 +532,6 @@ where
     }
 }
 
-impl<K, V, S, P> Add for GenericTrie<K, V, S, P>
-where
-    K: Hash + Eq + Clone,
-    V: Clone,
-    S: BuildHasher + Clone + Default,
-    P: SharedPointerKind,
-{
-    type Output = Self;
-
-    /// Union two tries. When a path exists in both, the right operand's value wins.
-    fn add(self, other: Self) -> Self {
-        self.union(other)
-    }
-}
-
-impl<K, V, S, P> Add for &GenericTrie<K, V, S, P>
-where
-    K: Hash + Eq + Clone,
-    V: Clone,
-    S: BuildHasher + Clone + Default,
-    P: SharedPointerKind,
-{
-    type Output = GenericTrie<K, V, S, P>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.clone() + other.clone()
-    }
-}
-
-impl<K, V, S, P> Sum for GenericTrie<K, V, S, P>
-where
-    K: Hash + Eq + Clone,
-    V: Clone,
-    S: BuildHasher + Clone + Default,
-    P: SharedPointerKind,
-{
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(
-            GenericTrie { value: None, children: GenericHashMap::default() },
-            |a, b| a + b,
-        )
-    }
-}
-
 /// Iterator over (path, value) pairs in a trie.
 pub struct TrieIter<'a, K, V, S, P: SharedPointerKind> {
     stack: alloc::vec::Vec<(alloc::vec::Vec<&'a K>, &'a GenericTrie<K, V, S, P>)>,
@@ -936,28 +892,6 @@ mod test {
     }
 
     #[test]
-    fn add_union() {
-        let mut a: Trie<&str, i32> = Trie::new();
-        a.insert(&["x"], 1);
-        let mut b: Trie<&str, i32> = Trie::new();
-        b.insert(&["y"], 2);
-        b.insert(&["x"], 99); // conflict — right wins
-        let c = a + b;
-        assert_eq!(c.get(&["x"]), Some(&99));
-        assert_eq!(c.get(&["y"]), Some(&2));
-    }
-
-    #[test]
-    fn add_ref() {
-        let mut a: Trie<&str, i32> = Trie::new();
-        a.insert(&["a"], 1);
-        let mut b: Trie<&str, i32> = Trie::new();
-        b.insert(&["b"], 2);
-        let c = &a + &b;
-        assert_eq!(c.len(), 2);
-    }
-
-    #[test]
     fn union_method() {
         let mut a: Trie<&str, i32> = Trie::new();
         a.insert(&["x"], 1);
@@ -993,18 +927,6 @@ mod test {
         assert_eq!(c.get(&["y"]), Some(&2)); // self's value is kept
         assert!(c.get(&["x"]).is_none());
         assert!(c.get(&["z"]).is_none());
-    }
-
-    #[test]
-    fn sum() {
-        let tries: Vec<Trie<&str, i32>> = vec![
-            { let mut t = Trie::new(); t.insert(&["a"], 1); t },
-            { let mut t = Trie::new(); t.insert(&["b"], 2); t },
-            { let mut t = Trie::new(); t.insert(&["c"], 3); t },
-        ];
-        let total: Trie<&str, i32> = tries.into_iter().sum();
-        assert_eq!(total.len(), 3);
-        assert_eq!(total.get(&["b"]), Some(&2));
     }
 
     #[test]

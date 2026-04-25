@@ -24,9 +24,9 @@ use core::borrow::Borrow;
 use core::cmp::Ordering;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::{FromIterator, FusedIterator, Sum};
+use core::iter::{FromIterator, FusedIterator};
 use core::mem;
-use core::ops::{Add, Bound, Index, IndexMut, RangeBounds};
+use core::ops::{Bound, Index, IndexMut, RangeBounds};
 
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Comparable;
@@ -2329,46 +2329,6 @@ impl<K, V, P: SharedPointerKind> Default for GenericOrdMap<K, V, P> {
     }
 }
 
-impl<K, V, P> Add for &GenericOrdMap<K, V, P>
-where
-    K: Ord + Clone,
-    V: Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericOrdMap<K, V, P>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.clone().union(other.clone())
-    }
-}
-
-impl<K, V, P> Add for GenericOrdMap<K, V, P>
-where
-    K: Ord + Clone,
-    V: Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericOrdMap<K, V, P>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.union(other)
-    }
-}
-
-impl<K, V, P> Sum for GenericOrdMap<K, V, P>
-where
-    K: Ord + Clone,
-    V: Clone,
-    P: SharedPointerKind,
-{
-    fn sum<I>(it: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        it.fold(Self::default(), |a, b| a + b)
-    }
-}
-
 impl<K, V, RK, RV, P> Extend<(RK, RV)> for GenericOrdMap<K, V, P>
 where
     K: Ord + Clone + From<RK>,
@@ -4416,27 +4376,6 @@ mod test {
 
         assert_eq!(hash_of(&a), hash_of(&b));
         assert_ne!(hash_of(&a), hash_of(&c));
-    }
-
-    #[test]
-    fn sum_trait() {
-        let maps = vec![ordmap! {1 => 10}, ordmap! {2 => 20}, ordmap! {3 => 30}];
-        let combined: OrdMap<i32, i32> = maps.into_iter().sum();
-        assert_eq!(combined.len(), 3);
-    }
-
-    #[test]
-    fn add_trait() {
-        let a = ordmap! {1 => 10};
-        let b = ordmap! {2 => 20};
-        let c = a + b;
-        assert_eq!(c, ordmap! {1 => 10, 2 => 20});
-
-        // &Add
-        let a = ordmap! {1 => 10};
-        let b = ordmap! {2 => 20};
-        let c = &a + &b;
-        assert_eq!(c, ordmap! {1 => 10, 2 => 20});
     }
 
     #[test]

@@ -1654,7 +1654,7 @@ on each `Index` impl.
 ## DEC-031: Bag implements `Add` and `Sum` despite directive table marking them n/a {#sec:dec-031}
 
 **Date:** 2026-04-25
-**Status:** Accepted
+**Status:** Superseded by DEC-032
 
 **Context:**
 The standard trait table marks `Add` (union) and `Sum` as "n/a" for Bag types. The
@@ -1674,3 +1674,31 @@ mathematically sound operation. `Sum` is the natural fold over `Add`.
 **Consequences:**
 `Bag<T>` is slightly richer than the trait table prescribes. The directive table should
 be read as a minimum obligation, not a ceiling.
+
+---
+
+## DEC-032 — Remove Add/Mul/Sum from all collection types (except Vector)
+
+**Status:** Accepted
+
+**Context:**
+All collection types inherited `Add` (for union), `Mul` (for intersection on sets), and
+`Sum` from imbl. These use arithmetic operator overloading to express set operations:
+`a + b` for union, `a * b` for intersection.
+
+**Decision:**
+Remove `Add`, `Mul`, and `Sum` from all collection types. Keep `Add` on `Vector`
+(concatenation, analogous to `String + &str`).
+
+**Alternatives considered:**
+- Keep the operators as a convenience shorthand — rejected because `+` for union is not
+  idiomatic Rust. The standard library's `HashMap`, `HashSet`, `BTreeMap`, and
+  `BTreeSet` do not implement these operators. Users expect arithmetic operators to mean
+  arithmetic operations. Using them for set semantics is surprising and misleading.
+
+**Consequences:**
+- `a + b` no longer compiles for map/set/bag types. Use `a.union(b)` instead.
+- `Iterator::sum()` over a collection of maps/sets no longer works. Use
+  `.reduce(|a, b| a.union(b))` or `fold(Default::default(), |a, b| a.union(b))`.
+- All collections retain their named `union()`, `relative_complement()`,
+  `intersection()`, and (where applicable) `symmetric_difference()` methods.

@@ -28,8 +28,7 @@
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::{FromIterator, Sum};
-use core::ops::Add;
+use core::iter::FromIterator;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -429,46 +428,6 @@ where
     }
 }
 
-impl<A, S, P> Add for GenericBag<A, S, P>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericBag<A, S, P>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.union(&other)
-    }
-}
-
-impl<A, S, P> Add for &GenericBag<A, S, P>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericBag<A, S, P>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.union(other)
-    }
-}
-
-impl<A, S, P: SharedPointerKind> Sum for GenericBag<A, S, P>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Default + Clone,
-    P: SharedPointerKind,
-{
-    fn sum<I>(it: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        it.fold(Self::default(), |a, b| a + b)
-    }
-}
-
 /// A consuming iterator over the elements of a [`GenericBag`].
 ///
 /// Each item is `(element, count)`.
@@ -798,28 +757,6 @@ mod test {
     }
 
     #[test]
-    fn add_union_owned() {
-        let mut a = Bag::new();
-        a.insert(1i32); a.insert(2);
-        let mut b = Bag::new();
-        b.insert(2i32); b.insert(3);
-        let c = a + b;
-        assert_eq!(c.count(&1), 1);
-        assert_eq!(c.count(&2), 2); // appears in both
-        assert_eq!(c.count(&3), 1);
-    }
-
-    #[test]
-    fn add_union_ref() {
-        let mut a = Bag::new();
-        a.insert(1i32);
-        let mut b = Bag::new();
-        b.insert(2i32);
-        let c = &a + &b;
-        assert_eq!(c.len(), 2);
-    }
-
-    #[test]
     fn extend_adds_elements() {
         let mut b: Bag<i32> = Bag::new();
         b.extend(vec![1, 1, 2]);
@@ -853,15 +790,4 @@ mod test {
         assert_eq!(b.count(&2), 1);
     }
 
-    #[test]
-    fn sum_via_iterator() {
-        // Tests the Sum trait via Iterator::sum(), distinct from the sum() method.
-        let bags: Vec<Bag<i32>> = vec![
-            {let mut b = Bag::new(); b.insert(1); b.insert(1); b},
-            {let mut b = Bag::new(); b.insert(2); b},
-        ];
-        let total: Bag<i32> = bags.into_iter().sum();
-        assert_eq!(total.count(&1), 2);
-        assert_eq!(total.count(&2), 1);
-    }
 }

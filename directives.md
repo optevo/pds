@@ -90,9 +90,6 @@ trait coverage against this table and fill any gaps.
 | `IntoIterator` (owned) | Y | Y | Y | Y | Named `ConsumingIter` type |
 | `IntoIterator` (`&`) | Y | Y | Y | Y | |
 | `Extend` | Y | Y | Y | Y | |
-| `Add` (union) | Y | Y | Y | n/a | Both owned and `&` variants |
-| `Mul` (intersection) | n/a | Y | n/a | n/a | Sets only |
-| `Sum` | Y | Y | Y | n/a | |
 | `Index` / `IndexMut` | Keyed types | n/a | Y | n/a | |
 | `Serialize` / `Deserialize` | Y | Y | Y | Y | Behind `serde` feature gate |
 | `From` conversions | Y | Y | Y | Y | From slice, Vec, array `[T; N]`, std equivalents |
@@ -106,6 +103,35 @@ trait coverage against this table and fill any gaps.
 - Serde impls go in `src/ser.rs`, not in the collection module.
 - This table is the obligation — if a cell says Y, the impl must exist.
   Missing impls are bugs.
+- **Do not implement `Add`, `Mul`, or `Sum` for collection types.** Using
+  arithmetic operators for set operations (`+` for union, `*` for intersection)
+  is not idiomatic Rust — the standard library's `HashMap`, `HashSet`,
+  `BTreeMap`, and `BTreeSet` do not do this. Use named methods instead:
+  `union()`, `intersection()`, `relative_complement()`,
+  `symmetric_difference()`. The exception is `Vector`, where `Add` is
+  concatenation — analogous to `String + &str` — which is acceptable.
+
+---
+
+### Set operation naming
+
+All set-like operations must use the canonical names below, consistently
+across every collection type that supports them:
+
+| Operation | Method name |
+|-----------|-------------|
+| All elements from both | `union()` |
+| Elements in `self` not in `other` | `relative_complement()` |
+| Elements in both | `intersection()` |
+| Elements in exactly one | `symmetric_difference()` |
+
+**Rules:**
+- Never use `sum`, `difference`, `subtract`, `minus`, or other synonyms
+  for these operations. The names above are the only permitted names.
+- A collection type that logically supports a set operation must use these
+  names — do not invent per-type variants.
+- When adding a new collection type, audit which of the four operations
+  are applicable and implement them with the canonical names.
 
 ---
 

@@ -29,8 +29,8 @@
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::{FromIterator, Sum};
-use core::ops::{Add, Index};
+use core::iter::FromIterator;
+use core::ops::Index;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -423,46 +423,6 @@ where
     }
 }
 
-impl<A, S, P, H: HashWidth> Add for GenericSymMap<A, S, P, H>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Clone + Default,
-    P: SharedPointerKind,
-{
-    type Output = GenericSymMap<A, S, P, H>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.union(other)
-    }
-}
-
-impl<A, S, P, H: HashWidth> Add for &GenericSymMap<A, S, P, H>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Clone + Default,
-    P: SharedPointerKind,
-{
-    type Output = GenericSymMap<A, S, P, H>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.clone() + other.clone()
-    }
-}
-
-impl<A, S, P: SharedPointerKind, H: HashWidth> Sum for GenericSymMap<A, S, P, H>
-where
-    A: Hash + Eq + Clone,
-    S: BuildHasher + Default + Clone,
-    P: SharedPointerKind,
-{
-    fn sum<I>(it: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        it.fold(Self::default(), |a, b| a + b)
-    }
-}
-
 impl<A, S, P, H: HashWidth> Extend<(A, A)> for GenericSymMap<A, S, P, H>
 where
     A: Hash + Eq + Clone,
@@ -729,16 +689,6 @@ mod test {
     }
 
     #[test]
-    fn add_trait() {
-        let mut a: SymMap<&str> = SymMap::new();
-        a.insert("a", "x");
-        let mut b = SymMap::new();
-        b.insert("b", "y");
-        let c = a + b;
-        assert_eq!(c.len(), 2);
-    }
-
-    #[test]
     fn union_method() {
         let mut a: SymMap<&str> = SymMap::new();
         a.insert("a", "x");
@@ -797,17 +747,6 @@ mod test {
     fn index_panics_on_missing() {
         let sm: SymMap<i32> = SymMap::new();
         let _ = sm[&99];
-    }
-
-    #[test]
-    fn sum_symmaps() {
-        let maps: Vec<SymMap<i32>> = vec![
-            {let mut m = SymMap::new(); m.insert(1, 10); m},
-            {let mut m = SymMap::new(); m.insert(2, 20); m},
-        ];
-        let total: SymMap<i32> = maps.into_iter().sum();
-        assert_eq!(total.len(), 2);
-        assert_eq!(total.get(Direction::Forward, &1), Some(&10));
     }
 
     #[test]

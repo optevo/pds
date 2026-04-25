@@ -29,9 +29,9 @@ use core::borrow::Borrow;
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::{FromIterator, FusedIterator, Sum};
+use core::iter::{FromIterator, FusedIterator};
 use core::mem;
-use core::ops::{Add, Index, IndexMut};
+use core::ops::{Index, IndexMut};
 use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use archery::{SharedPointer, SharedPointerKind};
@@ -2686,49 +2686,6 @@ where
             kv_merkle_hash: 0,
             kv_merkle_valid: true,
         }
-    }
-}
-
-impl<K, V, S, P, H: HashWidth> Add for GenericHashMap<K, V, S, P, H>
-where
-    K: Hash + Eq + Clone,
-    V: Clone,
-    S: BuildHasher + Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericHashMap<K, V, S, P, H>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.union(other)
-    }
-}
-
-impl<K, V, S, P, H: HashWidth> Add for &GenericHashMap<K, V, S, P, H>
-where
-    K: Hash + Eq + Clone,
-    V: Clone,
-    S: BuildHasher + Clone,
-    P: SharedPointerKind,
-{
-    type Output = GenericHashMap<K, V, S, P, H>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.clone().union(other.clone())
-    }
-}
-
-impl<K, V, S, P, H: HashWidth> Sum for GenericHashMap<K, V, S, P, H>
-where
-    K: Hash + Eq + Clone,
-    V: Clone,
-    S: BuildHasher + Default + Clone,
-    P: SharedPointerKind,
-{
-    fn sum<I>(it: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        it.fold(Self::default(), |a, b| a + b)
     }
 }
 

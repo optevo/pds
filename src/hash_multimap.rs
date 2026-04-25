@@ -27,8 +27,8 @@
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::{FromIterator, Sum};
-use core::ops::{Add, Index};
+use core::iter::FromIterator;
+use core::ops::Index;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -437,49 +437,6 @@ where
     }
 }
 
-impl<K, V, S, P, H: HashWidth> Add for GenericHashMultiMap<K, V, S, P, H>
-where
-    K: Hash + Eq + Clone,
-    V: Hash + Eq + Clone,
-    S: BuildHasher + Clone + Default,
-    P: SharedPointerKind,
-{
-    type Output = GenericHashMultiMap<K, V, S, P, H>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.union(other)
-    }
-}
-
-impl<K, V, S, P, H: HashWidth> Add for &GenericHashMultiMap<K, V, S, P, H>
-where
-    K: Hash + Eq + Clone,
-    V: Hash + Eq + Clone,
-    S: BuildHasher + Clone + Default,
-    P: SharedPointerKind,
-{
-    type Output = GenericHashMultiMap<K, V, S, P, H>;
-
-    fn add(self, other: Self) -> Self::Output {
-        self.clone() + other.clone()
-    }
-}
-
-impl<K, V, S, P: SharedPointerKind, H: HashWidth> Sum for GenericHashMultiMap<K, V, S, P, H>
-where
-    K: Hash + Eq + Clone,
-    V: Hash + Eq + Clone,
-    S: BuildHasher + Default + Clone,
-    P: SharedPointerKind,
-{
-    fn sum<I>(it: I) -> Self
-    where
-        I: Iterator<Item = Self>,
-    {
-        it.fold(Self::default(), |a, b| a + b)
-    }
-}
-
 impl<K, V, S, P, H: HashWidth> Extend<(K, V)> for GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
@@ -803,28 +760,6 @@ mod test {
     }
 
     #[test]
-    fn add_union_owned() {
-        let mut a = HashMultiMap::new();
-        a.insert(1, "x");
-        let mut b = HashMultiMap::new();
-        b.insert(1, "y"); b.insert(2, "z");
-        let c = a + b;
-        assert_eq!(c.len(), 3);
-        assert_eq!(c.key_count(&1), 2);
-        assert_eq!(c.key_count(&2), 1);
-    }
-
-    #[test]
-    fn add_union_ref() {
-        let mut a = HashMultiMap::new();
-        a.insert(1i32, 10i32);
-        let mut b = HashMultiMap::new();
-        b.insert(2, 20);
-        let c = &a + &b;
-        assert_eq!(c.len(), 2);
-    }
-
-    #[test]
     fn union_method() {
         let mut a = HashMultiMap::new();
         a.insert(1, "x");
@@ -856,16 +791,6 @@ mod test {
         assert!(!c.contains_key(&1));
         assert!(c.contains_key(&2));
         assert!(c.contains(&2, &"y")); // self's value is kept
-    }
-
-    #[test]
-    fn sum_multimaps() {
-        let maps: Vec<HashMultiMap<i32, i32>> = vec![
-            {let mut m = HashMultiMap::new(); m.insert(1, 10); m},
-            {let mut m = HashMultiMap::new(); m.insert(2, 20); m},
-        ];
-        let total: HashMultiMap<i32, i32> = maps.into_iter().sum();
-        assert_eq!(total.len(), 2);
     }
 
     #[test]
