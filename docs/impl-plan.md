@@ -2270,22 +2270,33 @@ cover 90%+ of practical use cases? If yes, this item remains deferred.
 
 **Approach:**
 1. Add `merkle_index: StdHashMap<u64, Vec<u32>>` to `PoolCollector`.
-2. In each `visit_*` method: after the `seen` miss, scan `merkle_index[hash]`
-   for a structurally-equal entry using the existing node equality functions
-   from `intern.rs`.
-3. If found: add `seen.insert(addr, existing_id)` and return `existing_id`.
-4. If not found: allocate new entry, update both `seen` and `merkle_index`.
-5. The equality check requires `A: PartialEq` — same bound as `InternPool`.
+2. In each `visit_*` method: after the `seen` miss, read `node.merkle_hash`
+   from the live node (before serialising it), then scan `merkle_index[hash]`
+   for a structurally-equal entry. `SmallSimdNode` and `LargeSimdNode` don't
+   store their Merkle hash in the serialised `PoolNode`, but their live struct
+   has `merkle_hash` — read it while the live node is still in scope.
+3. Equality check: compare the freshly-constructed `PoolEntry` list for the
+   new node against the stored `PoolNode` for each candidate. Because traversal
+   is post-order (children before parents), child refs are already normalised
+   by the time any parent is compared — two parent nodes whose children were
+   merged at child level will have identical `Ref(id)` values, making the
+   parent comparison O(node_size) with no recursion needed.
+4. If a match is found: `seen.insert(addr, existing_id)` and return `existing_id`.
+5. If no match: allocate new entry, update both `seen` and `merkle_index`.
+6. The equality function is a simple `PoolEntry` vector comparison — no new
+   machinery beyond what `intern.rs` already provides. The check requires
+   `A: PartialEq`, the same bound `InternPool` already uses.
 
-**Alternative approach (simpler, less precise):** Accept Merkle collisions as
-false-positives (two nodes with same Merkle get merged even if content
-differs). This would produce incorrect serialised data on a collision —
-unacceptable for a serialisation format, so the full equality check is required.
+**API change:** `from_maps` currently requires only `K: Clone, V: Clone`.
+Adding `K: PartialEq, V: PartialEq` is technically a breaking change at 1.0.
+Preferred approach: keep `from_maps` as-is and add `from_maps_dedup` with the
+stronger bounds. Users opt in explicitly.
 
 **Complexity:** Medium. Touches `PoolCollector`, `SetPoolCollector`, and all
 four `visit_*` methods. Requires adding `A: PartialEq` bounds to
-`HashMapPool::from_maps` and `HashSetPool::from_sets`. Benchmark before/after
-to verify the overhead doesn't regress the common (already-shared-pointers) case.
+`from_maps_dedup` and its set equivalent. Benchmark before/after to verify the
+`merkle_index` lookup adds no measurable overhead on the common
+(pointer-sharing) case — `seen` hits in step 2 bypass the index entirely.
 
 **Prerequisites:** 6.5 ✓ (InternPool — equality functions reusable), 6.6 ✓
 (SSP serialisation implemented).
