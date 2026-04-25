@@ -195,6 +195,234 @@ impl<A: Clone, H: HashWidth> PoolCollector<A, H> {
     }
 }
 
+// ─── Deduplication helpers ────────────────────────────────────────────
+//
+// These compare a freshly-built PoolEntry/PoolNode against an already-
+// stored PoolNode. Used by DedupPoolCollector and SetDedupPoolCollector.
+// The post-order traversal in the dedup collectors ensures that child
+// Ref IDs are already normalised before any parent comparison, so these
+// checks are always O(node_size) — never recursive.
+
+fn pool_entry_eq<A: PartialEq, H: PartialEq>(a: &PoolEntry<A, H>, b: &PoolEntry<A, H>) -> bool {
+    match (a, b) {
+        (PoolEntry::Ref(ia), PoolEntry::Ref(ib)) => ia == ib,
+        (PoolEntry::Value(va, ha), PoolEntry::Value(vb, hb)) => va == vb && ha == hb,
+        _ => false,
+    }
+}
+
+fn hamt_node_matches<A: PartialEq, H: PartialEq>(
+    stored: &PoolNode<A, H>,
+    entries: &[(u8, PoolEntry<A, H>)],
+) -> bool {
+    match stored {
+        PoolNode::Hamt(se) => {
+            se.len() == entries.len()
+                && se
+                    .iter()
+                    .zip(entries)
+                    .all(|(s, n)| s.0 == n.0 && pool_entry_eq(&s.1, &n.1))
+        }
+        _ => false,
+    }
+}
+
+fn simd_small_node_matches<A: PartialEq, H: PartialEq>(
+    stored: &PoolNode<A, H>,
+    entries: &[(u8, A, H)],
+) -> bool {
+    match stored {
+        PoolNode::SimdSmall(se) => {
+            se.len() == entries.len()
+                && se
+                    .iter()
+                    .zip(entries)
+                    .all(|(s, n)| s.0 == n.0 && s.1 == n.1 && s.2 == n.2)
+        }
+        _ => false,
+    }
+}
+
+fn simd_large_node_matches<A: PartialEq, H: PartialEq>(
+    stored: &PoolNode<A, H>,
+    entries: &[(u8, A, H)],
+) -> bool {
+    match stored {
+        PoolNode::SimdLarge(se) => {
+            se.len() == entries.len()
+                && se
+                    .iter()
+                    .zip(entries)
+                    .all(|(s, n)| s.0 == n.0 && s.1 == n.1 && s.2 == n.2)
+        }
+        _ => false,
+    }
+}
+
+fn collision_node_matches<A: PartialEq, H: PartialEq>(
+    stored: &PoolNode<A, H>,
+    hash: H,
+    values: &[A],
+) -> bool {
+    match stored {
+        PoolNode::Collision(h, v) => *h == hash && v == values,
+        _ => false,
+    }
+}
+
+// ─── DedupPoolCollector ───────────────────────────────────────────────
+//
+// Extends PoolCollector with a Merkle-keyed secondary index so that
+// content-equal nodes without shared pointers (e.g. independently-built
+// maps, round-tripped maps) are still deduplicated.
+//
+// On a `seen` miss, reads the live node's `merkle_hash`, scans
+// `merkle_index[hash]` for a content-equal stored entry, and reuses
+// it if found. Correctness follows from post-order traversal: children
+// are processed before parents, so by the time any parent is compared,
+// all child Ref IDs are already normalised — making equality O(node_size).
+//
+// Collision nodes have no dedicated `merkle_hash`; their stored key hash
+// (`node.hash.to_u64()`) serves as the bucket key.
+
+struct DedupPoolCollector<A, H> {
+    seen: StdHashMap<usize, u32>,
+    merkle_index: StdHashMap<u64, Vec<u32>>,
+    nodes: Vec<PoolNode<A, H>>,
+}
+
+impl<A: Clone + PartialEq, H: HashWidth> DedupPoolCollector<A, H> {
+    fn new() -> Self {
+        DedupPoolCollector {
+            seen: StdHashMap::new(),
+            merkle_index: StdHashMap::new(),
+            nodes: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, node: PoolNode<A, H>, addr: usize, key: u64) -> u32 {
+        let id = self.nodes.len() as u32;
+        self.nodes.push(node);
+        self.seen.insert(addr, id);
+        self.merkle_index.entry(key).or_default().push(id);
+        id
+    }
+
+    fn visit_hamt<P: SharedPointerKind>(
+        &mut self,
+        node: &SharedPointer<HamtNode<A, P, H>, P>,
+    ) -> u32
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        let addr = SharedPointer::as_ptr(node) as usize;
+        if let Some(&id) = self.seen.get(&addr) {
+            return id;
+        }
+        let key = node.merkle_hash;
+
+        let mut entries = Vec::with_capacity(node.data.len());
+        for (slot, entry) in node.data.entries() {
+            let pool_entry = match entry {
+                Entry::Value(a, h) => PoolEntry::Value(a.clone(), *h),
+                Entry::HamtNode(child) => PoolEntry::Ref(self.visit_hamt(child)),
+                Entry::SmallSimdNode(child) => PoolEntry::Ref(self.visit_small_simd(child)),
+                Entry::LargeSimdNode(child) => PoolEntry::Ref(self.visit_large_simd(child)),
+                Entry::Collision(child) => PoolEntry::Ref(self.visit_collision(child)),
+            };
+            entries.push((slot as u8, pool_entry));
+        }
+
+        let candidates = self.merkle_index.get(&key).cloned().unwrap_or_default();
+        for candidate_id in candidates {
+            if hamt_node_matches(&self.nodes[candidate_id as usize], &entries) {
+                self.seen.insert(addr, candidate_id);
+                return candidate_id;
+            }
+        }
+
+        self.push(PoolNode::Hamt(entries), addr, key)
+    }
+
+    fn visit_small_simd<P: SharedPointerKind>(
+        &mut self,
+        node: &SharedPointer<SmallSimdNode<A, H>, P>,
+    ) -> u32 {
+        let addr = SharedPointer::as_ptr(node) as usize;
+        if let Some(&id) = self.seen.get(&addr) {
+            return id;
+        }
+        let key = node.merkle_hash;
+
+        let entries: Vec<(u8, A, H)> = node
+            .data
+            .entries()
+            .map(|(idx, (val, hash))| (idx as u8, val.clone(), *hash))
+            .collect();
+
+        let candidates = self.merkle_index.get(&key).cloned().unwrap_or_default();
+        for candidate_id in candidates {
+            if simd_small_node_matches(&self.nodes[candidate_id as usize], &entries) {
+                self.seen.insert(addr, candidate_id);
+                return candidate_id;
+            }
+        }
+
+        self.push(PoolNode::SimdSmall(entries), addr, key)
+    }
+
+    fn visit_large_simd<P: SharedPointerKind>(
+        &mut self,
+        node: &SharedPointer<LargeSimdNode<A, H>, P>,
+    ) -> u32 {
+        let addr = SharedPointer::as_ptr(node) as usize;
+        if let Some(&id) = self.seen.get(&addr) {
+            return id;
+        }
+        let key = node.merkle_hash;
+
+        let entries: Vec<(u8, A, H)> = node
+            .data
+            .entries()
+            .map(|(idx, (val, hash))| (idx as u8, val.clone(), *hash))
+            .collect();
+
+        let candidates = self.merkle_index.get(&key).cloned().unwrap_or_default();
+        for candidate_id in candidates {
+            if simd_large_node_matches(&self.nodes[candidate_id as usize], &entries) {
+                self.seen.insert(addr, candidate_id);
+                return candidate_id;
+            }
+        }
+
+        self.push(PoolNode::SimdLarge(entries), addr, key)
+    }
+
+    fn visit_collision<P: SharedPointerKind>(
+        &mut self,
+        node: &SharedPointer<CollisionNode<A, H>, P>,
+    ) -> u32 {
+        let addr = SharedPointer::as_ptr(node) as usize;
+        if let Some(&id) = self.seen.get(&addr) {
+            return id;
+        }
+        // Collision nodes have no merkle_hash; use the stored key hash
+        // (which uniquely identifies the collision bucket).
+        let key = node.hash.to_u64();
+        let values = node.data.clone();
+
+        let candidates = self.merkle_index.get(&key).cloned().unwrap_or_default();
+        for candidate_id in candidates {
+            if collision_node_matches(&self.nodes[candidate_id as usize], node.hash, &values) {
+                self.seen.insert(addr, candidate_id);
+                return candidate_id;
+            }
+        }
+
+        self.push(PoolNode::Collision(node.hash, values), addr, key)
+    }
+}
+
 // ─── HashMapPool public API ──────────────────────────────────────────
 
 impl<K: Clone, V: Clone, H: HashWidth> HashMapPool<K, V, H> {
@@ -227,6 +455,58 @@ impl<K: Clone, V: Clone, H: HashWidth> HashMapPool<K, V, H> {
         BitsImpl<HASH_WIDTH>: Bits,
     {
         Self::from_maps(&[map])
+    }
+}
+
+impl<K: Clone + PartialEq, V: Clone + PartialEq, H: HashWidth> HashMapPool<K, V, H> {
+    /// Build a pool from one or more HashMaps, deduplicating content-equal
+    /// nodes even when they do not share the same allocation.
+    ///
+    /// Unlike [`from_maps`][Self::from_maps], which deduplicates by pointer
+    /// identity alone, this variant uses the HAMT node Merkle hash as a
+    /// secondary index and performs a structural equality check on matches.
+    /// This catches content-equal nodes that arise from:
+    ///
+    /// - Independently-built maps containing the same data
+    /// - Maps reconstructed from a deserialised pool (all pointers are fresh)
+    /// - Cross-session serialisation of replicated data sets
+    ///
+    /// Requires `K: PartialEq, V: PartialEq`. If the extra bound is not
+    /// available, use [`from_maps`][Self::from_maps] instead.
+    ///
+    /// Time: O(n) amortised (same as `from_maps`; Merkle hash collisions
+    /// are negligible at 2^-64).
+    pub fn from_maps_dedup<S, P: SharedPointerKind>(
+        maps: &[&GenericHashMap<K, V, S, P, H>],
+    ) -> Self
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        let mut collector = DedupPoolCollector::<(K, V), H>::new();
+        let mut containers = Vec::with_capacity(maps.len());
+
+        for map in maps {
+            let root = map.root.as_ref().map(|r| collector.visit_hamt(r));
+            containers.push(PoolContainer {
+                root,
+                size: map.size,
+            });
+        }
+
+        HashMapPool {
+            nodes: collector.nodes,
+            containers,
+        }
+    }
+
+    /// Build a deduplicating pool from a single HashMap.
+    ///
+    /// See [`from_maps_dedup`][Self::from_maps_dedup] for details.
+    pub fn from_map_dedup<S, P: SharedPointerKind>(map: &GenericHashMap<K, V, S, P, H>) -> Self
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        Self::from_maps_dedup(&[map])
     }
 }
 
@@ -1160,6 +1440,148 @@ impl<A: Clone, H: HashWidth> SetPoolCollector<A, H> {
     }
 }
 
+// ─── SetDedupPoolCollector ────────────────────────────────────────────
+//
+// Mirrors DedupPoolCollector but unwraps Value<A> when visiting set nodes,
+// storing raw A in the pool. Identical dedup strategy: Merkle-keyed secondary
+// index with O(node_size) structural equality on match.
+
+struct SetDedupPoolCollector<A, H> {
+    seen: StdHashMap<usize, u32>,
+    merkle_index: StdHashMap<u64, Vec<u32>>,
+    nodes: Vec<PoolNode<A, H>>,
+}
+
+impl<A: Clone + PartialEq, H: HashWidth> SetDedupPoolCollector<A, H> {
+    fn new() -> Self {
+        SetDedupPoolCollector {
+            seen: StdHashMap::new(),
+            merkle_index: StdHashMap::new(),
+            nodes: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, node: PoolNode<A, H>, addr: usize, key: u64) -> u32 {
+        let id = self.nodes.len() as u32;
+        self.nodes.push(node);
+        self.seen.insert(addr, id);
+        self.merkle_index.entry(key).or_default().push(id);
+        id
+    }
+
+    fn visit_hamt<P: SharedPointerKind>(
+        &mut self,
+        node: &SharedPointer<HamtRootNode<SetValue<A>, P, H>, P>,
+    ) -> u32
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        let addr = SharedPointer::as_ptr(node) as usize;
+        if let Some(&id) = self.seen.get(&addr) {
+            return id;
+        }
+        let key = node.merkle_hash;
+
+        let mut entries = Vec::with_capacity(node.data.len());
+        for (slot, entry) in node.data.entries() {
+            let pool_entry = match entry {
+                Entry::Value(val, h) => PoolEntry::Value(val.0.clone(), *h),
+                Entry::HamtNode(child) => PoolEntry::Ref(self.visit_hamt(child)),
+                Entry::SmallSimdNode(child) => PoolEntry::Ref(self.visit_set_small_simd(child)),
+                Entry::LargeSimdNode(child) => PoolEntry::Ref(self.visit_set_large_simd(child)),
+                Entry::Collision(child) => PoolEntry::Ref(self.visit_set_collision(child)),
+            };
+            entries.push((slot as u8, pool_entry));
+        }
+
+        let candidates = self.merkle_index.get(&key).cloned().unwrap_or_default();
+        for candidate_id in candidates {
+            if hamt_node_matches(&self.nodes[candidate_id as usize], &entries) {
+                self.seen.insert(addr, candidate_id);
+                return candidate_id;
+            }
+        }
+
+        self.push(PoolNode::Hamt(entries), addr, key)
+    }
+
+    fn visit_set_small_simd<P: SharedPointerKind>(
+        &mut self,
+        node: &SharedPointer<SmallSimdNode<SetValue<A>, H>, P>,
+    ) -> u32 {
+        let addr = SharedPointer::as_ptr(node) as usize;
+        if let Some(&id) = self.seen.get(&addr) {
+            return id;
+        }
+        let key = node.merkle_hash;
+
+        let entries: Vec<(u8, A, H)> = node
+            .data
+            .entries()
+            .map(|(idx, (val, hash))| (idx as u8, val.0.clone(), *hash))
+            .collect();
+
+        let candidates = self.merkle_index.get(&key).cloned().unwrap_or_default();
+        for candidate_id in candidates {
+            if simd_small_node_matches(&self.nodes[candidate_id as usize], &entries) {
+                self.seen.insert(addr, candidate_id);
+                return candidate_id;
+            }
+        }
+
+        self.push(PoolNode::SimdSmall(entries), addr, key)
+    }
+
+    fn visit_set_large_simd<P: SharedPointerKind>(
+        &mut self,
+        node: &SharedPointer<LargeSimdNode<SetValue<A>, H>, P>,
+    ) -> u32 {
+        let addr = SharedPointer::as_ptr(node) as usize;
+        if let Some(&id) = self.seen.get(&addr) {
+            return id;
+        }
+        let key = node.merkle_hash;
+
+        let entries: Vec<(u8, A, H)> = node
+            .data
+            .entries()
+            .map(|(idx, (val, hash))| (idx as u8, val.0.clone(), *hash))
+            .collect();
+
+        let candidates = self.merkle_index.get(&key).cloned().unwrap_or_default();
+        for candidate_id in candidates {
+            if simd_large_node_matches(&self.nodes[candidate_id as usize], &entries) {
+                self.seen.insert(addr, candidate_id);
+                return candidate_id;
+            }
+        }
+
+        self.push(PoolNode::SimdLarge(entries), addr, key)
+    }
+
+    fn visit_set_collision<P: SharedPointerKind>(
+        &mut self,
+        node: &SharedPointer<CollisionNode<SetValue<A>, H>, P>,
+    ) -> u32 {
+        let addr = SharedPointer::as_ptr(node) as usize;
+        if let Some(&id) = self.seen.get(&addr) {
+            return id;
+        }
+        let key = node.hash.to_u64();
+        let values: Vec<A> = node.data.iter().map(|v| v.0.clone()).collect();
+
+        let candidates = self.merkle_index.get(&key).cloned().unwrap_or_default();
+        for candidate_id in candidates {
+            if collision_node_matches(&self.nodes[candidate_id as usize], node.hash, &values) {
+                self.seen.insert(addr, candidate_id);
+                return candidate_id;
+            }
+        }
+
+        self.push(PoolNode::Collision(node.hash, values), addr, key)
+    }
+}
+
 // ─── HashSetPool public API ──────────────────────────────────────────
 
 impl<A: Clone, H: HashWidth> HashSetPool<A, H> {
@@ -1192,7 +1614,49 @@ impl<A: Clone, H: HashWidth> HashSetPool<A, H> {
     {
         Self::from_sets(&[set])
     }
+}
 
+impl<A: Clone + PartialEq, H: HashWidth> HashSetPool<A, H> {
+    /// Build a pool from one or more HashSets, deduplicating content-equal
+    /// nodes even without shared pointers.
+    ///
+    /// See [`HashMapPool::from_maps_dedup`] for the full explanation.
+    /// Requires `A: PartialEq`.
+    pub fn from_sets_dedup<S, P: SharedPointerKind>(
+        sets: &[&GenericHashSet<A, S, P, H>],
+    ) -> Self
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        let mut collector = SetDedupPoolCollector::<A, H>::new();
+        let mut containers = Vec::with_capacity(sets.len());
+
+        for set in sets {
+            let root = set.root.as_ref().map(|r| collector.visit_hamt(r));
+            containers.push(PoolContainer {
+                root,
+                size: set.size,
+            });
+        }
+
+        HashSetPool {
+            nodes: collector.nodes,
+            containers,
+        }
+    }
+
+    /// Build a deduplicating pool from a single HashSet.
+    ///
+    /// See [`from_sets_dedup`][Self::from_sets_dedup] for details.
+    pub fn from_set_dedup<S, P: SharedPointerKind>(set: &GenericHashSet<A, S, P, H>) -> Self
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        Self::from_sets_dedup(&[set])
+    }
+}
+
+impl<A: Clone, H: HashWidth> HashSetPool<A, H> {
     /// Collect all leaf elements for a given container root.
     fn collect_leaves(&self, root_id: usize, out: &mut Vec<A>) {
         match &self.nodes[root_id] {
@@ -1427,7 +1891,31 @@ impl<A: Clone> BagPool<A> {
     {
         Self::from_bags(&[bag])
     }
+}
 
+impl<A: Clone + PartialEq> BagPool<A> {
+    /// Build a pool from one or more Bags, deduplicating content-equal nodes.
+    ///
+    /// See [`HashMapPool::from_maps_dedup`] for the full explanation.
+    pub fn from_bags_dedup<S, P: SharedPointerKind>(bags: &[&GenericBag<A, S, P>]) -> Self
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        let maps: Vec<&GenericHashMap<A, usize, S, P>> =
+            bags.iter().map(|b| &b.map).collect();
+        BagPool(HashMapPool::from_maps_dedup(&maps))
+    }
+
+    /// Build a deduplicating pool from a single Bag.
+    pub fn from_bag_dedup<S, P: SharedPointerKind>(bag: &GenericBag<A, S, P>) -> Self
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        Self::from_bags_dedup(&[bag])
+    }
+}
+
+impl<A: Clone> BagPool<A> {
     /// Reconstruct Bags from this pool.
     pub fn to_bags<S, P>(&self) -> Vec<GenericBag<A, S, P>>
     where
@@ -1511,7 +1999,33 @@ impl<K: Clone, V: Clone, H: HashWidth> BiMapPool<K, V, H> {
     {
         Self::from_bimaps(&[map])
     }
+}
 
+impl<K: Clone + PartialEq, V: Clone + PartialEq, H: HashWidth> BiMapPool<K, V, H> {
+    /// Build a pool from one or more BiMaps, deduplicating content-equal nodes.
+    ///
+    /// See [`HashMapPool::from_maps_dedup`] for the full explanation.
+    pub fn from_bimaps_dedup<S, P: SharedPointerKind>(
+        maps: &[&GenericBiMap<K, V, S, P, H>],
+    ) -> Self
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        let fwd: Vec<&GenericHashMap<K, V, S, P, H>> =
+            maps.iter().map(|b| &b.forward).collect();
+        BiMapPool(HashMapPool::from_maps_dedup(&fwd))
+    }
+
+    /// Build a deduplicating pool from a single BiMap.
+    pub fn from_bimap_dedup<S, P: SharedPointerKind>(map: &GenericBiMap<K, V, S, P, H>) -> Self
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        Self::from_bimaps_dedup(&[map])
+    }
+}
+
+impl<K: Clone, V: Clone, H: HashWidth> BiMapPool<K, V, H> {
     /// Reconstruct BiMaps from this pool.
     pub fn to_bimaps<S, P>(&self) -> Vec<GenericBiMap<K, V, S, P, H>>
     where
@@ -1640,6 +2154,32 @@ impl<A: Clone, H: HashWidth> SymMapPool<A, H> {
         let mut maps = self.to_symmaps();
         assert!(!maps.is_empty(), "pool contains no containers");
         maps.swap_remove(0)
+    }
+}
+
+impl<A: Clone + PartialEq, H: HashWidth> SymMapPool<A, H> {
+    /// Build a pool from one or more SymMaps using Merkle-keyed deduplication.
+    ///
+    /// Content-equal forward-map nodes that are not pointer-equal — because they
+    /// were independently built or round-tripped — are mapped to the same pool
+    /// entry, reducing pool size and restoring structural sharing.
+    ///
+    /// See [`HashMapPool::from_maps_dedup`] for the full explanation.
+    pub fn from_symmaps_dedup<S, P: SharedPointerKind>(maps: &[&GenericSymMap<A, S, P, H>]) -> Self
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        let fwd: Vec<&GenericHashMap<A, A, S, P, H>> =
+            maps.iter().map(|s| &s.forward).collect();
+        SymMapPool(HashMapPool::from_maps_dedup(&fwd))
+    }
+
+    /// Build a dedup pool from a single SymMap.
+    pub fn from_symmap_dedup<S, P: SharedPointerKind>(map: &GenericSymMap<A, S, P, H>) -> Self
+    where
+        BitsImpl<HASH_WIDTH>: Bits,
+    {
+        Self::from_symmaps_dedup(&[map])
     }
 }
 
@@ -2493,6 +3033,212 @@ mod tests {
             assert_eq!(maps[0].get(Direction::Backward, &(i + 1000)), Some(&i));
         }
         assert_eq!(maps[1].get(Direction::Forward, &999), Some(&9999));
+    }
+
+    // --- 6.10 dedup tests ---
+
+    #[test]
+    fn hashmap_dedup_same_lineage_share_nodes() {
+        // Two maps cloned from the same base, then independently mutated
+        // identically, end up with content-equal but non-pointer-equal nodes
+        // for the new entries. The dedup collector merges them via Merkle hash;
+        // the plain collector cannot (different pointers, no shared allocation).
+        use crate::HashMap;
+        let base: HashMap<i32, i32> = (0..100).map(|i| (i, i * 2)).collect();
+        let mut map1 = base.clone();
+        let mut map2 = base.clone();
+
+        // Insert the same 50 entries into each map independently.
+        // These nodes are built from the same hasher seed (inherited from base),
+        // so they have the same Merkle hashes — but live at different addresses.
+        for i in 200..250i32 {
+            map1.insert(i, i * 2);
+        }
+        for i in 200..250i32 {
+            map2.insert(i, i * 2);
+        }
+
+        let pool_dedup = HashMapPool::from_maps_dedup(&[&map1, &map2]);
+        let pool_plain = HashMapPool::from_maps(&[&map1, &map2]);
+
+        // Dedup pool should have fewer nodes: the new nodes added to map1 and
+        // map2 independently are content-equal and have matching Merkle hashes,
+        // so they are merged into a single pool entry.
+        assert!(
+            pool_dedup.nodes.len() < pool_plain.nodes.len(),
+            "dedup pool ({}) should be smaller than plain pool ({})",
+            pool_dedup.nodes.len(),
+            pool_plain.nodes.len()
+        );
+    }
+
+    #[test]
+    fn hashmap_dedup_roundtrip_correctness() {
+        // Dedup serialisation must round-trip to equal maps.
+        use crate::HashMap;
+        let map1: HashMap<String, i32> = (0..50).map(|i| (format!("k{i}"), i)).collect();
+        let map2: HashMap<String, i32> = (0..50).map(|i| (format!("k{i}"), i + 1)).collect();
+
+        let pool = HashMapPool::from_maps_dedup(&[&map1, &map2]);
+        let json = serde_json::to_string(&pool).unwrap();
+        let loaded: HashMapPool<String, i32> = serde_json::from_str(&json).unwrap();
+        let maps: Vec<HashMap<String, i32>> = loaded.to_maps();
+
+        assert_eq!(maps[0], map1);
+        assert_eq!(maps[1], map2);
+    }
+
+    #[test]
+    fn hashmap_dedup_pointer_shared_still_deduplicated() {
+        // Pointer-shared maps should still dedup — dedup path must not produce
+        // a larger pool than the pointer-based path.
+        use crate::HashMap;
+        let map1: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+        let mut map2 = map1.clone();
+        map2.insert(9999, 9999);
+
+        let pool_dedup = HashMapPool::from_maps_dedup(&[&map1, &map2]);
+        let pool_plain = HashMapPool::from_maps(&[&map1, &map2]);
+
+        // Dedup must never inflate the pool compared to the pointer-only path.
+        assert!(
+            pool_dedup.nodes.len() <= pool_plain.nodes.len(),
+            "dedup ({}) must not exceed plain ({})",
+            pool_dedup.nodes.len(),
+            pool_plain.nodes.len()
+        );
+    }
+
+    #[test]
+    fn hashmap_dedup_diverged_clones_correctness() {
+        // Two clones of the same map that were independently mutated (same
+        // insertions): dedup pool is correct and smaller than plain.
+        use crate::HashMap;
+        let base: HashMap<String, i32> = (0..50).map(|i| (format!("k{i}"), i)).collect();
+        let mut map1 = base.clone();
+        let mut map2 = base.clone();
+
+        // Apply same mutations independently — new nodes are content-equal
+        // but not pointer-equal.
+        for i in 100..130 {
+            map1.insert(format!("x{i}"), i);
+        }
+        for i in 100..130 {
+            map2.insert(format!("x{i}"), i);
+        }
+
+        let pool = HashMapPool::from_maps_dedup(&[&map1, &map2]);
+        let json = serde_json::to_string(&pool).unwrap();
+        let loaded: HashMapPool<String, i32> = serde_json::from_str(&json).unwrap();
+        let maps: Vec<HashMap<String, i32>> = loaded.to_maps();
+
+        assert_eq!(maps[0], map1);
+        assert_eq!(maps[1], map2);
+    }
+
+    #[test]
+    fn hashset_dedup_same_lineage_share_nodes() {
+        // Two sets cloned from the same base, independently extended with the
+        // same elements, produce content-equal but non-pointer-equal new nodes.
+        // Dedup merges them; plain does not.
+        use crate::HashSet;
+        let base: HashSet<i32> = (0..100).collect();
+        let mut set1 = base.clone();
+        let mut set2 = base.clone();
+
+        for i in 200..250i32 {
+            set1.insert(i);
+        }
+        for i in 200..250i32 {
+            set2.insert(i);
+        }
+
+        let pool_dedup = HashSetPool::from_sets_dedup(&[&set1, &set2]);
+        let pool_plain = HashSetPool::from_sets(&[&set1, &set2]);
+
+        assert!(
+            pool_dedup.nodes.len() < pool_plain.nodes.len(),
+            "dedup set pool ({}) should be smaller than plain ({})",
+            pool_dedup.nodes.len(),
+            pool_plain.nodes.len()
+        );
+    }
+
+    #[test]
+    fn hashset_dedup_roundtrip_correctness() {
+        use crate::HashSet;
+        let set1: HashSet<i32> = (0..50).collect();
+        let set2: HashSet<i32> = (50..100).collect();
+
+        let pool = HashSetPool::from_sets_dedup(&[&set1, &set2]);
+        let json = serde_json::to_string(&pool).unwrap();
+        let loaded: HashSetPool<i32> = serde_json::from_str(&json).unwrap();
+        let sets: Vec<HashSet<i32>> = loaded.to_sets();
+
+        assert_eq!(sets[0], set1);
+        assert_eq!(sets[1], set2);
+    }
+
+    #[test]
+    fn bag_dedup_roundtrip_correctness() {
+        use crate::Bag;
+        let mut bag1: Bag<i32> = Bag::new();
+        for i in 0..50 {
+            bag1.insert(i);
+        }
+        let bag2 = bag1.clone();
+
+        let pool = BagPool::from_bags_dedup(&[&bag1, &bag2]);
+        let json = serde_json::to_string(&pool).unwrap();
+        let loaded: BagPool<i32> = serde_json::from_str(&json).unwrap();
+        let bags: Vec<Bag<i32>> = loaded.to_bags();
+
+        assert_eq!(bags[0].total_count(), 50);
+        assert_eq!(bags[1].total_count(), 50);
+        for i in 0..50 {
+            assert_eq!(bags[0].count(&i), 1);
+            assert_eq!(bags[1].count(&i), 1);
+        }
+    }
+
+    #[test]
+    fn bimap_dedup_roundtrip_correctness() {
+        use crate::BiMap;
+        let mut bm1: BiMap<i32, i32> = BiMap::new();
+        for i in 0..50 {
+            bm1.insert(i, i + 1000);
+        }
+        let bm2 = bm1.clone();
+
+        let pool = BiMapPool::from_bimaps_dedup(&[&bm1, &bm2]);
+        let json = serde_json::to_string(&pool).unwrap();
+        let loaded: BiMapPool<i32, i32> = serde_json::from_str(&json).unwrap();
+        let maps: Vec<BiMap<i32, i32>> = loaded.to_bimaps();
+
+        for i in 0..50 {
+            assert_eq!(maps[0].get_by_key(&i), Some(&(i + 1000)));
+            assert_eq!(maps[1].get_by_key(&i), Some(&(i + 1000)));
+        }
+    }
+
+    #[test]
+    fn symmap_dedup_roundtrip_correctness() {
+        use crate::{Direction, SymMap};
+        let mut sm1: SymMap<i32> = SymMap::new();
+        for i in 0..50i32 {
+            sm1.insert(i, i + 1000);
+        }
+        let sm2 = sm1.clone();
+
+        let pool = SymMapPool::from_symmaps_dedup(&[&sm1, &sm2]);
+        let json = serde_json::to_string(&pool).unwrap();
+        let loaded: SymMapPool<i32> = serde_json::from_str(&json).unwrap();
+        let maps: Vec<SymMap<i32>> = loaded.to_symmaps();
+
+        for i in 0..50i32 {
+            assert_eq!(maps[0].get(Direction::Forward, &i), Some(&(i + 1000)));
+            assert_eq!(maps[1].get(Direction::Forward, &i), Some(&(i + 1000)));
+        }
     }
 
     // --- HashMultiMapPool tests ---

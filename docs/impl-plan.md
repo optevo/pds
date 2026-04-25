@@ -57,6 +57,23 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] 6.10 Merkle-keyed node deduplication in SSP serialisation.**
+  `DedupPoolCollector<A, H>` added in `src/persist.rs`: extends the pointer-keyed
+  `PoolCollector` with a secondary `merkle_index: HashMap<u64, Vec<u32>>`. On a
+  pointer miss, reads `node.merkle_hash` from the live node, scans candidates
+  for structural equality (O(node_size) due to post-order traversal normalising
+  child refs before parents), and reuses the existing pool entry if found.
+  `SetDedupPoolCollector` mirrors the same design for set nodes (unwraps `Value<A>`).
+  New API: `HashMapPool::from_maps_dedup`, `from_map_dedup`; `HashSetPool::from_sets_dedup`,
+  `from_set_dedup`; `BagPool::from_bags_dedup`, `from_bag_dedup`;
+  `BiMapPool::from_bimaps_dedup`, `from_bimap_dedup`; `SymMapPool::from_symmaps_dedup`,
+  `from_symmap_dedup`. All dedup variants require `A: PartialEq`; non-dedup variants
+  unchanged. 9 new tests: size reduction (same-lineage clones with identical
+  independent mutations), correctness (round-trip), and inflation guard (dedup ≤ plain).
+  Note: dedup requires same hasher lineage — independently constructed maps with
+  different `RandomState` seeds have incompatible HAMT structures and gain no benefit;
+  see `docs/decisions.md` for rationale.
+
 - **[2026-04-25] Cross-feature improvements: Merkle × diff, intern_and_seal.**
   `HashMap::diff()` gains a kv_merkle fast-path (O(1) empty diff for equal maps).
   `HashSet::diff()` gains a root-Merkle fast-path (same semantics, sets only)
@@ -2233,75 +2250,6 @@ target).
 
 ---
 
-### 6.10 Merkle-keyed node deduplication in SSP serialisation
-
-**What:** Extend `PoolCollector` in `src/persist.rs` to use Merkle hash as a
-secondary deduplication key in addition to pointer address. Currently the pool
-only deduplicates nodes that are literally the same allocation (same pointer).
-This means a round-trip through serialisation — or independently-built maps
-with identical content — produces a pool with redundant node copies.
-
-**Current behaviour:**
-```
-PoolCollector.seen: HashMap<usize, u32>   ← keyed by pointer address
-```
-Two nodes with identical content but different addresses each get their own
-pool entry, even though they are semantically identical.
-
-**Proposed change:** Add a secondary index keyed by Merkle hash:
-```
-PoolCollector.merkle_index: HashMap<u64, Vec<u32>>  ← merkle_hash → pool entry IDs
-```
-When a node's pointer is not in `seen`, check `merkle_index`. If a pool entry
-with the same Merkle hash passes a structural equality test, reuse that entry's
-ID instead of allocating a new one. This is essentially inline interning during
-serialisation — the same algorithm `InternPool` uses for runtime deduplication.
-
-**Why this is deferred:** Structural equality during serialisation requires a
-full subtree comparison (same as `InternPool`'s per-node `PartialEq`). For
-deeply nested trees this is O(subtree size) per lookup in the worst case (hash
-collision). The incremental benefit over the existing "intern then serialise"
-workflow (call `intern()` before `from_maps()`) is limited to cases where
-intering isn't viable — e.g., cross-session data where pointers are always
-new. The complexity is non-trivial and the use case is narrow.
-
-**Go/no-go question:** Does the existing "intern before serialise" workflow
-cover 90%+ of practical use cases? If yes, this item remains deferred.
-
-**Approach:**
-1. Add `merkle_index: StdHashMap<u64, Vec<u32>>` to `PoolCollector`.
-2. In each `visit_*` method: after the `seen` miss, read `node.merkle_hash`
-   from the live node (before serialising it), then scan `merkle_index[hash]`
-   for a structurally-equal entry. `SmallSimdNode` and `LargeSimdNode` don't
-   store their Merkle hash in the serialised `PoolNode`, but their live struct
-   has `merkle_hash` — read it while the live node is still in scope.
-3. Equality check: compare the freshly-constructed `PoolEntry` list for the
-   new node against the stored `PoolNode` for each candidate. Because traversal
-   is post-order (children before parents), child refs are already normalised
-   by the time any parent is compared — two parent nodes whose children were
-   merged at child level will have identical `Ref(id)` values, making the
-   parent comparison O(node_size) with no recursion needed.
-4. If a match is found: `seen.insert(addr, existing_id)` and return `existing_id`.
-5. If no match: allocate new entry, update both `seen` and `merkle_index`.
-6. The equality function is a simple `PoolEntry` vector comparison — no new
-   machinery beyond what `intern.rs` already provides. The check requires
-   `A: PartialEq`, the same bound `InternPool` already uses.
-
-**API change:** `from_maps` currently requires only `K: Clone, V: Clone`.
-Adding `K: PartialEq, V: PartialEq` is technically a breaking change at 1.0.
-Preferred approach: keep `from_maps` as-is and add `from_maps_dedup` with the
-stronger bounds. Users opt in explicitly.
-
-**Complexity:** Medium. Touches `PoolCollector`, `SetPoolCollector`, and all
-four `visit_*` methods. Requires adding `A: PartialEq` bounds to
-`from_maps_dedup` and its set equivalent. Benchmark before/after to verify the
-`merkle_index` lookup adds no measurable overhead on the common
-(pointer-sharing) case — `seen` hits in step 2 bypass the index entirely.
-
-**Prerequisites:** 6.5 ✓ (InternPool — equality functions reusable), 6.6 ✓
-(SSP serialisation implemented).
-
----
 
 ## Residual {#residual}
 
