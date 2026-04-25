@@ -1266,6 +1266,12 @@ impl<A: Ord + Clone, P: SharedPointerKind> From<&Vec<A>> for GenericOrdSet<A, P>
     }
 }
 
+impl<A: Ord + Clone, const N: usize, P: SharedPointerKind> From<[A; N]> for GenericOrdSet<A, P> {
+    fn from(arr: [A; N]) -> Self {
+        IntoIterator::into_iter(arr).collect()
+    }
+}
+
 #[cfg(feature = "std")]
 impl<A: Eq + Hash + Ord + Clone, P: SharedPointerKind> From<std::collections::HashSet<A>>
     for GenericOrdSet<A, P>

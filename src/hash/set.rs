@@ -28,7 +28,7 @@ use core::borrow::Borrow;
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
-use core::hash::{BuildHasher, Hash};
+use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator, Sum};
 use core::ops::{Add, Deref, Mul};
 
@@ -883,6 +883,25 @@ where
     S: BuildHasher,
     P: SharedPointerKind,
 {
+}
+
+impl<A, S, P, H: HashWidth> Hash for GenericHashSet<A, S, P, H>
+where
+    A: Hash + Eq,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    fn hash<HR: Hasher>(&self, state: &mut HR) {
+        self.len().hash(state);
+        // Order-independent: wrapping_add of per-element hashes.
+        let mut combined: u64 = 0;
+        for a in self.iter() {
+            let mut h = crate::util::FnvHasher::new();
+            a.hash(&mut h);
+            combined = combined.wrapping_add(h.finish());
+        }
+        combined.hash(state);
+    }
 }
 
 impl<A, S, P, H: HashWidth> Default for GenericHashSet<A, S, P, H>

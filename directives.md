@@ -7,6 +7,7 @@ Persistent data structures with structural sharing for Rust. Forked from
 
 - [Build system](#build-system)
 - [Rust conventions](#rust-conventions)
+- [Standard trait coverage](#standard-trait-coverage)
 - [Testing](#testing)
 - [Build outputs](#build-outputs)
 - [Code documentation](#code-documentation)
@@ -67,6 +68,46 @@ Two devShells are available:
 - Write comments for a reader who knows the domain but is new to this codebase;
   highlight Rust-specific choices where they differ from the obvious approach.
 - Use glossary terminology (`docs/glossary.md`) — do not introduce synonyms.
+
+---
+
+## Standard trait coverage
+
+Every public collection type must implement the standard trait set below.
+When adding a new collection type or modifying an existing one, audit its
+trait coverage against this table and fill any gaps.
+
+| Trait | Map types | Set types | Vector | Bag types | Notes |
+|-------|-----------|-----------|--------|-----------|-------|
+| `Clone` | Y | Y | Y | Y | Manual impl to avoid spurious `P: Clone` bound |
+| `Debug` | Y | Y | Y | Y | |
+| `PartialEq` / `Eq` | Y | Y | Y | Y | |
+| `PartialOrd` / `Ord` | Ordered only | Ordered only | Y | n/a | Only for types with deterministic iteration order |
+| `Hash` | Y | Y | Y | Y | Order-independent (XOR-combine) for unordered types |
+| `Default` | Y | Y | Y | Y | |
+| `Send` / `Sync` | auto | auto | auto | auto | Derived from contents; verify with static assertions |
+| `FromIterator` | Y | Y | Y | Y | |
+| `IntoIterator` (owned) | Y | Y | Y | Y | Named `ConsumingIter` type |
+| `IntoIterator` (`&`) | Y | Y | Y | Y | |
+| `Extend` | Y | Y | Y | Y | |
+| `Add` (union) | Y | Y | Y | n/a | Both owned and `&` variants |
+| `Mul` (intersection) | n/a | Y | n/a | n/a | Sets only |
+| `Sum` | Y | Y | Y | n/a | |
+| `Index` / `IndexMut` | Keyed types | n/a | Y | n/a | |
+| `Serialize` / `Deserialize` | Y | Y | Y | Y | Behind `serde` feature gate |
+| `From` conversions | Y | Y | Y | Y | From slice, Vec, array `[T; N]`, std equivalents |
+
+**Rules:**
+- When a trait impl is added, add a corresponding test in the module's
+  `#[cfg(test)]` block.
+- `Hash` for unordered collections must use an order-independent combiner
+  (XOR of individually hashed entries) — never hash iteration order.
+- `From<[T; N]>` uses const generics with a reasonable upper bound.
+- Serde impls go in `src/ser.rs`, not in the collection module.
+- This table is the obligation — if a cell says Y, the impl must exist.
+  Missing impls are bugs.
+
+---
 
 ### Change discipline
 

@@ -28,7 +28,7 @@ use core::borrow::Borrow;
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
-use core::hash::{BuildHasher, Hash};
+use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator, Sum};
 use core::mem;
 use core::ops::{Add, Index, IndexMut};
@@ -2500,6 +2500,27 @@ where
 {
 }
 
+impl<K, V, S, P, H: HashWidth> Hash for GenericHashMap<K, V, S, P, H>
+where
+    K: Hash + Eq,
+    V: Hash,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    fn hash<HR: Hasher>(&self, state: &mut HR) {
+        self.len().hash(state);
+        // Order-independent: wrapping_add of per-entry hashes.
+        let mut combined: u64 = 0;
+        for (k, v) in self.iter() {
+            let mut h = crate::util::FnvHasher::new();
+            k.hash(&mut h);
+            v.hash(&mut h);
+            combined = combined.wrapping_add(h.finish());
+        }
+        combined.hash(state);
+    }
+}
+
 impl<K, V, S, P, H: HashWidth> Default for GenericHashMap<K, V, S, P, H>
 where
     S: Default,
@@ -2876,6 +2897,18 @@ where
 {
     fn from(m: Vec<(K, V)>) -> Self {
         m.into_iter().collect()
+    }
+}
+
+impl<K, V, S, const N: usize, P, H: HashWidth> From<[(K, V); N]> for GenericHashMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Clone + Hash,
+    S: BuildHasher + Default,
+    P: SharedPointerKind,
+{
+    fn from(arr: [(K, V); N]) -> Self {
+        IntoIterator::into_iter(arr).collect()
     }
 }
 

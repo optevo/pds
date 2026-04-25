@@ -4,6 +4,7 @@
 
 // Every codebase needs a `util` module.
 
+use core::hash::Hasher;
 use core::ops::{Bound, Range, RangeBounds};
 
 use archery::{SharedPointer, SharedPointerKind};
@@ -37,6 +38,31 @@ where
         Bound::Unbounded => right_unbounded,
     };
     start_index..end_index
+}
+
+/// A minimal hasher for computing per-entry hashes that are then combined
+/// with an order-independent operation (wrapping_add). Uses FNV-1a.
+pub(crate) struct FnvHasher(u64);
+
+impl FnvHasher {
+    pub(crate) fn new() -> Self {
+        FnvHasher(0xcbf29ce484222325)
+    }
+}
+
+impl Hasher for FnvHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 ^= b as u64;
+            self.0 = self.0.wrapping_mul(0x100000001b3);
+        }
+    }
 }
 
 #[cfg(test)]

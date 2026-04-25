@@ -27,8 +27,9 @@
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
-use core::hash::{BuildHasher, Hash};
-use core::iter::FromIterator;
+use core::hash::{BuildHasher, Hash, Hasher};
+use core::iter::{FromIterator, Sum};
+use core::ops::Add;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -288,23 +289,16 @@ where
     }
 }
 
-#[cfg(feature = "std")]
-impl<A, P> Default for GenericPBag<A, RandomState, P>
+impl<A, S, P> Default for GenericPBag<A, S, P>
 where
+    S: Default,
     P: SharedPointerKind,
 {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(all(not(feature = "std"), feature = "foldhash"))]
-impl<A, P> Default for GenericPBag<A, foldhash::fast::RandomState, P>
-where
-    P: SharedPointerKind,
-{
-    fn default() -> Self {
-        Self::new()
+        GenericPBag {
+            map: crate::hashmap::GenericHashMap::default(),
+            total: 0,
+        }
     }
 }
 
@@ -325,6 +319,27 @@ where
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
+}
+
+impl<A, S, P> Hash for GenericPBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    fn hash<HR: Hasher>(&self, state: &mut HR) {
+        self.len().hash(state);
+        // Order-independent: wrapping_add of per-entry hashes.
+        // Each (element, count) pair is hashed as a unit.
+        let mut combined: u64 = 0;
+        for (a, count) in self.iter() {
+            let mut h = crate::util::FnvHasher::new();
+            a.hash(&mut h);
+            count.hash(&mut h);
+            combined = combined.wrapping_add(h.finish());
+        }
+        combined.hash(state);
+    }
 }
 
 impl<A, S, P> Debug for GenericPBag<A, S, P>
@@ -367,6 +382,79 @@ where
         for item in iter {
             self.insert(item);
         }
+    }
+}
+
+impl<A, S, P> From<Vec<A>> for GenericPBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(v: Vec<A>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
+impl<A, S, const N: usize, P> From<[A; N]> for GenericPBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(arr: [A; N]) -> Self {
+        IntoIterator::into_iter(arr).collect()
+    }
+}
+
+impl<'a, A, S, P> From<&'a [A]> for GenericPBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(slice: &'a [A]) -> Self {
+        slice.iter().cloned().collect()
+    }
+}
+
+impl<A, S, P> Add for GenericPBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    type Output = GenericPBag<A, S, P>;
+
+    fn add(self, other: Self) -> Self::Output {
+        self.sum(&other)
+    }
+}
+
+impl<A, S, P> Add for &GenericPBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    type Output = GenericPBag<A, S, P>;
+
+    fn add(self, other: Self) -> Self::Output {
+        self.sum(other)
+    }
+}
+
+impl<A, S, P: SharedPointerKind> Sum for GenericPBag<A, S, P>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Default + Clone,
+    P: SharedPointerKind,
+{
+    fn sum<I>(it: I) -> Self
+    where
+        I: Iterator<Item = Self>,
+    {
+        it.fold(Self::default(), |a, b| a + b)
     }
 }
 

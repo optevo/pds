@@ -26,8 +26,9 @@
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
-use core::hash::{BuildHasher, Hash};
-use core::iter::FromIterator;
+use core::hash::{BuildHasher, Hash, Hasher};
+use core::iter::{FromIterator, Sum};
+use core::ops::Add;
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -254,23 +255,16 @@ where
     }
 }
 
-#[cfg(feature = "std")]
-impl<K, V, P> Default for GenericHashMultiMap<K, V, RandomState, P>
+impl<K, V, S, P, H: HashWidth> Default for GenericHashMultiMap<K, V, S, P, H>
 where
+    S: Default,
     P: SharedPointerKind,
 {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(all(not(feature = "std"), feature = "foldhash"))]
-impl<K, V, P> Default for GenericHashMultiMap<K, V, foldhash::fast::RandomState, P>
-where
-    P: SharedPointerKind,
-{
-    fn default() -> Self {
-        Self::new()
+        GenericHashMultiMap {
+            map: GenericHashMap::default(),
+            total: 0,
+        }
     }
 }
 
@@ -293,6 +287,27 @@ where
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
+}
+
+impl<K, V, S, P, H: HashWidth> Hash for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn hash<HR: Hasher>(&self, state: &mut HR) {
+        self.len().hash(state);
+        // Order-independent: wrapping_add of per-entry hashes.
+        let mut combined: u64 = 0;
+        for (k, v) in self.iter() {
+            let mut h = crate::util::FnvHasher::new();
+            k.hash(&mut h);
+            v.hash(&mut h);
+            combined = combined.wrapping_add(h.finish());
+        }
+        combined.hash(state);
+    }
 }
 
 impl<K, V, S, P, H: HashWidth> Debug for GenericHashMultiMap<K, V, S, P, H>
@@ -327,6 +342,86 @@ where
             mm.insert(k, v);
         }
         mm
+    }
+}
+
+impl<K, V, S, P, H: HashWidth> From<Vec<(K, V)>> for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(v: Vec<(K, V)>) -> Self {
+        v.into_iter().collect()
+    }
+}
+
+impl<K, V, S, const N: usize, P, H: HashWidth> From<[(K, V); N]> for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(arr: [(K, V); N]) -> Self {
+        IntoIterator::into_iter(arr).collect()
+    }
+}
+
+impl<'a, K, V, S, P, H: HashWidth> From<&'a [(K, V)]> for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(slice: &'a [(K, V)]) -> Self {
+        slice.iter().cloned().collect()
+    }
+}
+
+impl<K, V, S, P, H: HashWidth> Add for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    type Output = GenericHashMultiMap<K, V, S, P, H>;
+
+    fn add(mut self, other: Self) -> Self::Output {
+        self.extend(other);
+        self
+    }
+}
+
+impl<K, V, S, P, H: HashWidth> Add for &GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    type Output = GenericHashMultiMap<K, V, S, P, H>;
+
+    fn add(self, other: Self) -> Self::Output {
+        self.clone() + other.clone()
+    }
+}
+
+impl<K, V, S, P: SharedPointerKind, H: HashWidth> Sum for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Default + Clone,
+    P: SharedPointerKind,
+{
+    fn sum<I>(it: I) -> Self
+    where
+        I: Iterator<Item = Self>,
+    {
+        it.fold(Self::default(), |a, b| a + b)
     }
 }
 

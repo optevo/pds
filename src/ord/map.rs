@@ -2874,6 +2874,17 @@ where
     }
 }
 
+impl<K, V, const N: usize, P> From<[(K, V); N]> for GenericOrdMap<K, V, P>
+where
+    K: Ord + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    fn from(arr: [(K, V); N]) -> Self {
+        IntoIterator::into_iter(arr).collect()
+    }
+}
+
 impl<'a, K, V, RK, RV, OK, OV, P> From<&'a Vec<(RK, RV)>> for GenericOrdMap<K, V, P>
 where
     K: Ord + Clone + From<OK>,

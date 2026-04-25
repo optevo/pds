@@ -9,11 +9,14 @@ use core::fmt;
 use core::hash::{BuildHasher, Hash};
 use core::marker::PhantomData;
 
+use crate::hash_multimap::GenericHashMultiMap;
 use crate::hash_width::HashWidth;
 use crate::hashmap::GenericHashMap;
 use crate::hashset::GenericHashSet;
+use crate::insertion_order_map::GenericInsertionOrderMap;
 use crate::ordmap::GenericOrdMap;
 use crate::ordset::GenericOrdSet;
+use crate::pbag::GenericPBag;
 use crate::vector::GenericVector;
 
 struct SeqVisitor<'de, S, A> {
@@ -245,6 +248,116 @@ impl<A: Serialize, P: SharedPointerKind> Serialize for GenericVector<A, P> {
         let mut s = ser.serialize_seq(Some(self.len()))?;
         for i in self.iter() {
             s.serialize_element(i)?;
+        }
+        s.end()
+    }
+}
+
+// PBag — serialises as a flat sequence of elements (each appearing count times).
+
+impl<'de, A, S, P> Deserialize<'de> for GenericPBag<A, S, P>
+where
+    A: Deserialize<'de> + Hash + Eq + Clone,
+    S: BuildHasher + Default + Clone,
+    P: SharedPointerKind,
+{
+    fn deserialize<D>(des: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        des.deserialize_seq(SeqVisitor::new())
+    }
+}
+
+impl<A, S, P> Serialize for GenericPBag<A, S, P>
+where
+    A: Serialize + Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    fn serialize<Ser>(&self, ser: Ser) -> Result<Ser::Ok, Ser::Error>
+    where
+        Ser: Serializer,
+    {
+        let mut s = ser.serialize_seq(Some(self.len()))?;
+        for (elem, count) in self.iter() {
+            for _ in 0..count {
+                s.serialize_element(elem)?;
+            }
+        }
+        s.end()
+    }
+}
+
+// HashMultiMap — serialises as a sequence of (key, value) pairs.
+
+impl<'de, K, V, S, P, H: HashWidth> Deserialize<'de> for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Deserialize<'de> + Hash + Eq + Clone,
+    V: Deserialize<'de> + Hash + Eq + Clone,
+    S: BuildHasher + Default + Clone,
+    P: SharedPointerKind,
+{
+    fn deserialize<D>(des: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        des.deserialize_seq(SeqVisitor::<'de, GenericHashMultiMap<K, V, S, P, H>, (K, V)>::new())
+    }
+}
+
+impl<K, V, S, P, H: HashWidth> Serialize for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Serialize + Hash + Eq + Clone,
+    V: Serialize + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn serialize<Ser>(&self, ser: Ser) -> Result<Ser::Ok, Ser::Error>
+    where
+        Ser: Serializer,
+    {
+        let mut s = ser.serialize_seq(Some(self.len()))?;
+        for (k, v) in self.iter() {
+            s.serialize_element(&(k, v))?;
+        }
+        s.end()
+    }
+}
+
+// InsertionOrderMap — serialises as a sequence of (key, value) pairs to preserve order.
+
+impl<'de, K, V, S, P, H: HashWidth> Deserialize<'de> for GenericInsertionOrderMap<K, V, S, P, H>
+where
+    K: Deserialize<'de> + Hash + Eq + Clone,
+    V: Deserialize<'de> + Clone,
+    S: BuildHasher + Default + Clone,
+    P: SharedPointerKind,
+{
+    fn deserialize<D>(des: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        des.deserialize_seq(
+            SeqVisitor::<'de, GenericInsertionOrderMap<K, V, S, P, H>, (K, V)>::new(),
+        )
+    }
+}
+
+impl<K, V, S, P, H: HashWidth> Serialize for GenericInsertionOrderMap<K, V, S, P, H>
+where
+    K: Serialize + Hash + Eq + Clone,
+    V: Serialize + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    fn serialize<Ser>(&self, ser: Ser) -> Result<Ser::Ok, Ser::Error>
+    where
+        Ser: Serializer,
+    {
+        let mut s = ser.serialize_seq(Some(self.len()))?;
+        for (k, v) in self.iter() {
+            s.serialize_element(&(k, v))?;
         }
         s.end()
     }
