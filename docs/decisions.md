@@ -1320,3 +1320,209 @@ on all hash-based types.
   hash-width-independent
 - Rayon parallel iterators are only implemented for `H = u64` (can be
   generalised later if needed)
+
+---
+
+## DEC-027: Structural-sharing-preserving serialisation — serde pool design {#sec:dec-027}
+
+**Date:** 2026-04-25
+**Status:** Accepted (design phase — implementation pending)
+
+**Context:**
+Current serde impls serialise collections as flat sequences/maps, discarding
+internal tree structure. Two HashMaps sharing 99% of their nodes via structural
+sharing serialise as two independent maps — doubling size on disk and losing
+sharing on deserialisation. Item 6.6 in the impl plan.
+
+Research investigated three approaches: rkyv (zero-copy framework with built-in
+Arc dedup), immer's `persist.hpp` (pool-based, C++), and IPLD/DAG-CBOR
+(content-addressed).
+
+**Decision:**
+Serde-based pool serialisation with InternPool integration on deserialisation.
+
+### Architecture
+
+**New feature flag:** `persist` (requires `std`, `serde`, `hash-intern`)
+
+**Two serialisation modes per collection:**
+
+| Mode | Serialise as | Use case |
+|------|-------------|----------|
+| Flat (existing) | `[k, v, k, v, ...]` | Interop, human-readable, small collections |
+| Pool (new) | Node pool + root ID | Preserving sharing, checkpointing, undo history |
+
+**Scope:** All 11 collection types.
+
+### Serialisation (write path)
+
+Walk the node graph depth-first. Maintain a pointer-identity registry
+(`HashMap<usize, NodeId>` keyed by `SharedPointer::as_ptr() as usize`).
+
+1. For each node encountered, check the registry by pointer address.
+2. If already seen → emit the existing `NodeId` as a reference.
+3. If new → assign the next sequential `NodeId`, serialise the node's
+   content (with child references as `NodeId`s), add to registry.
+4. Output: a flat array of serialised nodes (the "pool") plus container
+   metadata (root `NodeId`, size, hasher state).
+
+The InternPool is NOT needed during serialisation — pointer identity is
+sufficient and cheaper than Merkle-hash lookup.
+
+**Per-type node pools** (following immer): all collections of the same
+backing type share a pool. A `PoolBuilder` accumulates nodes from
+multiple collections before emitting.
+
+### Deserialisation (read path) — hash consing on the fly
+
+Reconstruct nodes bottom-up (leaves first, then parents). As each node
+is reconstructed:
+
+1. Compute its Merkle hash (inherent — nodes already maintain
+   `merkle_hash`).
+2. Check the `InternPool` for a node with matching Merkle hash +
+   structural equality.
+3. If found → discard the newly constructed node, use the existing
+   `SharedPointer` from the pool. This is hash consing during
+   deserialisation.
+4. If not found → store in the InternPool and use the new pointer.
+
+This gives **cross-session deduplication for free**: if the same subtree
+was already in memory (from a previously deserialised or constructed
+collection), the deserialised version shares the existing allocation.
+
+### Format (serde)
+
+```json
+{
+  "pool": {
+    "hamt": [
+      {"id": 0, "merkle": 12345, "entries": [
+        {"value": [key, val], "hash": 67890},
+        {"node": 1},
+        {"simd_small": 3}
+      ]},
+      ...
+    ],
+    "simd_small": [...],
+    "simd_large": [...],
+    "collision": [...],
+    "btree_branch": [...],
+    "btree_leaf": [...],
+    "rrb_inner": [...],
+    "rrb_leaf": [...]
+  },
+  "containers": [
+    {"type": "hashmap", "root": 0, "size": 1000, "hasher_id": 42}
+  ]
+}
+```
+
+Node type pools are flat arrays. Child references are `NodeId` integers
+pointing into the same pool. Serde handles the actual format encoding
+(JSON, bincode, MessagePack, etc.).
+
+### Collection-specific details
+
+| Backing structure | Node types in pool | Merkle hash available | Notes |
+|-------------------|-------------------|----------------------|-------|
+| HAMT (HashMap, HashSet, HashMultiMap, InsertionOrderMap, BiMap, SymMap, Trie) | HamtNode, SmallSimdNode, LargeSimdNode, CollisionNode | Yes (eagerly maintained) | Full interning on deserialise |
+| B+ tree (OrdMap, OrdSet) | Branch, Leaf | No | Reconstruct without interning; structural sharing still preserved within a single pool |
+| RRB tree (Vector) | Inner, Leaf chunk | Yes (lazy AtomicU64) | Intern on deserialise where Merkle is computed |
+
+**B+ tree note:** OrdMap/OrdSet nodes lack Merkle hashes, so cross-session
+dedup via InternPool is not available. Within a single pool, pointer-based
+dedup during serialisation still preserves sharing. Merkle hashes could be
+added to B+ tree nodes in future if interning proves valuable.
+
+**Compound types:** Bag wraps HashMap (serialise inner map with pool).
+BiMap/SymMap contain two HashMaps (both feed into the same HAMT pool —
+shared subtrees between forward/backward maps are deduplicated).
+InsertionOrderMap contains a HashMap + OrdMap (separate pools per backing
+type). Trie is recursive HashMap (single HAMT pool).
+
+### API surface
+
+```rust
+// Pool builder — accumulates nodes from multiple collections
+pub struct PoolBuilder<P: SharedPointerKind = DefaultSharedPtr, H: HashWidth = u64> {
+    // Internal: per-type node registries keyed by pointer address
+}
+
+impl<P, H> PoolBuilder<P, H> {
+    pub fn new() -> Self;
+    pub fn add_hashmap<K, V, S>(&mut self, map: &GenericHashMap<K, V, S, P, H>);
+    pub fn add_hashset<A, S>(&mut self, set: &GenericHashSet<A, S, P, H>);
+    pub fn add_ordmap<K, V>(&mut self, map: &GenericOrdMap<K, V, P>);
+    pub fn add_ordset<A>(&mut self, set: &GenericOrdSet<A, P>);
+    pub fn add_vector<A>(&mut self, vec: &GenericVector<A, P>);
+    // Convenience: add any collection
+    pub fn add<T: Persist<P, H>>(&mut self, collection: &T);
+}
+
+// Serialise pool + containers
+impl<P, H> Serialize for PoolBuilder<P, H> { ... }
+
+// Pool reader — deserialises with interning
+pub struct PoolReader<P: SharedPointerKind = DefaultSharedPtr, H: HashWidth = u64> {
+    pool: InternPool<...>,  // used for cross-session dedup
+    // Internal: deserialised node arrays
+}
+
+impl<P, H> PoolReader<P, H> {
+    pub fn from_pool(pool: InternPool<...>) -> Self;
+    pub fn read_hashmap<K, V, S>(&mut self) -> GenericHashMap<K, V, S, P, H>;
+    pub fn read_vector<A>(&mut self) -> GenericVector<A, P>;
+    // etc.
+}
+```
+
+### Why not rkyv
+
+rkyv (v0.8) is a zero-copy deserialisation framework with built-in Arc
+dedup via `Sharing`/`Pooling` traits. It was investigated but rejected:
+
+- **Separate ecosystem.** rkyv uses its own derive macros (`Archive`,
+  `rkyv::Serialize`, `rkyv::Deserialize`) incompatible with serde.
+  Supporting both would double the serialisation surface area.
+- **Orphan rule.** Cannot impl `Archive` for `SharedPointer<T, P>`
+  directly — both types are foreign. Requires newtype wrappers or
+  rkyv's `With` adapter, adding friction throughout the node types.
+- **Dedup is address-based only.** rkyv's `Share` strategy deduplicates
+  by pointer address within a single serialisation pass. It does not do
+  content-based dedup. Cross-session dedup (the main value of combining
+  with InternPool) still requires the same Merkle-hash-based interning
+  we'd build anyway.
+- **serde already covers pds's needs.** All 11 types have serde impls.
+  The pool format can be expressed in any serde-compatible format (JSON,
+  bincode, CBOR, MessagePack). Adding rkyv brings marginal benefit
+  (zero-copy reads) at high ecosystem cost.
+
+rkyv remains a future option if zero-copy access to archived collections
+becomes a requirement. The pool design is format-agnostic — the node ID
+approach works with any serialisation backend.
+
+### Why not content-addressed (IPLD/DAG-CBOR)
+
+Content-addressed serialisation (CID = hash of serialised bytes) gives
+global dedup and integrity verification but:
+
+- **36+ bytes per reference** (CID) vs 4 bytes (integer NodeId)
+- **Requires canonical serialisation** (same content must produce same
+  bytes) — the HAMT layout depends on hasher state, which is
+  session-local with `RandomState`
+- **Cryptographic hashing cost** at every node
+- **Overkill for local persistence** — cross-session dedup via Merkle
+  hash in the InternPool is sufficient without full content-addressing
+
+Content-addressed serialisation is the right choice for distributed
+systems. pds targets local persistence and checkpointing.
+
+**Consequences:**
+- New `persist` feature flag (depends on `std`, `serde`, `hash-intern`)
+- New module `src/persist.rs` (or `src/persist/` directory)
+- PoolBuilder/PoolReader API — explicit, not automatic
+- Flat serde impls remain the default; pool serialisation is opt-in
+- B+ tree types get pool serialisation (preserving within-session sharing)
+  but not cross-session interning (no Merkle hashes)
+- InternPool gains a clear second use case beyond manual `map.intern()`

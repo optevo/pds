@@ -2071,32 +2071,36 @@ Merkle hashes suitable for interning.
 
 ---
 
-### 6.6 Structural-sharing-preserving serialisation — RKYV PATH IDENTIFIED
+### 6.6 Structural-sharing-preserving serialisation — DESIGN ACCEPTED (DEC-027)
 
 **What:** A serialisation format that preserves the internal tree
 topology, so that two collections sharing structure are serialised
 without duplicating the shared nodes.
 
-**Research outcome (DEC-014):** serde cannot preserve sharing natively
-(issues #194, #1073 closed). rkyv's `Sharing`/`Pooling` traits are the
-architecturally closest match — built-in `Arc`/`Rc` deduplication. Apache
-Fory also provides automatic reference identity preservation. Cap'n Proto
-and FlatBuffers do not support DAG serialisation.
+**Design (DEC-027):** Serde-based pool serialisation with InternPool
+integration during deserialisation. Feature flag `persist` (requires
+`std`, `serde`, `hash-intern`).
 
-Recommended approach: pool-based (inspired by immer's `persist.hpp`),
-with rkyv for binary format and custom serde wrapper for JSON. If Merkle
-hashes (4.4, done) are used for node IDs, deduplication works even across
-separate serialisation sessions.
+- **Serialise:** Walk node graph, assign integer IDs by pointer identity,
+  write each node once. Output = flat node pool + container metadata.
+- **Deserialise:** Reconstruct bottom-up. Hash-cons each node on the fly
+  via InternPool — if an identical node already exists in memory (matching
+  Merkle hash + content), reuse the existing SharedPointer. Cross-session
+  dedup for free.
+- **Scope:** All 11 collection types. B+ tree types get within-session
+  sharing but not cross-session interning (no Merkle hashes on nodes).
+- **API:** PoolBuilder (serialise), PoolReader (deserialise with interning).
+- **rkyv rejected:** Separate ecosystem, orphan rule issues, address-only
+  dedup (no content-based cross-session). See DEC-027 for full analysis.
 
 **Complexity:** High.
 
-**Affects:** All collection types with internal tree nodes.
+**Affects:** All 11 collection types.
 
-**Prerequisites:** 0.5, 4.4 ✓ (Merkle hashing done). Benefits from
-6.5 (hash consing) — InternPool becomes the deduplication table.
+**Prerequisites:** 0.5 ✓, 4.4 ✓ (Merkle hashing), 6.5 ✓ (InternPool).
 
-**References:** rkyv `Sharing`/`Pooling` traits; immer `persist.hpp`;
-Apache Fory; IPLD/DAG-CBOR.
+**References:** immer `persist.hpp`; DEC-027; rkyv (investigated,
+rejected); IPLD/DAG-CBOR (investigated, too heavy for local use).
 
 ---
 
