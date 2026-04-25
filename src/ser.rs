@@ -16,7 +16,7 @@ use crate::hashset::GenericHashSet;
 use crate::insertion_order_map::GenericInsertionOrderMap;
 use crate::ordmap::GenericOrdMap;
 use crate::ordset::GenericOrdSet;
-use crate::pbag::GenericPBag;
+use crate::bag::GenericBag;
 use crate::vector::GenericVector;
 
 struct SeqVisitor<'de, S, A> {
@@ -253,9 +253,9 @@ impl<A: Serialize, P: SharedPointerKind> Serialize for GenericVector<A, P> {
     }
 }
 
-// PBag — serialises as a flat sequence of elements (each appearing count times).
+// Bag — serialises as a flat sequence of elements (each appearing count times).
 
-impl<'de, A, S, P> Deserialize<'de> for GenericPBag<A, S, P>
+impl<'de, A, S, P> Deserialize<'de> for GenericBag<A, S, P>
 where
     A: Deserialize<'de> + Hash + Eq + Clone,
     S: BuildHasher + Default + Clone,
@@ -269,7 +269,7 @@ where
     }
 }
 
-impl<A, S, P> Serialize for GenericPBag<A, S, P>
+impl<A, S, P> Serialize for GenericBag<A, S, P>
 where
     A: Serialize + Hash + Eq + Clone,
     S: BuildHasher + Clone,

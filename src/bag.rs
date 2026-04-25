@@ -4,7 +4,7 @@
 
 //! A persistent multiset (bag).
 //!
-//! A `PBag` is an unordered collection that allows duplicate elements,
+//! A [`Bag`] is an unordered collection that allows duplicate elements,
 //! tracking the count of each distinct element. Backed by a
 //! [`HashMap<A, usize>`][crate::HashMap], it provides O(log n) insert,
 //! remove, and lookup operations with structural sharing.
@@ -12,9 +12,9 @@
 //! # Examples
 //!
 //! ```
-//! use pds::PBag;
+//! use pds::Bag;
 //!
-//! let mut bag = PBag::new();
+//! let mut bag = Bag::new();
 //! bag.insert("apple");
 //! bag.insert("apple");
 //! bag.insert("banana");
@@ -37,28 +37,28 @@ use equivalent::Equivalent;
 use crate::hashmap::GenericHashMap;
 use crate::shared_ptr::DefaultSharedPtr;
 
-/// Type alias for [`GenericPBag`] with default hasher and pointer type.
+/// Type alias for [`GenericBag`] with default hasher and pointer type.
 #[cfg(feature = "std")]
-pub type PBag<A> = GenericPBag<A, RandomState, DefaultSharedPtr>;
+pub type Bag<A> = GenericBag<A, RandomState, DefaultSharedPtr>;
 
-/// Type alias for [`GenericPBag`] using [`foldhash::fast::RandomState`] — available
+/// Type alias for [`GenericBag`] using [`foldhash::fast::RandomState`] — available
 /// in `no_std` environments when the `foldhash` feature is enabled.
 #[cfg(all(not(feature = "std"), feature = "foldhash"))]
-pub type PBag<A> = GenericPBag<A, foldhash::fast::RandomState, DefaultSharedPtr>;
+pub type Bag<A> = GenericBag<A, foldhash::fast::RandomState, DefaultSharedPtr>;
 
 /// A persistent multiset (bag) backed by [`GenericHashMap`].
 ///
 /// Tracks the count of each distinct element. Clone is O(1) via
 /// structural sharing.
-pub struct GenericPBag<A, S, P: SharedPointerKind = DefaultSharedPtr> {
+pub struct GenericBag<A, S, P: SharedPointerKind = DefaultSharedPtr> {
     map: GenericHashMap<A, usize, S, P>,
     total: usize,
 }
 
 // Manual Clone to avoid derive's spurious `P: Clone` bound.
-impl<A: Clone, S: Clone, P: SharedPointerKind> Clone for GenericPBag<A, S, P> {
+impl<A: Clone, S: Clone, P: SharedPointerKind> Clone for GenericBag<A, S, P> {
     fn clone(&self) -> Self {
-        GenericPBag {
+        GenericBag {
             map: self.map.clone(),
             total: self.total,
         }
@@ -66,14 +66,14 @@ impl<A: Clone, S: Clone, P: SharedPointerKind> Clone for GenericPBag<A, S, P> {
 }
 
 #[cfg(feature = "std")]
-impl<A, P> GenericPBag<A, RandomState, P>
+impl<A, P> GenericBag<A, RandomState, P>
 where
     P: SharedPointerKind,
 {
     /// Create an empty bag.
     #[must_use]
     pub fn new() -> Self {
-        GenericPBag {
+        GenericBag {
             map: GenericHashMap::new(),
             total: 0,
         }
@@ -81,21 +81,21 @@ where
 }
 
 #[cfg(all(not(feature = "std"), feature = "foldhash"))]
-impl<A, P> GenericPBag<A, foldhash::fast::RandomState, P>
+impl<A, P> GenericBag<A, foldhash::fast::RandomState, P>
 where
     P: SharedPointerKind,
 {
     /// Create an empty bag (no_std + foldhash).
     #[must_use]
     pub fn new() -> Self {
-        GenericPBag {
+        GenericBag {
             map: GenericHashMap::new(),
             total: 0,
         }
     }
 }
 
-impl<A, S, P> GenericPBag<A, S, P>
+impl<A, S, P> GenericBag<A, S, P>
 where
     S: BuildHasher + Default,
     P: SharedPointerKind,
@@ -103,14 +103,14 @@ where
     /// Create an empty bag with a custom hasher.
     #[must_use]
     fn new_default() -> Self {
-        GenericPBag {
+        GenericBag {
             map: GenericHashMap::default(),
             total: 0,
         }
     }
 }
 
-impl<A, S, P> GenericPBag<A, S, P>
+impl<A, S, P> GenericBag<A, S, P>
 where
     P: SharedPointerKind,
 {
@@ -133,7 +133,7 @@ where
     }
 }
 
-impl<A, S, P> GenericPBag<A, S, P>
+impl<A, S, P> GenericBag<A, S, P>
 where
     A: Hash + Eq,
     S: BuildHasher + Clone,
@@ -158,7 +158,7 @@ where
     }
 }
 
-impl<A, S, P> GenericPBag<A, S, P>
+impl<A, S, P> GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
@@ -289,20 +289,20 @@ where
     }
 }
 
-impl<A, S, P> Default for GenericPBag<A, S, P>
+impl<A, S, P> Default for GenericBag<A, S, P>
 where
     S: Default,
     P: SharedPointerKind,
 {
     fn default() -> Self {
-        GenericPBag {
+        GenericBag {
             map: crate::hashmap::GenericHashMap::default(),
             total: 0,
         }
     }
 }
 
-impl<A, S, P> PartialEq for GenericPBag<A, S, P>
+impl<A, S, P> PartialEq for GenericBag<A, S, P>
 where
     A: Hash + Eq,
     S: BuildHasher + Clone,
@@ -313,7 +313,7 @@ where
     }
 }
 
-impl<A, S, P> Eq for GenericPBag<A, S, P>
+impl<A, S, P> Eq for GenericBag<A, S, P>
 where
     A: Hash + Eq,
     S: BuildHasher + Clone,
@@ -321,7 +321,7 @@ where
 {
 }
 
-impl<A, S, P> Hash for GenericPBag<A, S, P>
+impl<A, S, P> Hash for GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
@@ -342,7 +342,7 @@ where
     }
 }
 
-impl<A, S, P> Debug for GenericPBag<A, S, P>
+impl<A, S, P> Debug for GenericBag<A, S, P>
 where
     A: Debug + Hash + Eq + Clone,
     S: BuildHasher + Clone,
@@ -357,7 +357,7 @@ where
     }
 }
 
-impl<A, S, P> FromIterator<A> for GenericPBag<A, S, P>
+impl<A, S, P> FromIterator<A> for GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone + Default,
@@ -372,7 +372,7 @@ where
     }
 }
 
-impl<A, S, P> Extend<A> for GenericPBag<A, S, P>
+impl<A, S, P> Extend<A> for GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
@@ -385,7 +385,7 @@ where
     }
 }
 
-impl<A, S, P> From<Vec<A>> for GenericPBag<A, S, P>
+impl<A, S, P> From<Vec<A>> for GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone + Default,
@@ -396,7 +396,7 @@ where
     }
 }
 
-impl<A, S, const N: usize, P> From<[A; N]> for GenericPBag<A, S, P>
+impl<A, S, const N: usize, P> From<[A; N]> for GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone + Default,
@@ -407,7 +407,7 @@ where
     }
 }
 
-impl<'a, A, S, P> From<&'a [A]> for GenericPBag<A, S, P>
+impl<'a, A, S, P> From<&'a [A]> for GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone + Default,
@@ -418,33 +418,33 @@ where
     }
 }
 
-impl<A, S, P> Add for GenericPBag<A, S, P>
+impl<A, S, P> Add for GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    type Output = GenericPBag<A, S, P>;
+    type Output = GenericBag<A, S, P>;
 
     fn add(self, other: Self) -> Self::Output {
         self.sum(&other)
     }
 }
 
-impl<A, S, P> Add for &GenericPBag<A, S, P>
+impl<A, S, P> Add for &GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    type Output = GenericPBag<A, S, P>;
+    type Output = GenericBag<A, S, P>;
 
     fn add(self, other: Self) -> Self::Output {
         self.sum(other)
     }
 }
 
-impl<A, S, P: SharedPointerKind> Sum for GenericPBag<A, S, P>
+impl<A, S, P: SharedPointerKind> Sum for GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Default + Clone,
@@ -458,7 +458,7 @@ where
     }
 }
 
-/// A consuming iterator over the elements of a [`GenericPBag`].
+/// A consuming iterator over the elements of a [`GenericBag`].
 ///
 /// Each item is `(element, count)`.
 pub struct ConsumingIter<A: Hash + Eq, S, P: SharedPointerKind> {
@@ -496,7 +496,7 @@ where
 {
 }
 
-impl<A, S, P> IntoIterator for GenericPBag<A, S, P>
+impl<A, S, P> IntoIterator for GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher,
@@ -513,7 +513,7 @@ where
     }
 }
 
-impl<'a, A, S, P> IntoIterator for &'a GenericPBag<A, S, P>
+impl<'a, A, S, P> IntoIterator for &'a GenericBag<A, S, P>
 where
     A: Hash + Eq + Clone,
     S: BuildHasher + Clone,
@@ -536,7 +536,7 @@ mod test {
 
     #[test]
     fn new_bag_is_empty() {
-        let bag: PBag<i32> = PBag::new();
+        let bag: Bag<i32> = Bag::new();
         assert!(bag.is_empty());
         assert_eq!(bag.len(), 0);
         assert_eq!(bag.total_count(), 0);
@@ -544,7 +544,7 @@ mod test {
 
     #[test]
     fn insert_and_count() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         bag.insert("a");
         bag.insert("a");
         bag.insert("b");
@@ -557,7 +557,7 @@ mod test {
 
     #[test]
     fn insert_many() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         bag.insert_many("a", 5);
         assert_eq!(bag.count(&"a"), 5);
         assert_eq!(bag.total_count(), 5);
@@ -568,7 +568,7 @@ mod test {
 
     #[test]
     fn insert_many_zero() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         bag.insert_many("a", 0);
         assert!(bag.is_empty());
         assert_eq!(bag.total_count(), 0);
@@ -576,7 +576,7 @@ mod test {
 
     #[test]
     fn remove_single() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         bag.insert("a");
         bag.insert("a");
         let prev = bag.remove(&"a");
@@ -587,7 +587,7 @@ mod test {
 
     #[test]
     fn remove_last_occurrence() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         bag.insert("a");
         bag.remove(&"a");
         assert!(!bag.contains(&"a"));
@@ -596,7 +596,7 @@ mod test {
 
     #[test]
     fn remove_absent() {
-        let mut bag: PBag<&str> = PBag::new();
+        let mut bag: Bag<&str> = Bag::new();
         let prev = bag.remove(&"x");
         assert_eq!(prev, 0);
         assert!(bag.is_empty());
@@ -604,7 +604,7 @@ mod test {
 
     #[test]
     fn remove_all() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         bag.insert_many("a", 5);
         bag.insert("b");
         let prev = bag.remove_all(&"a");
@@ -615,7 +615,7 @@ mod test {
 
     #[test]
     fn contains() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         assert!(!bag.contains(&1));
         bag.insert(1);
         assert!(bag.contains(&1));
@@ -623,11 +623,11 @@ mod test {
 
     #[test]
     fn sum_bags() {
-        let mut a = PBag::new();
+        let mut a = Bag::new();
         a.insert_many("x", 2);
         a.insert("y");
 
-        let mut b = PBag::new();
+        let mut b = Bag::new();
         b.insert_many("x", 3);
         b.insert("z");
 
@@ -640,11 +640,11 @@ mod test {
 
     #[test]
     fn intersection_bags() {
-        let mut a = PBag::new();
+        let mut a = Bag::new();
         a.insert_many("x", 3);
         a.insert_many("y", 1);
 
-        let mut b = PBag::new();
+        let mut b = Bag::new();
         b.insert_many("x", 2);
         b.insert_many("z", 5);
 
@@ -657,11 +657,11 @@ mod test {
 
     #[test]
     fn difference_bags() {
-        let mut a = PBag::new();
+        let mut a = Bag::new();
         a.insert_many("x", 5);
         a.insert_many("y", 2);
 
-        let mut b = PBag::new();
+        let mut b = Bag::new();
         b.insert_many("x", 3);
         b.insert_many("y", 10);
 
@@ -673,7 +673,7 @@ mod test {
 
     #[test]
     fn from_iterator() {
-        let bag: PBag<i32> = vec![1, 2, 2, 3, 3, 3].into_iter().collect();
+        let bag: Bag<i32> = vec![1, 2, 2, 3, 3, 3].into_iter().collect();
         assert_eq!(bag.count(&1), 1);
         assert_eq!(bag.count(&2), 2);
         assert_eq!(bag.count(&3), 3);
@@ -683,7 +683,7 @@ mod test {
 
     #[test]
     fn clone_shares_structure() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         bag.insert_many("a", 10);
         let bag2 = bag.clone();
         assert_eq!(bag, bag2);
@@ -691,12 +691,12 @@ mod test {
 
     #[test]
     fn equality() {
-        let mut a = PBag::new();
+        let mut a = Bag::new();
         a.insert(1);
         a.insert(2);
         a.insert(2);
 
-        let mut b = PBag::new();
+        let mut b = Bag::new();
         b.insert(2);
         b.insert(1);
         b.insert(2);
@@ -706,7 +706,7 @@ mod test {
 
     #[test]
     fn into_iter_owned() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         bag.insert("a");
         bag.insert("a");
         bag.insert("b");
@@ -718,7 +718,7 @@ mod test {
 
     #[test]
     fn into_iter_ref() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         bag.insert("a");
         bag.insert("b");
 
@@ -729,7 +729,7 @@ mod test {
 
     #[test]
     fn for_loop() {
-        let mut bag = PBag::new();
+        let mut bag = Bag::new();
         bag.insert(1);
         bag.insert(2);
         bag.insert(2);
@@ -743,11 +743,11 @@ mod test {
 
     #[test]
     fn inequality_different_counts() {
-        let mut a = PBag::new();
+        let mut a = Bag::new();
         a.insert(1);
         a.insert(1);
 
-        let mut b = PBag::new();
+        let mut b = Bag::new();
         b.insert(1);
 
         assert_ne!(a, b);

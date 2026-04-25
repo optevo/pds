@@ -561,7 +561,7 @@ Replace `std::fmt/hash/mem/ops/iter/cmp/borrow/marker/ptr` with `core::` equival
 Replace `std::collections::{BTreeMap,BTreeSet,VecDeque}` with `alloc::collections::`.
 Add explicit `use alloc::{vec, vec::Vec, borrow::ToOwned}` imports where needed (these
 are in the std prelude but not the core prelude). Gate `RandomState`-dependent type
-aliases (`HashMap`, `HashSet`, `PBag`, `HashMultiMap`, `InsertionOrderMap`),
+aliases (`HashMap`, `HashSet`, `Bag`, `HashMultiMap`, `InsertionOrderMap`),
 convenience `new()` methods, `Default` impls, and `From<std::collections::*>` impls
 behind `#[cfg(feature = "std")]`. Generic variants (`GenericHashMap` etc.) remain
 available in no_std. Write a spin-lock fallback (`SpinMutex`) for `FocusMut`'s
@@ -593,7 +593,7 @@ as an optional built-in default for no_std environments.
 
 **Decision:** Add foldhash as an optional dependency (`dep:foldhash`,
 default-features = false). When the `foldhash` feature is enabled without
-`std`, provide convenience type aliases (`HashMap`, `HashSet`, `PBag`,
+`std`, provide convenience type aliases (`HashMap`, `HashSet`, `Bag`,
 `HashMultiMap`, `InsertionOrderMap`) using `foldhash::fast::RandomState`.
 When `std` is enabled, `std::collections::hash_map::RandomState` remains
 the default regardless of the `foldhash` feature.

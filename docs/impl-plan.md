@@ -6,7 +6,7 @@ design priorities: performance over compatibility, Merkle hashing, SIMD
 HAMT nodes, and no_std support.
 
 **Current state (Apr 2026):** v1.0.0, ~12K lines of Rust, 9 collection
-types (Vector, HashMap, HashSet, OrdMap, OrdSet, PBag, HashMultiMap,
+types (Vector, HashMap, HashSet, OrdMap, OrdSet, Bag, HashMultiMap,
 InsertionOrderMap, Trie). SIMD HAMT, Merkle hashing, and no_std support
 implemented.
 
@@ -81,9 +81,9 @@ single v2.0.0 release in Phase 5.
 - **[2026-04-25] Rename crate from imbl to pds.** Version reset to 1.0.0.
   All internal references updated. imbl-sized-chunks dependency unchanged.
 
-- **[2026-04-25] IntoIterator for PBag, HashMultiMap, InsertionOrderMap.**
+- **[2026-04-25] IntoIterator for Bag, HashMultiMap, InsertionOrderMap.**
   Added owned and borrowed IntoIterator with named ConsumingIter types.
-  PBag yields (element, count), HashMultiMap yields flattened (key, value),
+  Bag yields (element, count), HashMultiMap yields flattened (key, value),
   InsertionOrderMap yields (key, value) in insertion order.
 
 - **[2026-04-25] Merkle negative check for HashSet PartialEq.** HashSet
@@ -102,7 +102,7 @@ single v2.0.0 release in Phase 5.
   broken links, missing features in README). Added ~100 coverage tests for
   ord/map.rs, ord/set.rs, hash/set.rs. Crate-wide coverage: 90.1% lines,
   86.4% functions (up from ~79%/76%). Trait audit: core 5 types complete;
-  PBag/HashMultiMap/InsertionOrderMap lack IntoIterator (needs named iterators).
+  Bag/HashMultiMap/InsertionOrderMap lack IntoIterator (needs named iterators).
 
 - **[2026-04-25] kv_merkle_hash for HashMap (DEC-021).** Added V: Hash
   key+value Merkle hash for O(1) positive equality. Two-tier API: public
@@ -302,7 +302,7 @@ single v2.0.0 release in Phase 5.
   for Vector.
 
 - **[2026-04-24] 2.11: Companion collection types.** Added four new types:
-  `PBag<A>` (persistent multiset backed by HashMap<A, usize>),
+  `Bag<A>` (persistent multiset backed by HashMap<A, usize>),
   `Atom<T>` (thread-safe atomic state holder wrapping arc-swap, behind
   `atom` feature flag), `HashMultiMap<K, V>` (persistent multimap backed
   by HashMap<K, HashSet<V>>), `InsertionOrderMap<K, V>` (insertion-ordered
@@ -1115,7 +1115,7 @@ filling common patterns that currently require manual composition.
    representation, configuration files, and API responses where key order
    matters. PCollections (Java) provides `OrderedPMap`.
 
-4. **`PBag<A>` (Multiset)** — persistent unordered collection with
+4. **`Bag<A>` (Multiset)** — persistent unordered collection with
    duplicates, backed by `HashMap<A, usize>` (element → count). Provides
    `insert(a)` (increment count), `remove(a)` (decrement), `count(a)`,
    `total_count()`, plus multiset operations (sum, intersection,
@@ -1132,7 +1132,7 @@ approval (see dependency evaluation process in directives).
 
 **References:** Clojure `atom`; immer `immer::atom<T>`;
 Capsule `SetMultimap`, `BinaryRelation`; PCollections `OrderedPMap`,
-`PBag`; `arc-swap` crate (docs.rs/arc-swap); `indexmap` crate.
+`Bag`; `arc-swap` crate (docs.rs/arc-swap); `indexmap` crate.
 
 ---
 

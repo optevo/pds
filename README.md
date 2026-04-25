@@ -16,7 +16,7 @@ SIMD-accelerated HAMT nodes, and no_std support.
 | `HashSet<A>` | SIMD HAMT | O(log n) insert, lookup, set operations |
 | `OrdMap<K, V>` | B+ tree | O(log n) insert, lookup, range queries |
 | `OrdSet<A>` | B+ tree | O(log n) insert, lookup, range queries |
-| `PBag<A>` | SIMD HAMT | Persistent multiset (bag) with element counts |
+| `Bag<A>` | SIMD HAMT | Persistent multiset (bag) with element counts |
 | `HashMultiMap<K, V>` | SIMD HAMT | Key → set of values multimap |
 | `InsertionOrderMap<K, V>` | SIMD HAMT + B+ tree | Map iterating in insertion order |
 | `Trie<K, V>` | HAMT of HAMTs | Hierarchical path-keyed map |
@@ -42,7 +42,7 @@ a different collection set and design philosophy.
 | **Vector** | RRB tree | RRB tree | RRB tree | — (indexable sequence) |
 | **HashMap / Set** | SIMD HAMT | HAMT | HAMT | HAMT |
 | **OrdMap / Set** | B+ tree | B+ tree | B-tree | Red-black tree |
-| **PBag** | yes | — | — | — |
+| **Bag** | yes | — | — | — |
 | **HashMultiMap** | yes | — | — | — |
 | **InsertionOrderMap** | yes | — | — | — |
 | **Trie** | yes | — | — | — |
@@ -58,7 +58,7 @@ a different collection set and design philosophy.
 **Key differences from imbl:**
 - SIMD-accelerated HAMT nodes for faster hash map/set operations
 - Merkle hashing on all collections for O(1) structural equality checks
-- Four additional collection types (PBag, HashMultiMap, InsertionOrderMap, Trie)
+- Four additional collection types (Bag, HashMultiMap, InsertionOrderMap, Trie)
 - `no_std` support via the `foldhash` feature flag
 - `triomphe::Arc` support (no weak count, 8 bytes smaller per node)
 - Deprecated API aliases removed; breaking changes for correctness accepted

@@ -21,7 +21,7 @@ adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
  - no_std support
  - Persistent Trie as derived structure
  - O() complexity documentation comparing to std equivalents
- - IntoIterator for PBag, HashMultiMap, InsertionOrderMap
+ - IntoIterator for Bag, HashMultiMap, InsertionOrderMap
 
 ### Removed
 

@@ -257,7 +257,7 @@
 //!
 //! | Type | Description | Key Constraints |
 //! | --- | --- | --- |
-//! | [`PBag<A>`][crate::PBag] | Persistent multiset (bag) — tracks element counts | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//! | [`Bag<A>`][crate::Bag] | Persistent multiset (bag) — tracks element counts | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`HashMultiMap<K, V>`][crate::HashMultiMap] | Key → set of values multimap | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`InsertionOrderMap<K, V>`][crate::InsertionOrderMap] | Map that iterates in insertion order | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`Trie<K, V>`][crate::Trie] | Persistent prefix tree (trie) — paths to values | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
@@ -320,7 +320,7 @@
 //! pds = { version = "*", default-features = false, features = ["triomphe"] }
 //! ```
 //!
-//! In `no_std` mode, convenience type aliases (`HashMap`, `HashSet`, `PBag`,
+//! In `no_std` mode, convenience type aliases (`HashMap`, `HashSet`, `Bag`,
 //! `HashMultiMap`, `InsertionOrderMap`) are not available because they depend
 //! on `std::collections::hash_map::RandomState`. Use the generic variants
 //! (`GenericHashMap`, `GenericHashSet`, etc.) with your own
@@ -404,7 +404,7 @@ pub mod atom;
 
 pub mod hash_multimap;
 pub mod insertion_order_map;
-pub mod pbag;
+pub mod bag;
 pub mod trie;
 
 pub use crate::hash_multimap::GenericHashMultiMap;
@@ -421,9 +421,9 @@ pub use crate::hashset::GenericHashSet;
 pub use crate::hashset::HashSet;
 pub use crate::ordmap::{GenericOrdMap, OrdMap};
 pub use crate::ordset::{GenericOrdSet, OrdSet};
-pub use crate::pbag::GenericPBag;
+pub use crate::bag::GenericBag;
 #[cfg(any(feature = "std", feature = "foldhash"))]
-pub use crate::pbag::PBag;
+pub use crate::bag::Bag;
 pub use crate::trie::GenericTrie;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::trie::Trie;
