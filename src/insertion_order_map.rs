@@ -29,7 +29,7 @@ use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, Sum};
-use core::ops::Add;
+use core::ops::{Add, Index, IndexMut};
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -147,6 +147,15 @@ where
     {
         let idx = self.index.get(key)?;
         self.entries.get(idx).map(|(_, v)| v)
+    }
+
+    /// Get a mutable reference to the value for a key.
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        Q: Hash + Equivalent<K> + ?Sized,
+    {
+        let idx = *self.index.get(key)?;
+        self.entries.get_mut(&idx).map(|(_, v)| v)
     }
 
     /// Test whether a key is present.
@@ -332,6 +341,52 @@ where
 {
     fn from(slice: &'a [(K, V)]) -> Self {
         slice.iter().cloned().collect()
+    }
+}
+
+impl<'a, K, V, S, P, H: HashWidth> From<&'a Vec<(K, V)>> for GenericInsertionOrderMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(v: &'a Vec<(K, V)>) -> Self {
+        v.iter().cloned().collect()
+    }
+}
+
+impl<Q, K, V, S, P, H: HashWidth> Index<&Q> for GenericInsertionOrderMap<K, V, S, P, H>
+where
+    Q: Hash + Equivalent<K> + ?Sized,
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    type Output = V;
+
+    fn index(&self, key: &Q) -> &Self::Output {
+        match self.get(key) {
+            Some(v) => v,
+            None => panic!("InsertionOrderMap::index: key not found"),
+        }
+    }
+}
+
+impl<Q, K, V, S, P, H: HashWidth> IndexMut<&Q> for GenericInsertionOrderMap<K, V, S, P, H>
+where
+    Q: Hash + Equivalent<K> + ?Sized,
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    fn index_mut(&mut self, key: &Q) -> &mut Self::Output {
+        match self.get_mut(key) {
+            Some(v) => v,
+            None => panic!("InsertionOrderMap::index_mut: key not found"),
+        }
     }
 }
 
@@ -649,5 +704,130 @@ mod test {
 
         let keys: Vec<_> = map.keys().collect();
         assert_eq!(keys, vec![&"b", &"c", &"a"]);
+    }
+
+    #[test]
+    fn debug_format() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("k", 1i32);
+        let s = format!("{:?}", m);
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn default_is_empty() {
+        let m: InsertionOrderMap<i32, i32> = InsertionOrderMap::default();
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn hash_same_for_equal_maps() {
+        use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        fn hash_of(m: &InsertionOrderMap<i32, i32>) -> u64 {
+            let mut h = DefaultHasher::new();
+            m.hash(&mut h);
+            h.finish()
+        }
+        // Insertion order is part of identity, so same entries same order → equal hash.
+        let mut a = InsertionOrderMap::new();
+        a.insert(1, 10); a.insert(2, 20);
+        let mut b = InsertionOrderMap::new();
+        b.insert(1, 10); b.insert(2, 20);
+        assert_eq!(hash_of(&a), hash_of(&b));
+        // Different order → different hash (with high probability).
+        let mut c = InsertionOrderMap::new();
+        c.insert(2, 20); c.insert(1, 10);
+        assert_ne!(hash_of(&a), hash_of(&c));
+    }
+
+    #[test]
+    fn add_union_owned() {
+        let mut a = InsertionOrderMap::new();
+        a.insert("x", 1i32);
+        let mut b = InsertionOrderMap::new();
+        b.insert("y", 2);
+        let c = a + b;
+        assert_eq!(c.len(), 2);
+        assert_eq!(c.get("x"), Some(&1));
+        assert_eq!(c.get("y"), Some(&2));
+    }
+
+    #[test]
+    fn add_union_ref() {
+        let mut a = InsertionOrderMap::new();
+        a.insert("x", 1i32);
+        let mut b = InsertionOrderMap::new();
+        b.insert("y", 2);
+        let c = &a + &b;
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn sum_maps() {
+        let maps: Vec<InsertionOrderMap<i32, i32>> = vec![
+            {let mut m = InsertionOrderMap::new(); m.insert(1, 10); m},
+            {let mut m = InsertionOrderMap::new(); m.insert(2, 20); m},
+        ];
+        let total: InsertionOrderMap<i32, i32> = maps.into_iter().sum();
+        assert_eq!(total.len(), 2);
+    }
+
+    #[test]
+    fn extend_adds_pairs() {
+        let mut m: InsertionOrderMap<i32, i32> = InsertionOrderMap::new();
+        m.extend(vec![(1, 10), (2, 20)]);
+        assert_eq!(m.len(), 2);
+        assert_eq!(m.get(&1), Some(&10));
+    }
+
+    #[test]
+    fn from_vec() {
+        let m: InsertionOrderMap<i32, i32> = vec![(1, 10), (2, 20)].into();
+        assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn from_array() {
+        let m: InsertionOrderMap<i32, i32> = [(1i32, 10i32), (2, 20)].into();
+        assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn from_slice() {
+        let m: InsertionOrderMap<i32, i32> = [(1i32, 10i32)][..].into();
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn from_vec_ref() {
+        let v = vec![(1i32, 10i32), (2, 20)];
+        let m: InsertionOrderMap<i32, i32> = InsertionOrderMap::from(&v);
+        assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn index_and_index_mut() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("a", 1i32);
+        assert_eq!(m["a"], 1);
+        m["a"] = 99;
+        assert_eq!(m.get("a"), Some(&99));
+    }
+
+    #[test]
+    #[should_panic(expected = "key not found")]
+    fn index_panics_on_missing() {
+        let m: InsertionOrderMap<&str, i32> = InsertionOrderMap::new();
+        let _ = m["missing"];
+    }
+
+    #[test]
+    fn get_mut_updates_value() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("a", 1i32);
+        *m.get_mut("a").unwrap() = 42;
+        assert_eq!(m.get("a"), Some(&42));
+        assert_eq!(m.get_mut("z"), None);
     }
 }

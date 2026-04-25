@@ -57,6 +57,20 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-25] Directive conformance pass 2 — Index, serde tests, Hash tests, allow comments, From<&Vec>.**
+  `Index` added for HashMultiMap (returns `&HashSet`), InsertionOrderMap (returns `&V`),
+  BiMap (forward direction), SymMap (forward direction), Trie (`&[K]` path). `IndexMut`
+  added for InsertionOrderMap and Trie (where mutation does not break invariants); omitted
+  for BiMap/SymMap/HashMultiMap (see DEC-030). `get_mut` added to InsertionOrderMap and
+  Trie. `From<&Vec<(K,V)>>` added to HashMultiMap, InsertionOrderMap, BiMap, SymMap.
+  Serde round-trip tests added for Bag, HashMultiMap, InsertionOrderMap, BiMap, SymMap,
+  Trie in `src/ser.rs`. Hash order-independence tests added for HashMap, HashSet, BiMap,
+  SymMap (the four that were missing them; Bag and HashMultiMap already covered above).
+  Trait tests added to Vector (From conversions, Hash, Sum, Add ref, Extend), Bag (Debug,
+  Hash, Default, Add, Extend, From conversions), HashMultiMap (same), InsertionOrderMap
+  (same plus Index/IndexMut/get_mut). Bare `#[allow]` comments fixed in vector/mod.rs,
+  nodes/btree.rs, ord/set.rs, ord/map.rs. Decisions DEC-030, DEC-031 recorded.
+
 - **[2026-04-25] Directive conformance fixes (trie traits, serde, Send/Sync assertions).**
   All missing standard traits added to `GenericTrie`: `Hash` (XOR-combine children),
   `Extend<(Vec<K>, V)>`, `FromIterator`, `From<Vec/[T;N]/&[T]>`, `Add` (union, owned+ref),

@@ -32,7 +32,7 @@ use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, Sum};
-use core::ops::Add;
+use core::ops::{Add, Index};
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -364,6 +364,42 @@ where
 {
     fn from(slice: &'a [(K, V)]) -> Self {
         slice.iter().cloned().collect()
+    }
+}
+
+impl<'a, K, V, S, P, H: HashWidth> From<&'a Vec<(K, V)>> for GenericBiMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(v: &'a Vec<(K, V)>) -> Self {
+        v.iter().cloned().collect()
+    }
+}
+
+/// Index by key (forward direction), returning the mapped value.
+///
+/// Panics if the key is not present. Note: `IndexMut` is not implemented
+/// because mutating a value via a mutable reference would silently invalidate
+/// the reverse lookup (`value → key`) stored in the backward map.
+impl<Q, K, V, S, P, H: HashWidth> Index<&Q> for GenericBiMap<K, V, S, P, H>
+where
+    Q: Hash + Equivalent<K> + ?Sized,
+    K: Hash + Eq,
+    V: Hash + Eq,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    type Output = V;
+
+    fn index(&self, key: &Q) -> &Self::Output {
+        // Access forward map directly to avoid the S: Default bound on get_by_key.
+        match self.forward.get(key) {
+            Some(v) => v,
+            None => panic!("BiMap::index: key not found"),
+        }
     }
 }
 
@@ -701,5 +737,37 @@ mod test {
         let s = format!("{:?}", bm);
         assert!(s.contains("\"a\""));
         assert!(s.contains('1'));
+    }
+
+    #[test]
+    fn hash_order_independent() {
+        use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        fn hash_of(m: &BiMap<i32, i32>) -> u64 {
+            let mut h = DefaultHasher::new();
+            m.hash(&mut h);
+            h.finish()
+        }
+        let mut a = BiMap::new();
+        a.insert(1, 10); a.insert(2, 20);
+        let mut b = BiMap::new();
+        b.insert(2, 20); b.insert(1, 10); // different insertion order
+        assert_eq!(hash_of(&a), hash_of(&b));
+    }
+
+    #[test]
+    fn index_by_key() {
+        let mut bm = BiMap::new();
+        bm.insert(1i32, 10i32);
+        bm.insert(2, 20);
+        assert_eq!(bm[&1], 10);
+        assert_eq!(bm[&2], 20);
+    }
+
+    #[test]
+    #[should_panic(expected = "key not found")]
+    fn index_panics_on_missing() {
+        let bm: BiMap<i32, i32> = BiMap::new();
+        let _ = bm[&99];
     }
 }

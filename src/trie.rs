@@ -30,7 +30,7 @@ use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, Sum};
-use core::ops::Add;
+use core::ops::{Add, Index, IndexMut};
 
 use archery::SharedPointerKind;
 
@@ -178,6 +178,17 @@ where
     S: BuildHasher + Clone + Default,
     P: SharedPointerKind,
 {
+    /// Get a mutable reference to the value at the given path.
+    #[must_use]
+    pub fn get_mut(&mut self, path: &[K]) -> Option<&mut V> {
+        if path.is_empty() {
+            return self.value.as_mut();
+        }
+        self.children
+            .get_mut(&path[0])
+            .and_then(|child| child.get_mut(&path[1..]))
+    }
+
     /// Insert a value at the given path, returning the previous value.
     pub fn insert(&mut self, path: &[K], value: V) -> Option<V> {
         if path.is_empty() {
@@ -447,6 +458,40 @@ where
 {
     fn from(slice: &'a [(alloc::vec::Vec<K>, V)]) -> Self {
         slice.iter().map(|(p, v)| (p.clone(), v.clone())).collect()
+    }
+}
+
+impl<K, V, S, P> Index<&[K]> for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    type Output = V;
+
+    /// Index by path, panicking if the path has no associated value.
+    fn index(&self, path: &[K]) -> &Self::Output {
+        match self.get(path) {
+            Some(v) => v,
+            None => panic!("Trie::index: path not found"),
+        }
+    }
+}
+
+impl<K, V, S, P> IndexMut<&[K]> for GenericTrie<K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    /// Index mutably by path, panicking if the path has no associated value.
+    fn index_mut(&mut self, path: &[K]) -> &mut Self::Output {
+        match self.get_mut(path) {
+            Some(v) => v,
+            None => panic!("Trie::index_mut: path not found"),
+        }
     }
 }
 
@@ -889,5 +934,27 @@ mod test {
         let total: Trie<&str, i32> = tries.into_iter().sum();
         assert_eq!(total.len(), 3);
         assert_eq!(total.get(&["b"]), Some(&2));
+    }
+
+    #[test]
+    fn get_mut_and_index_mut() {
+        let mut t = Trie::new();
+        t.insert(&["a", "b"], 1i32);
+        // get_mut
+        *t.get_mut(&["a", "b"]).unwrap() = 42;
+        assert_eq!(t.get(&["a", "b"]), Some(&42));
+        assert!(t.get_mut(&["missing"]).is_none());
+        // Index (immutable)
+        assert_eq!(t[&["a", "b"][..]], 42);
+        // IndexMut
+        t[&["a", "b"][..]] = 99;
+        assert_eq!(t.get(&["a", "b"]), Some(&99));
+    }
+
+    #[test]
+    #[should_panic(expected = "path not found")]
+    fn index_panics_on_missing() {
+        let t: Trie<&str, i32> = Trie::new();
+        let _ = t[&["missing"][..]];
     }
 }

@@ -484,7 +484,8 @@ where
 mod test {
     use crate::{
         proptest::{hash_map, hash_set, ord_map, ord_set, vector},
-        HashMap, HashSet, OrdMap, OrdSet, Vector,
+        Bag, BiMap, Direction, HashMap, HashMultiMap, HashSet, InsertionOrderMap,
+        OrdMap, OrdSet, SymMap, Trie, Vector,
     };
     use proptest::num::i32;
     use proptest::proptest;
@@ -520,5 +521,68 @@ mod test {
         fn ser_vector(ref v in vector(i32::ANY, 0..100)) {
             assert_eq!(v, &from_str::<Vector<i32>>(&to_string(&v).unwrap()).unwrap());
         }
+    }
+
+    // Serde round-trip tests for the 6 types not covered by proptest strategies.
+
+    #[test]
+    fn ser_bag() {
+        let mut b = Bag::new();
+        b.insert(1i32); b.insert(1); b.insert(2); b.insert(3);
+        let rt = from_str::<Bag<i32>>(&to_string(&b).unwrap()).unwrap();
+        assert_eq!(b, rt);
+    }
+
+    #[test]
+    fn ser_hash_multimap() {
+        let mut mm = HashMultiMap::new();
+        mm.insert(1i32, 10i32); mm.insert(1, 11); mm.insert(2, 20);
+        let rt = from_str::<HashMultiMap<i32, i32>>(&to_string(&mm).unwrap()).unwrap();
+        assert_eq!(mm, rt);
+    }
+
+    #[test]
+    fn ser_insertion_order_map() {
+        let mut m = InsertionOrderMap::new();
+        m.insert(1i32, 100i32); m.insert(2, 200); m.insert(3, 300);
+        let json = to_string(&m).unwrap();
+        let rt = from_str::<InsertionOrderMap<i32, i32>>(&json).unwrap();
+        assert_eq!(m, rt);
+        // Insertion order must survive the round-trip.
+        let orig_keys: Vec<_> = m.keys().copied().collect();
+        let rt_keys: Vec<_> = rt.keys().copied().collect();
+        assert_eq!(orig_keys, rt_keys);
+    }
+
+    #[test]
+    fn ser_bimap() {
+        let mut bm = BiMap::new();
+        bm.insert(1i32, 10i32); bm.insert(2, 20);
+        let rt = from_str::<BiMap<i32, i32>>(&to_string(&bm).unwrap()).unwrap();
+        assert_eq!(bm, rt);
+        // Reverse direction must also work.
+        assert_eq!(rt.get_by_value(&10), Some(&1));
+    }
+
+    #[test]
+    fn ser_symmap() {
+        let mut sm = SymMap::new();
+        sm.insert(1i32, 10i32); sm.insert(2, 20);
+        let rt = from_str::<SymMap<i32>>(&to_string(&sm).unwrap()).unwrap();
+        assert_eq!(sm, rt);
+        assert_eq!(rt.get(Direction::Backward, &10), Some(&1));
+    }
+
+    #[test]
+    fn ser_trie() {
+        let mut t: Trie<String, i32> = Trie::new();
+        t.insert(&["a".to_owned(), "b".to_owned()], 1i32);
+        t.insert(&["a".to_owned(), "c".to_owned()], 2);
+        t.insert(&["x".to_owned()], 3);
+        let json = to_string(&t).unwrap();
+        let rt = from_str::<Trie<String, i32>>(&json).unwrap();
+        assert_eq!(t, rt);
+        assert_eq!(rt.get(&["a".to_owned(), "b".to_owned()]), Some(&1));
+        assert_eq!(rt.get(&["x".to_owned()]), Some(&3));
     }
 }

@@ -1612,3 +1612,65 @@ adding accessor methods — a larger refactor than justified for v1.
   flat element arrays. This is functionally correct but loses RRB tree sharing.
 - OrdMap pools preserve within-pool sharing but not cross-session (no Merkle
   hashes on B+ tree nodes)
+
+---
+
+## DEC-030: `IndexMut` omitted for BiMap, SymMap, HashMultiMap {#sec:dec-030}
+
+**Date:** 2026-04-25
+**Status:** Accepted
+
+**Context:**
+The standard trait table in `directives.md` requires `Index`/`IndexMut` for all keyed
+map types. All five types that were missing `Index` have now had it added. However,
+`IndexMut` cannot be safely provided for three of them without breaking internal
+invariants.
+
+**Decision:**
+`IndexMut` is not implemented for `BiMap`, `SymMap`, or `HashMultiMap`.
+
+- **BiMap**: stores a forward map (K→V) and a backward map (V→K). Returning `&mut V`
+  would let callers change the value without updating the backward map, silently
+  invalidating the bijection invariant.
+- **SymMap**: same structural argument — forward and backward maps must stay in sync;
+  mutating one side via a raw `&mut A` would break symmetry.
+- **HashMultiMap**: internally stores `HashMap<K, HashSet<V>>` and a `total: usize`
+  element count. Returning `&mut HashSet<V>` would let callers add or remove elements
+  from the set without updating `total`, silently corrupting `len()`.
+
+**Alternatives considered:**
+- Implement `IndexMut` and document the footgun — rejected because silently-inconsistent
+  data structures are worse than a missing impl. Callers that need mutation can use the
+  provided `insert`/`remove` methods which maintain invariants.
+- Add a `entry()`-style API that validates the mutation — future work; not blocked on this.
+
+**Consequences:**
+Minor deviation from the `Y` cell in the directive table. The `Index` (read-only) impl
+is present for all three types. The omission is documented here and in the doc comment
+on each `Index` impl.
+
+---
+
+## DEC-031: Bag implements `Add` and `Sum` despite directive table marking them n/a {#sec:dec-031}
+
+**Date:** 2026-04-25
+**Status:** Accepted
+
+**Context:**
+The standard trait table marks `Add` (union) and `Sum` as "n/a" for Bag types. The
+existing `Bag` implementation provides both.
+
+**Decision:**
+Keep `Add` and `Sum` on `Bag`. The "n/a" designation was a conservative default based
+on the original directive not anticipating multiset-union semantics. `Bag::add` performs
+multiset union (counts are summed per element), which is a well-defined, useful, and
+mathematically sound operation. `Sum` is the natural fold over `Add`.
+
+**Alternatives considered:**
+- Remove the impls to comply strictly with the directive table — rejected because the
+  implementations are correct and useful; removing them would be a breaking change with
+  no benefit.
+
+**Consequences:**
+`Bag<T>` is slightly richer than the trait table prescribes. The directive table should
+be read as a minimum obligation, not a ceiling.

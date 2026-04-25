@@ -2312,6 +2312,10 @@ where
     where
         V: Default,
     {
+        // `or_default()` is implemented via `or_insert_with(Default::default)`
+        // rather than by calling `or_default()` recursively (which would stack-
+        // overflow). Clippy's `unwrap_or_default` lint fires here because it
+        // sees `or_insert_with(Default::default)` and suggests `.or_default()`.
         #[allow(clippy::unwrap_or_default)]
         self.or_insert_with(Default::default)
     }
@@ -4985,5 +4989,21 @@ mod test {
                 assert_eq!(original_hash, map.kv_merkle_hash);
             }
         }
+    }
+
+    #[test]
+    fn hash_order_independent() {
+        use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        fn hash_of(m: &HashMap<i32, i32>) -> u64 {
+            let mut h = DefaultHasher::new();
+            m.hash(&mut h);
+            h.finish()
+        }
+        let mut a = HashMap::new();
+        a.insert(1, 10); a.insert(2, 20); a.insert(3, 30);
+        let mut b = HashMap::new();
+        b.insert(3, 30); b.insert(1, 10); b.insert(2, 20); // different insertion order
+        assert_eq!(hash_of(&a), hash_of(&b));
     }
 }

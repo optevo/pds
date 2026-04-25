@@ -594,6 +594,11 @@ where
     ///
     /// [slice::split_at]: https://doc.rust-lang.org/std/primitive.slice.html#method.split_at
     /// [Vector::split_at]: type.Vector.html#method.split_at
+    // `TreeFocusMut::split_at` clones internal view-range data to initialise
+    // the right half independently of the left. Clippy flags this as redundant
+    // because the original tree is consumed, but the clone is load-bearing:
+    // both halves need their own copy of the range to track their respective
+    // windows into the underlying vector.
     #[allow(clippy::redundant_clone)]
     pub fn split_at(self, index: usize) -> (Self, Self) {
         if index > self.len() {

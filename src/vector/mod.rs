@@ -43,7 +43,7 @@
 //! [Vec]: https://doc.rust-lang.org/std/vec/struct.Vec.html
 //! [VecDeque]: https://doc.rust-lang.org/std/collections/struct.VecDeque.html
 
-#![allow(unsafe_code)]
+#![allow(unsafe_code)] // Vector's focus/spine manipulations require raw pointer arithmetic and unsafe slice ops that cannot be expressed in safe Rust.
 
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
@@ -4622,5 +4622,71 @@ mod test {
             // unlikely for a 64-bit hash.
             assert_ne!(orig_hash, modified.merkle_hash);
         }
+    }
+
+    #[test]
+    fn from_array() {
+        let v: Vector<i32> = [1, 2, 3].into();
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0], 1);
+        assert_eq!(v[2], 3);
+    }
+
+    #[test]
+    fn from_slice() {
+        let s: &[i32] = &[10, 20, 30];
+        let v: Vector<i32> = s.into();
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[1], 20);
+    }
+
+    #[test]
+    fn from_std_vec() {
+        let v: Vector<i32> = vec![5, 6, 7].into();
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0], 5);
+    }
+
+    #[test]
+    fn hash_equal_vectors_same_hash() {
+        use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        fn hash_of(v: &Vector<i32>) -> u64 {
+            let mut h = DefaultHasher::new();
+            v.hash(&mut h);
+            h.finish()
+        }
+        let a: Vector<i32> = vector![1, 2, 3];
+        let b: Vector<i32> = vector![1, 2, 3];
+        assert_eq!(hash_of(&a), hash_of(&b));
+        let c: Vector<i32> = vector![3, 2, 1];
+        // Order matters for vector hash.
+        assert_ne!(hash_of(&a), hash_of(&c));
+    }
+
+    #[test]
+    fn sum_vectors() {
+        let vecs: Vec<Vector<i32>> = vec![vector![1, 2], vector![3], vector![4, 5]];
+        let total: Vector<i32> = vecs.into_iter().sum();
+        assert_eq!(total.len(), 5);
+        assert_eq!(total[0], 1);
+        assert_eq!(total[4], 5);
+    }
+
+    #[test]
+    fn add_ref_vectors() {
+        let a: Vector<i32> = vector![1, 2];
+        let b: Vector<i32> = vector![3, 4];
+        let c = &a + &b;
+        assert_eq!(c.len(), 4);
+        assert_eq!(c[2], 3);
+    }
+
+    #[test]
+    fn extend_appends() {
+        let mut v: Vector<i32> = vector![1, 2];
+        v.extend(vec![3, 4, 5]);
+        assert_eq!(v.len(), 5);
+        assert_eq!(v[4], 5);
     }
 }

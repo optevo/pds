@@ -28,7 +28,7 @@ use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, Sum};
-use core::ops::Add;
+use core::ops::{Add, Index};
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -381,6 +381,41 @@ where
     }
 }
 
+impl<'a, K, V, S, P, H: HashWidth> From<&'a Vec<(K, V)>> for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(v: &'a Vec<(K, V)>) -> Self {
+        v.iter().cloned().collect()
+    }
+}
+
+/// Index by key, returning the set of values.
+///
+/// Returns a reference to the stored set. Panics if the key is not present.
+/// Note: `IndexMut` is not implemented because mutating the inner set would
+/// silently corrupt the `len` counter maintained by `HashMultiMap`.
+impl<Q, K, V, S, P, H: HashWidth> Index<&Q> for GenericHashMultiMap<K, V, S, P, H>
+where
+    Q: Hash + Equivalent<K> + ?Sized,
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    type Output = GenericHashSet<V, S, P, H>;
+
+    fn index(&self, key: &Q) -> &Self::Output {
+        match self.map.get(key) {
+            Some(set) => set,
+            None => panic!("HashMultiMap::index: key not found"),
+        }
+    }
+}
+
 impl<K, V, S, P, H: HashWidth> Add for GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
@@ -715,5 +750,117 @@ mod test {
         let mut pairs: Vec<_> = mm.iter().map(|(&k, &v)| (k, v)).collect();
         pairs.sort();
         assert_eq!(pairs, vec![(1, "a"), (1, "b"), (2, "c")]);
+    }
+
+    #[test]
+    fn debug_format() {
+        let mut mm = HashMultiMap::new();
+        mm.insert(1i32, 10i32);
+        let s = format!("{:?}", mm);
+        assert!(s.contains("HashMultiMap") || s.contains('{'), "debug should produce non-empty output: {s}");
+    }
+
+    #[test]
+    fn default_is_empty() {
+        let mm: HashMultiMap<i32, i32> = HashMultiMap::default();
+        assert!(mm.is_empty());
+    }
+
+    #[test]
+    fn hash_same_for_equal_maps() {
+        use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        fn hash_of(m: &HashMultiMap<i32, i32>) -> u64 {
+            let mut h = DefaultHasher::new();
+            m.hash(&mut h);
+            h.finish()
+        }
+        let mut a = HashMultiMap::new();
+        a.insert(1, 10); a.insert(2, 20);
+        let mut b = HashMultiMap::new();
+        b.insert(2, 20); b.insert(1, 10); // different insertion order
+        assert_eq!(hash_of(&a), hash_of(&b));
+    }
+
+    #[test]
+    fn add_union_owned() {
+        let mut a = HashMultiMap::new();
+        a.insert(1, "x");
+        let mut b = HashMultiMap::new();
+        b.insert(1, "y"); b.insert(2, "z");
+        let c = a + b;
+        assert_eq!(c.len(), 3);
+        assert_eq!(c.key_count(&1), 2);
+        assert_eq!(c.key_count(&2), 1);
+    }
+
+    #[test]
+    fn add_union_ref() {
+        let mut a = HashMultiMap::new();
+        a.insert(1i32, 10i32);
+        let mut b = HashMultiMap::new();
+        b.insert(2, 20);
+        let c = &a + &b;
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn sum_multimaps() {
+        let maps: Vec<HashMultiMap<i32, i32>> = vec![
+            {let mut m = HashMultiMap::new(); m.insert(1, 10); m},
+            {let mut m = HashMultiMap::new(); m.insert(2, 20); m},
+        ];
+        let total: HashMultiMap<i32, i32> = maps.into_iter().sum();
+        assert_eq!(total.len(), 2);
+    }
+
+    #[test]
+    fn extend_adds_pairs() {
+        let mut mm: HashMultiMap<i32, i32> = HashMultiMap::new();
+        mm.extend(vec![(1, 10), (1, 11), (2, 20)]);
+        assert_eq!(mm.len(), 3);
+        assert_eq!(mm.key_count(&1), 2);
+    }
+
+    #[test]
+    fn from_vec() {
+        let mm: HashMultiMap<i32, i32> = vec![(1, 10), (1, 11), (2, 20)].into();
+        assert_eq!(mm.len(), 3);
+    }
+
+    #[test]
+    fn from_array() {
+        let mm: HashMultiMap<i32, i32> = [(1, 10), (2, 20)].into();
+        assert_eq!(mm.len(), 2);
+    }
+
+    #[test]
+    fn from_slice() {
+        let mm: HashMultiMap<i32, i32> = [(1, 10), (2, 20)][..].into();
+        assert_eq!(mm.len(), 2);
+    }
+
+    #[test]
+    fn from_vec_ref() {
+        let v = vec![(1i32, 10i32), (2, 20)];
+        let mm: HashMultiMap<i32, i32> = HashMultiMap::from(&v);
+        assert_eq!(mm.len(), 2);
+    }
+
+    #[test]
+    fn index_returns_set() {
+        let mut mm = HashMultiMap::new();
+        mm.insert(1i32, 10i32);
+        mm.insert(1, 11);
+        let set = &mm[&1];
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&10));
+    }
+
+    #[test]
+    #[should_panic(expected = "key not found")]
+    fn index_panics_on_missing() {
+        let mm: HashMultiMap<i32, i32> = HashMultiMap::new();
+        let _ = &mm[&99];
     }
 }

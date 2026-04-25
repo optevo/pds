@@ -30,7 +30,7 @@ use std::collections::hash_map::RandomState;
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, Sum};
-use core::ops::Add;
+use core::ops::{Add, Index};
 
 use archery::SharedPointerKind;
 use equivalent::Equivalent;
@@ -379,6 +379,40 @@ where
     }
 }
 
+impl<'a, A, S, P, H: HashWidth> From<&'a Vec<(A, A)>> for GenericSymMap<A, S, P, H>
+where
+    A: Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn from(v: &'a Vec<(A, A)>) -> Self {
+        v.iter().cloned().collect()
+    }
+}
+
+/// Index by key in the forward direction, returning the mapped partner value.
+///
+/// Panics if the key is not present. Note: `IndexMut` is not implemented
+/// because mutating the returned value via a mutable reference would silently
+/// invalidate the reverse entry stored in the backward map.
+impl<Q, A, S, P, H: HashWidth> Index<&Q> for GenericSymMap<A, S, P, H>
+where
+    Q: Hash + Equivalent<A> + ?Sized,
+    A: Hash + Eq,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    type Output = A;
+
+    fn index(&self, key: &Q) -> &Self::Output {
+        // Access forward map directly to avoid the S: Default bound on get().
+        match self.forward.get(key) {
+            Some(v) => v,
+            None => panic!("SymMap::index: key not found"),
+        }
+    }
+}
+
 impl<A, S, P, H: HashWidth> Add for GenericSymMap<A, S, P, H>
 where
     A: Hash + Eq + Clone,
@@ -708,5 +742,38 @@ mod test {
         let s = format!("{:?}", sm);
         assert!(s.contains("\"a\""));
         assert!(s.contains("\"x\""));
+    }
+
+    #[test]
+    fn hash_order_independent() {
+        use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        fn hash_of(m: &SymMap<i32>) -> u64 {
+            let mut h = DefaultHasher::new();
+            m.hash(&mut h);
+            h.finish()
+        }
+        let mut a = SymMap::new();
+        a.insert(1, 10); a.insert(2, 20);
+        let mut b = SymMap::new();
+        b.insert(2, 20); b.insert(1, 10); // different insertion order
+        assert_eq!(hash_of(&a), hash_of(&b));
+    }
+
+    #[test]
+    fn index_forward() {
+        let mut sm = SymMap::new();
+        sm.insert(1i32, 10i32);
+        sm.insert(2, 20);
+        // Index uses the forward direction (key → value).
+        assert_eq!(sm[&1], 10);
+        assert_eq!(sm[&2], 20);
+    }
+
+    #[test]
+    #[should_panic(expected = "key not found")]
+    fn index_panics_on_missing() {
+        let sm: SymMap<i32> = SymMap::new();
+        let _ = sm[&99];
     }
 }

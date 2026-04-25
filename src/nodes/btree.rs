@@ -1406,7 +1406,7 @@ where
 
 mod slice_ext {
     #[inline]
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code)] // Uses ptr::read to avoid branching in the binary search hot path; same technique as std's implementation.
     pub(super) fn binary_search_by<T, F>(slice: &[T], mut f: F) -> Result<usize, usize>
     where
         F: FnMut(&T) -> core::cmp::Ordering,

@@ -755,4 +755,82 @@ mod test {
 
         assert_ne!(a, b);
     }
+
+    #[test]
+    fn debug_format() {
+        let mut b = Bag::new();
+        b.insert(1i32);
+        let s = format!("{:?}", b);
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn default_is_empty() {
+        let b: Bag<i32> = Bag::default();
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn hash_order_independent() {
+        use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        fn hash_of(b: &Bag<i32>) -> u64 {
+            let mut h = DefaultHasher::new();
+            b.hash(&mut h);
+            h.finish()
+        }
+        let mut a = Bag::new();
+        a.insert(1); a.insert(2);
+        let mut b = Bag::new();
+        b.insert(2); b.insert(1); // different insertion order
+        assert_eq!(hash_of(&a), hash_of(&b));
+    }
+
+    #[test]
+    fn add_union_owned() {
+        let mut a = Bag::new();
+        a.insert(1i32); a.insert(2);
+        let mut b = Bag::new();
+        b.insert(2i32); b.insert(3);
+        let c = a + b;
+        assert_eq!(c.count(&1), 1);
+        assert_eq!(c.count(&2), 2); // appears in both
+        assert_eq!(c.count(&3), 1);
+    }
+
+    #[test]
+    fn add_union_ref() {
+        let mut a = Bag::new();
+        a.insert(1i32);
+        let mut b = Bag::new();
+        b.insert(2i32);
+        let c = &a + &b;
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn extend_adds_elements() {
+        let mut b: Bag<i32> = Bag::new();
+        b.extend(vec![1, 1, 2]);
+        assert_eq!(b.count(&1), 2);
+        assert_eq!(b.count(&2), 1);
+    }
+
+    #[test]
+    fn from_vec() {
+        let b: Bag<i32> = vec![1, 1, 2].into();
+        assert_eq!(b.count(&1), 2);
+    }
+
+    #[test]
+    fn from_array() {
+        let b: Bag<i32> = [1i32, 2, 2].into();
+        assert_eq!(b.count(&2), 2);
+    }
+
+    #[test]
+    fn from_slice() {
+        let b: Bag<i32> = [1i32, 2][..].into();
+        assert_eq!(b.len(), 2);
+    }
 }

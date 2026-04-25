@@ -469,7 +469,7 @@ where
 
     /// Check invariants
     #[cfg(any(test, fuzzing))]
-    #[allow(unreachable_pub)]
+    #[allow(unreachable_pub)] // `pub` so fuzz targets can call it; only compiled under test/fuzzing, hence unreachable in normal builds.
     pub fn check_sane(&self)
     where
         A: core::fmt::Debug,

@@ -2086,4 +2086,20 @@ mod test {
         assert!(hs.contains(&2));
         assert!(hs.contains(&3));
     }
+
+    #[test]
+    fn hash_order_independent() {
+        use core::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        fn hash_of(s: &HashSet<i32>) -> u64 {
+            let mut h = DefaultHasher::new();
+            s.hash(&mut h);
+            h.finish()
+        }
+        let mut a = HashSet::new();
+        a.insert(1); a.insert(2); a.insert(3);
+        let mut b = HashSet::new();
+        b.insert(3); b.insert(1); b.insert(2); // different insertion order
+        assert_eq!(hash_of(&a), hash_of(&b));
+    }
 }
