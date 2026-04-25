@@ -2255,6 +2255,58 @@ target).
 
 Open items not yet completed or killed. All prerequisites met.
 
+### 6.11 Cross-session interning: verbatim-hash pool reconstruction
+
+**Context:** `to_maps()` rebuilds maps via `FromIterator`, which re-hashes each
+key with a fresh `RandomState`. This means loaded maps have a different hasher
+seed from the original session. Consequently, their HAMT Merkle hashes differ
+from the original, and `InternPool` cannot merge loaded nodes with in-memory
+ones — they appear content-different even when semantically equal.
+
+**What:** Add `to_maps_verbatim()` (and set/bag/bimap/symmap variants) that
+reconstruct maps by inserting (key, value, pre-computed-hash) triples directly
+into the HAMT, bypassing re-hashing. The stored H values in `PoolEntry::Value(A, H)`
+are verbatim from the original session. After verbatim reconstruction, the loaded
+map has the same H values, same HAMT structure, and same Merkle hashes as the
+original — so a subsequent `intern(pool)` call can merge it with the live
+in-memory original, restoring full pointer sharing.
+
+**Why this matters:** Without this, every serialise+load cycle breaks the sharing
+boundary. With it, a global `InternPool` becomes a true singleton that rationalises
+all content-equal nodes as they are loaded — regardless of session boundaries.
+
+**Precondition:** The pool must have been serialised from a map using the same
+hasher configuration that will be active when loading. Violating this produces a
+structurally valid but semantically incorrect map (wrong slot assignments). This
+should be documented as a user invariant and, where possible, enforced by storing
+a hasher fingerprint in the pool format.
+
+**API sketch:**
+```rust
+impl<K: Clone, V: Clone, H: HashWidth> HashMapPool<K, V, H> {
+    /// Reconstruct maps using stored hash values verbatim (no re-hashing).
+    /// Callers must ensure the hasher configuration matches the serialising session.
+    pub fn to_maps_verbatim<P: SharedPointerKind>(
+        &self,
+        hasher: &impl BuildHasher,
+    ) -> Vec<GenericHashMap<K, V, ..., P, H>>
+}
+```
+
+**Complexity:** Medium-high. Requires a new HAMT insertion path that accepts a
+pre-computed hash and bypasses `BuildHasher`. The `insert_with_hash` internal API
+exists in some form already (used by `from_iter`). Fuzz coverage essential —
+incorrect hash values corrupt the HAMT invariants silently.
+
+**Go/no-go question:** Is deterministic hashing (option 1: fixed seed) a simpler
+path to the same goal? If the caller is willing to use a non-random hasher,
+`to_maps()` already works — no new API needed. Verbatim reconstruction is the
+right path only when hash-randomisation is non-negotiable.
+
+**Prerequisites:** 6.6 ✓ (SSP serialisation), 6.5 ✓ (InternPool).
+
+---
+
 ### 3.4: Parallel bulk operations — DONE
 
 **What:** Parallel `union`, `intersection`, `difference`,
