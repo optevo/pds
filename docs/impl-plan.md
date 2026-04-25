@@ -5,10 +5,10 @@ Rust). Forked from [imbl](https://github.com/jneem/imbl) with different
 design priorities: performance over compatibility, Merkle hashing, SIMD
 HAMT nodes, and no_std support.
 
-**Current state (Apr 2026):** v1.0.0, ~12K lines of Rust, 9 collection
+**Current state (Apr 2026):** v1.0.0, ~12K lines of Rust, 11 collection
 types (Vector, HashMap, HashSet, OrdMap, OrdSet, Bag, HashMultiMap,
-InsertionOrderMap, Trie). SIMD HAMT, Merkle hashing, and no_std support
-implemented.
+InsertionOrderMap, BiMap, SymMap, Trie). SIMD HAMT, Merkle hashing,
+and no_std support implemented.
 
 ---
 
@@ -62,6 +62,26 @@ single v2.0.0 release in Phase 5.
 ## Done {#done}
 
 *Newest first.*
+
+- **[2026-04-25] BiMap and SymMap collection types.** Added two new
+  bidirectional map types: `BiMap<K, V>` (heterogeneous bijection with
+  get_by_key/get_by_value, bijection invariant enforcement on insert) and
+  `SymMap<A>` (symmetric bijection within a single type with `Direction`
+  enum for parameterised lookups and O(1) `swap()`). Both backed by
+  pairs of GenericHashMaps. Full standard trait coverage, serde support.
+  Collection count: 9 → 11.
+
+- **[2026-04-25] PBag → Bag rename.** Renamed `PBag` to `Bag` across
+  all source, documentation, and serialisation. The `P` prefix was a
+  stale convention from the imbl fork; all other types already use plain
+  names.
+
+- **[2026-04-25] Standard trait coverage fill.** Audited all 11
+  collection types against the standard trait table in directives.md.
+  Filled gaps: ConsumingIter (owned IntoIterator) for Bag, HashMultiMap,
+  InsertionOrderMap; Hash for all types using order-independent XOR
+  combiner; From conversions (Vec, slice, array) for all types; Add/Sum
+  where applicable. All serde impls consolidated in ser.rs.
 
 - **[2026-04-25] README comparison table.** Added side-by-side feature matrix
   comparing pds with rpds, im, and imbl — collections, backing structures,
@@ -446,35 +466,35 @@ single v2.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Phases 0–5 complete. Phase 6 research complete (DEC-014). Three research
-items killed (6.3, 6.7, and 6.2 by inheritance), one deprioritised (6.1).
+Phases 0–5 complete. Phase 6 research complete (DEC-014). Five research
+items killed (6.2, 6.3, 6.4, 6.7, 6.8), one deprioritised (6.1).
+BiMap and SymMap added (11 collection types). PBag → Bag rename done.
 
 **Prioritised next items (Apr 2026):**
 
-1. ~~6.8 Arena batch construction~~ — **KILLED** (DEC-019). PoC failed:
-   partitioning + clone overhead negated tree-traversal savings. Gap is
-   inherent to HAMT structure.
-2. [x] 4.7 Stage 1 — **DONE.** HashBits widened to u64. Performance
-   neutral at tested sizes.
-3. [x] 4.7 Stage 2 — **DONE.** HashWidth trait threaded through all
-   hash-based types. Default u64, u128 available for wide tries.
-   H parameter added to GenericHashMap, GenericHashSet,
-   GenericHashMultiMap, GenericInsertionOrderMap, serde impls, and
-   all HAMT node types. Rayon uses u64 default (u128 rayon deferred).
-4. [x] 6.9 Persistent trie — **DONE.** Derived structure wrapping HashMap.
-5. [x] 4.6 Vector Merkle hash caching — **DONE** (DEC-022). Lazy per-node
-   Merkle with O(k log n) recomputation. Positive equality in PartialEq.
-6. ~~Probabilistic equality (`probably_eq()`)~~ — **KILLED.** Already
-   implemented in `PartialEq::eq()` for all three types (HashMap, HashSet,
-   Vector). Merkle positive equality with 2^-64 false positive rate is
-   below hardware error rates — meets the `eq()` contract directly.
-5. [x] Test coverage gaps — **DONE.** ord/set.rs 58%→96%, ord/map.rs
-   72%→95%, hash/set.rs 72%→92%. Crate total 90.1% lines. Demotion
-   edge cases covered via LolHasher tests in hash/map.rs.
-6. [x] Proptest stability — **DONE.** Demotion edge case regression tests
-   added. Value-only demotion guard verified.
-7. [ ] Memory profiling benchmarks — `dhat` integration (from 0.3 scope,
-   never implemented). Needed for arena work and future memory claims.
+1. [ ] **6.5 Hash consing / interning** — opt-in `hash-intern` feature
+   with explicit `InternPool<A, P, H>`. HAMT nodes only. Bottom-up
+   post-hoc interning (Appel's insight). Strong-reference pool with
+   `purge()` eviction (strong_count == 1). Prerequisites met (4.4 ✓).
+2. [ ] **dhat memory profiling** — `dhat` dev-dependency, benchmark
+   binary measuring allocations per operation for all collection types.
+3. [ ] **6.6 SSP serialisation** — structural-sharing-preserving
+   serialisation via rkyv. Depends on 6.5 (InternPool as dedup table).
+   Design/investigation phase first.
+
+**Completed items (moved from previous Current):**
+
+- [x] 4.7 Stage 1+2 — HashBits u64, HashWidth trait threaded through.
+- [x] 6.9 Persistent trie — Derived structure wrapping HashMap.
+- [x] 4.6 Vector Merkle hash — Lazy per-node, O(k log n) recomputation.
+- [x] Test coverage gaps — Crate total 90.1% lines.
+- [x] Proptest stability — Demotion edge case regression tests.
+- [x] BiMap + SymMap — Two bidirectional map types (collection count 9→11).
+- [x] PBag → Bag — Rename across all source and docs.
+- [x] Standard trait coverage — Full audit and gap fill for all 11 types.
+- ~~6.4 Dupe trait~~ — **KILLED.** Meta-internal, `light_clone` exists.
+- ~~6.8 Arena batch construction~~ — **KILLED** (DEC-019).
+- ~~Probabilistic equality~~ — **KILLED.** Already in `PartialEq::eq()`.
 
 ---
 
@@ -1877,7 +1897,7 @@ eliminating this by wrapping the hasher in `SharedPointer`.
 
 ---
 
-### 5.3 Configurable branching factor (issue [#145](https://github.com/jneem/imbl/issues/145)) — DEFERRED
+### 5.3 Configurable branching factor (issue [#145](https://github.com/jneem/imbl/issues/145)) — DEFERRED (nightly-gate path identified)
 
 **Status:** Deferred. See DEC-011.
 
@@ -1889,6 +1909,15 @@ argument, which is not supported. Vector and OrdMap const generics are
 feasible but the scope (~140 type reference sites, ~80 impl blocks) is
 disproportionate to the marginal benefit over the existing `small-chunks`
 feature flag.
+
+**Nightly-gate approach (Apr 2026):** Add an opt-in `nightly-branching`
+feature flag that enables `#![feature(generic_const_exprs)]`. The branching
+factor constants in `config.rs` (`HASH_LEVEL_SIZE`, `VECTOR_CHUNK_SIZE`,
+`ORD_CHUNK_SIZE`) become const generic parameters on the collection types.
+This is a large refactor (~140 type sites, ~80 impl blocks) so it remains
+deferred — but the nightly-gated approach is the path forward when
+`generic_const_exprs` stabilises or when nightly-only usage is acceptable
+for specific consumers.
 
 **References:** imbl issue #145; PR #155; immer `BL` template parameter.
 
@@ -1960,7 +1989,7 @@ CollisionNode) are 8 bytes. No memory to save.
 
 ---
 
-### 6.4 `dupe::Dupe` trait support (issue [#113](https://github.com/jneem/imbl/issues/113)) — LOW PRIORITY
+### 6.4 `dupe::Dupe` trait support (issue [#113](https://github.com/jneem/imbl/issues/113)) — KILLED
 
 **What:** Implement Meta's `Dupe` trait. Mechanical — delegates to `clone()`.
 
@@ -1968,9 +1997,14 @@ CollisionNode) are 8 bytes. No memory to save.
 `light_clone` crate (Feb 2026) already provides `LightClone` for imbl
 types externally. If proceeding: optional feature flag, 5 impl blocks.
 
+**Kill reason:** Meta-internal ecosystem with negligible external adoption.
+`light_clone` crate already provides the functionality externally without
+requiring a feature flag in pds. Not worth maintaining even 5 lines of
+delegation for a trait ecosystem that has no traction outside Meta.
+
 **Complexity:** Trivial.
 
-**Affects:** All five collection types.
+**Affects:** All collection types.
 
 ---
 
@@ -2024,7 +2058,10 @@ repeated traversals.
 
 **Complexity:** Moderate.
 
-**Affects:** All five collection types (internal node allocation).
+**Affects:** HAMT-backed types (HashMap, HashSet, HashMultiMap,
+InsertionOrderMap, BiMap, SymMap, Trie). Not applicable to B+ tree
+(OrdMap, OrdSet) or RRB tree (Vector) — they lack eagerly maintained
+Merkle hashes suitable for interning.
 
 **Prerequisites:** 4.4 ✓ (Merkle hash caching — done). Benefits from
 4.6 (Vector Merkle hash — extends interning to RRB tree nodes).
@@ -2053,9 +2090,10 @@ separate serialisation sessions.
 
 **Complexity:** High.
 
-**Affects:** All five collection types.
+**Affects:** All collection types with internal tree nodes.
 
-**Prerequisites:** 0.5, 4.4 ✓ (Merkle hashing done).
+**Prerequisites:** 0.5, 4.4 ✓ (Merkle hashing done). Benefits from
+6.5 (hash consing) — InternPool becomes the deduplication table.
 
 **References:** rkyv `Sharing`/`Pooling` traits; immer `persist.hpp`;
 Apache Fory; IPLD/DAG-CBOR.
@@ -2098,7 +2136,7 @@ Arc::new). See DEC-019 for full analysis and profiling data.
 
 ---
 
-### 6.9 Persistent trie — TO BE EXPLORED
+### 6.9 Persistent trie — DONE
 
 **What:** A purpose-built persistent trie (prefix tree) data structure
 with structural sharing at every prefix node. Keys are sequences of
@@ -2237,12 +2275,12 @@ Phase 6 (research)                 │                                      │
   6.1 ART for OrdMap ◄── 0.2, 0.3  ✗ DEPRIORITISED (DEC-014)             │
   6.2 HHAMT inline ◄── 4.3  ✗ KILLED (via 6.7 — DEC-015)                  │
   6.3 ThinArc ◄── 5.1 ✓  ✗ KILLED (DEC-018: pointers already 8 bytes)      │
-  6.4 Dupe trait ◄── (none)  LOW PRIORITY                                  │
+  6.4 Dupe trait ◄── (none)  ✗ KILLED (Meta-internal, light_clone exists)     │
   6.5 hash consing/interning ◄── 4.4 ✓                                    │
-  6.6 sharing-preserving serialisation ◄── 0.5                             │
+  6.6 sharing-preserving serialisation ◄── 0.5, 6.5 (InternPool as dedup)  │
   6.7 hybrid SIMD-CHAMP ◄── 0.3, 0.5  ✗ KILLED (DEC-015: PoC failed)     │
   6.8 arena batch construction ◄── (none)  ✗ KILLED (DEC-019: PoC failed)  │
-  6.9 persistent trie ◄── 0.3 ✓ (TO BE EXPLORED)                          │
+  6.9 persistent trie ◄── 0.3 ✓  ✓ DONE (derived HashMap wrapper)                          │
 ```
 
 ### Parallel tracks
@@ -2270,14 +2308,13 @@ parallel:
    consing/interning). 4.4 complete — 6.5 can now proceed. 4.6 (Vector
    Merkle hash) extends the pattern to RRB trees.
 8. **Serialisation track:** 6.6 (sharing-preserving serialisation).
-   Independent but benefits from 4.4 (Merkle hashes enable
-   content-addressed node pools).
+   Benefits from 4.4 ✓ (Merkle hashes) and 6.5 (InternPool as dedup
+   table). 6.5 should land first.
 
-9. **Trie track:** 6.9 (persistent trie — research and PoC). Independent
-   of all other tracks.
+9. **Trie track:** 6.9 ✓ (persistent trie — done, derived HashMap wrapper).
 
-Items 2.2, 2.3, 2.10, 2.11, 1.x, and 6.4 are independent and can be
-done at any time after their prerequisites.
+Items 2.2, 2.3, 2.10, 2.11, and 1.x are independent and can be done
+at any time after their prerequisites. 6.4 killed.
 
 ---
 
