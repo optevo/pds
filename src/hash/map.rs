@@ -20,6 +20,25 @@
 //! [std::cmp::Eq]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
 //! [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html
 //! [std::collections::hash_map::RandomState]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
+//!
+//! # Example
+//!
+//! ```
+//! # #[cfg(feature = "std")] {
+//! use pds::HashMap;
+//!
+//! let mut map = HashMap::new();
+//! map.insert("a", 1);
+//! map.insert("b", 2);
+//!
+//! assert_eq!(map.get("a"), Some(&1));
+//! assert_eq!(map.len(), 2);
+//!
+//! // Clone is O(1) — the two maps share structure until one is modified.
+//! let map2 = map.clone();
+//! assert_eq!(map, map2);
+//! # }
+//! ```
 
 use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;

@@ -14,6 +14,24 @@
 //! [`GenericHashSet`] has no guaranteed ordering.
 //!
 //! [1]: https://en.wikipedia.org/wiki/B%2B_tree
+//!
+//! # Example
+//!
+//! ```
+//! use pds::OrdSet;
+//!
+//! let mut set = OrdSet::new();
+//! set.insert(3i32);
+//! set.insert(1);
+//! set.insert(2);
+//! set.insert(1); // duplicate — no effect
+//!
+//! assert_eq!(set.len(), 3);
+//!
+//! // OrdSet iterates in ascending order.
+//! let values: Vec<i32> = set.iter().copied().collect();
+//! assert_eq!(values, vec![1, 2, 3]);
+//! ```
 
 use alloc::borrow::ToOwned;
 use alloc::collections::BTreeSet;

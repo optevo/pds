@@ -59,7 +59,7 @@ pub struct GenericInsertionOrderSet<
     P: SharedPointerKind = DefaultSharedPtr,
     H: HashWidth = u64,
 > {
-    map: GenericInsertionOrderMap<A, (), S, P, H>,
+    pub(crate) map: GenericInsertionOrderMap<A, (), S, P, H>,
 }
 
 // --- Manual Clone ---

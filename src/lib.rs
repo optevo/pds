@@ -342,7 +342,7 @@
 //! | [`triomphe`](https://crates.io/crates/triomphe/) | Yes | Use [`triomphe::Arc`](https://docs.rs/triomphe/latest/triomphe/struct.Arc.html) as the default shared pointer — faster than `std::sync::Arc` (no weak reference count). |
 //! | [`proptest`](https://crates.io/crates/proptest) | No | Strategies for all `pds` datatypes under a `proptest` namespace, e.g. `pds::vector::proptest::vector()` |
 //! | [`quickcheck`](https://crates.io/crates/quickcheck) | No | [`quickcheck::Arbitrary`](https://docs.rs/quickcheck/latest/quickcheck/trait.Arbitrary.html) implementations for all `pds` datatypes |
-//! | [`rayon`](https://crates.io/crates/rayon) | No | Parallel iterator implementations for all collection types |
+//! | [`rayon`](https://crates.io/crates/rayon) | No | Parallel iterators for all collection types. `InsertionOrderMap` and `InsertionOrderSet` support read-only `par_iter` only — `FromParallelIterator` and `ParallelExtend` are omitted because parallel collection would lose insertion order. `Trie` is excluded. `Bag` additionally provides `par_elements()` to iterate each element once per occurrence. |
 //! | [`serde`](https://crates.io/crates/serde) | No | [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html) and [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html) implementations for all `pds` datatypes |
 //! | [`arbitrary`](https://crates.io/crates/arbitrary/) | No | [`arbitrary::Arbitrary`](https://docs.rs/arbitrary/latest/arbitrary/trait.Arbitrary.html) implementations for all `pds` datatypes |
 //! | [`foldhash`](https://crates.io/crates/foldhash/) | No | Enables `HashMap`, `HashSet`, etc. type aliases in `no_std` environments using `foldhash::fast::RandomState` as the default hasher. |
@@ -427,6 +427,9 @@ pub mod insertion_order_map;
 pub mod insertion_order_set;
 pub mod symmap;
 pub mod trie;
+
+#[cfg(any(test, feature = "rayon"))]
+mod rayon;
 
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::bag::Bag;

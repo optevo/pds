@@ -711,6 +711,8 @@ After each incremental success — a work item completed, `test.sh` green,
 a meaningful chunk of functionality working — commit and push immediately.
 Do not batch unrelated successes into a single commit.
 
+- **Use `gsync`** — the system-wide commit-and-push alias. Do not invoke
+  raw `git commit` + `git push` separately; `gsync` is the mandated tool.
 - **Commit message:** Describe *what changed and why*, not "wip" or "updates".
   Reference the `docs/impl-plan.md` item if applicable (e.g. "0.3: add
   hashset benchmarks").

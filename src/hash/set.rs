@@ -20,6 +20,26 @@
 //! [std::cmp::Eq]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
 //! [std::hash::Hash]: https://doc.rust-lang.org/std/hash/trait.Hash.html
 //! [std::collections::hash_map::RandomState]: https://doc.rust-lang.org/std/collections/hash_map/struct.RandomState.html
+//!
+//! # Example
+//!
+//! ```
+//! # #[cfg(feature = "std")] {
+//! use pds::HashSet;
+//!
+//! let mut set = HashSet::new();
+//! set.insert(1i32);
+//! set.insert(2);
+//! set.insert(1); // duplicate — no effect
+//!
+//! assert_eq!(set.len(), 2);
+//! assert!(set.contains(&1));
+//!
+//! // Clone is O(1).
+//! let set2 = set.clone();
+//! assert_eq!(set, set2);
+//! # }
+//! ```
 
 use alloc::borrow::ToOwned;
 use alloc::collections::BTreeSet;

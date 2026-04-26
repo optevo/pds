@@ -54,7 +54,7 @@ pub type HashMultiMap<K, V> =
 /// Each key maps to a set of values. Clone is O(1) via structural sharing.
 pub struct GenericHashMultiMap<K, V, S, P: SharedPointerKind = DefaultSharedPtr, H: HashWidth = u64>
 {
-    map: GenericHashMap<K, GenericHashSet<V, S, P, H>, S, P, H>,
+    pub(crate) map: GenericHashMap<K, GenericHashSet<V, S, P, H>, S, P, H>,
     total: usize,
 }
 

@@ -42,6 +42,24 @@
 //! [chunkedseq]: http://deepsea.inria.fr/pasl/chunkedseq.pdf
 //! [Vec]: https://doc.rust-lang.org/std/vec/struct.Vec.html
 //! [VecDeque]: https://doc.rust-lang.org/std/collections/struct.VecDeque.html
+//!
+//! # Example
+//!
+//! ```
+//! use pds::Vector;
+//!
+//! let mut v = Vector::new();
+//! v.push_back(1i32);
+//! v.push_back(2);
+//! v.push_back(3);
+//!
+//! assert_eq!(v[0], 1);
+//! assert_eq!(v.len(), 3);
+//!
+//! // Clone is O(1) — both vectors share structure until modified.
+//! let v2 = v.clone();
+//! assert_eq!(v, v2);
+//! ```
 
 #![allow(unsafe_code)] // Vector's focus/spine manipulations require raw pointer arithmetic and unsafe slice ops that cannot be expressed in safe Rust.
 

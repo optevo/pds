@@ -2333,7 +2333,7 @@ the `Add`/`Mul`/`Sum` prohibition.
 
 ---
 
-### R.2 Rayon parallel iterators for newer collection types (MEDIUM)
+### R.2 Rayon parallel iterators for newer collection types (MEDIUM) — DONE [2026-04-26]
 
 **What:** Add rayon support (`IntoParallelIterator`, `IntoParallelRefIterator`,
 `FromParallelIterator`, `ParallelExtend`) to types added after the original 3.4 parallel work.
@@ -2392,7 +2392,7 @@ pattern. This was identified in the consistency audit.
 
 ---
 
-### R.4 Add code examples to legacy module docs (LOW)
+### R.4 Add code examples to legacy module docs (LOW) — DONE [2026-04-26]
 
 **What:** Five legacy module-level `//!` doc blocks lack usage examples. Add at least one
 `# Example` block to each:

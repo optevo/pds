@@ -65,7 +65,7 @@ pub struct GenericInsertionOrderMap<
     /// Key → insertion index.
     index: GenericHashMap<K, usize, S, P, H>,
     /// Insertion index → (key, value), ordered by index.
-    entries: GenericOrdMap<usize, (K, V), P>,
+    pub(crate) entries: GenericOrdMap<usize, (K, V), P>,
     /// Next index to assign (monotonically increasing).
     next_idx: usize,
 }

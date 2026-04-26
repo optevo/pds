@@ -16,6 +16,23 @@
 //! [1]: https://en.wikipedia.org/wiki/B%2B_tree
 //! [hashmap::HashMap]: ../hashmap/type.HashMap.html
 //! [std::cmp::Ord]: https://doc.rust-lang.org/std/cmp/trait.Ord.html
+//!
+//! # Example
+//!
+//! ```
+//! use pds::OrdMap;
+//!
+//! let mut map = OrdMap::new();
+//! map.insert("b", 2);
+//! map.insert("a", 1);
+//! map.insert("c", 3);
+//!
+//! assert_eq!(map.get("b"), Some(&2));
+//!
+//! // OrdMap iterates in ascending key order.
+//! let keys: Vec<&&str> = map.keys().collect();
+//! assert_eq!(keys, vec![&"a", &"b", &"c"]);
+//! ```
 
 use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
