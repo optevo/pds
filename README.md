@@ -56,68 +56,179 @@ share unchanged subtrees with the original.
 
 ## Choosing the right map
 
-`HashMap` and `OrdMap` have the same asymptotic complexity for individual operations
-(O(log n) insert and lookup) but differ substantially in memory layout, iteration
-semantics, and bulk-operation performance. The right choice is usually obvious from
-the constraints, but the non-obvious parts are noted below.
+The `Hash`-backed and `Ord`-backed variants of every collection type share the same
+persistent semantics, the same structural-sharing clone model, and the same API shape.
+The choice between them is driven first by key constraints, then by which operations
+dominate your workload.
 
-### OrdMap / OrdSet — B+ tree
+This section covers the primary `HashMap` / `OrdMap` pair. The same reasoning applies
+to every derived type: `Bag` / `OrdBag`, `HashMultiMap` / `OrdMultiMap`,
+`BiMap` / `OrdBiMap`, `SymMap` / `OrdSymMap`, `Trie` / `OrdTrie`,
+`InsertionOrderMap` / `OrdInsertionOrderMap`, and
+`InsertionOrderSet` / `OrdInsertionOrderSet`.
 
-**When to choose:**
+---
 
-- You need **sorted iteration order** or **range queries** (`get_range`, `iter_from`).
-  This is the primary reason to prefer OrdMap. If you do not need ordering, prefer
-  HashMap.
-- You need **parallel bulk set operations** (`par_union`, `par_intersection`,
-  `par_difference`, `par_symmetric_difference`). The B+ tree's structural split is
-  O(log n); `concat_ordered` rebuilds the spine in O(log n). Combined, these give
-  the join algorithm of Blelloch et al. (TOPC 2022): O(m log(n/m + 2)) work and
-  O(log² n) span. This is the most efficient parallel join available for any Rust
-  persistent map. HashMap's parallel set ops are also fast, but do not exploit the
-  structural split the same way.
-- Keys implement `Ord` but not `Hash`, or the hash function is significantly more
-  expensive than comparison.
+### Functional differences
 
-**Memory layout and allocation count:**
+These are hard constraints, not preferences:
 
-B+ tree leaves pack up to **16 key-value pairs per allocation** (`NODE_SIZE = 16`,
-`THIRD = 5` minimum). For n entries the tree needs roughly n/16 leaf allocations,
-regardless of key distribution. Sequential iteration and range scans are
-cache-friendly: a single cache line covers several adjacent entries in a leaf.
+| | `HashMap` / Hash variants | `OrdMap` / Ord variants |
+|--|--------------------------|------------------------|
+| Key constraint | `Clone + Hash + Eq` | `Clone + Ord` |
+| Iteration order | arbitrary (HAMT layout) | sorted by key |
+| Range queries | — | `get_range`, `iter_from`, `split_at_key` |
+| `get_min` / `get_max` | — | O(log n) |
+| `without_min` / `without_max` | — | O(log n), structural sharing |
+| `split_at_key` | — | O(log n) |
+| Parallel join algorithm | filter+reduce (O(n)) | Blelloch join (O(m log(n/m))) |
+| Used as a `HashMap` key | yes (`Hash` via `ord-hash`) | yes (`Hash` via `ord-hash`) |
+| `no_std` without `foldhash` | — | yes |
 
-HAMT nodes allocate per trie level rather than per entry batch. The exact count
-depends on hash distribution and trie depth — see [Allocation profiling] below.
+If you need sorted iteration, range queries, or access to the minimum/maximum key,
+`OrdMap` is the only option. If your keys lack `Ord`, `HashMap` is the only option.
+When both constraints are satisfied the choice is a performance question.
 
-### HashMap / HashSet — SIMD HAMT
+---
 
-**When to choose:**
+### Measured performance — `i64` keys, M5 Max, Rust 1.95
 
-- Keys implement `Hash + Eq` but **not `Ord`**. This is the clearest reason.
-- You make heavy use of **structural sharing from the same origin.** `ptr_eq` fast-paths
-  in `par_union` and `par_intersection` detect when both operands share the same root
-  pointer and short-circuit to O(1). Maps that are frequently cloned and then re-unioned
-  with minimal changes benefit from this.
-- You need **O(1) equality on frequently cloned maps.** Both `HashMap` and `OrdMap`
-  have content-hash equality fast-paths, but the HAMT's per-node Merkle hashes update
-  incrementally on each mutation so the root hash is always valid without a rescan.
-  `OrdMap`'s `ord-hash` (default-on) gives the same O(1) positive and negative
-  fast-paths but recomputes lazily after each mutation. For patterns where a map is
-  cloned many times, mutated once, and compared immediately, the HAMT avoids the
-  deferred rescan cost.
+All numbers from `cargo bench --bench compare --features rayon` (release profile).
+Full results in `docs/baselines.md`.
 
-The `ord-hash` feature (default-on) adds a cached content hash to `OrdMap`/`OrdSet`,
-giving them an O(1) `PartialEq` negative fast-path (different hash → definitely unequal)
-and a `Hash` impl (when `K: Hash, V: Hash`) so they can be used as `HashMap` keys. The
-meaningful reasons to prefer `HashMap` now narrow to: keys without `Ord`, and
-high-frequency same-origin clone patterns where the HAMT Merkle hash fires before any
-entry is compared. See DEC-036.
+#### Random point lookup
 
-**Small-map behaviour:**
+| Size    | HashMap  | OrdMap   | Faster |
+|--------:|---------:|---------:|--------|
+| 100     | 549 ns   | 630 ns   | HashMap ×1.15 |
+| 1,000   | 5.76 µs  | 10.6 µs  | HashMap ×1.84 |
+| 10,000  | 74.6 µs  | 157 µs   | HashMap ×2.11 |
+| 100,000 | 1.17 ms  | 2.27 ms  | HashMap ×1.94 |
 
-For ≤ 16 entries, HashMap uses a `SmallSimdNode` — a single flat allocation with SIMD
-lookup. For ≤ 32 entries it promotes to `LargeSimdNode`. At these sizes, HashMap's
-allocation count is comparable to OrdMap (one or two allocations for the entire map).
-The HAMT trie levels only accumulate for larger maps.
+HAMT gives O(1) amortised lookup (fixed trie depth). OrdMap is O(log n) with a
+small constant from B+ node binary search. HashMap is consistently ~2× faster for
+random point queries, and this is the **only operation where HashMap wins**.
+
+#### Write-heavy / build-from-scratch (`insert_mut`, `from_iter`)
+
+| Size    | HashMap insert | OrdMap insert | OrdMap faster |
+|--------:|---------------:|--------------:|:-------------:|
+| 100     | 2.20 µs        | 1.26 µs       | ×1.74 |
+| 1,000   | 30.4 µs        | 16.2 µs       | ×1.88 |
+| 10,000  | 236 µs         | 230 µs        | ≈ equal |
+| 100,000 | 3.97 ms        | 2.01 ms       | ×1.98 |
+
+OrdMap wins under sole-owner writes: copy-on-write detects the sole reference and
+mutates in-place without allocating. HashMap rewrites HAMT nodes on every insert
+regardless of ownership. The same pattern holds for `from_iter` (OrdMap ×1.4–2.0×
+faster) and `remove_mut` at small sizes (OrdMap ×1.7–2.2× faster at ≤1K).
+
+#### Iteration
+
+| Size    | HashMap iter | OrdMap iter | OrdMap faster |
+|--------:|-------------:|------------:|:-------------:|
+| 100     | 199 ns       | 145 ns      | ×1.37 |
+| 1,000   | 1.89 µs      | 1.35 µs     | ×1.40 |
+| 10,000  | 33.3 µs      | 14.3 µs     | ×2.33 |
+| 100,000 | 553 µs       | 155 µs      | ×3.57 |
+
+B+ tree leaves are contiguous arrays; iterating a leaf scans cache-linearly.
+HAMT traversal follows pointer chains through bitmapped nodes — poor spatial
+locality. The gap widens with size as the HAMT grows deeper.
+
+#### Parallel set operations
+
+| Operation | Size    | HashMap | OrdMap  | OrdMap faster |
+|-----------|--------:|--------:|--------:|:-------------:|
+| `par_union` | 10,000 | 1.08 ms | 267 µs | ×4.0 |
+| `par_union` | 100,000 | 13.0 ms | 840 µs | ×15.5 |
+| `par_intersection` | 10,000 | 929 µs | 437 µs | ×2.1 |
+| `par_intersection` | 100,000 | 9.55 ms | 1.49 ms | ×6.4 |
+
+OrdMap uses the O(m log(n/m)) parallel join algorithm (split → recurse → concat);
+HashMap uses filter+reduce, which has a sequential O(n) bottleneck. The gap grows
+with size and is the dominant reason to choose OrdMap for any set-merge workload.
+
+#### Allocation efficiency
+
+From `cargo bench --bench memory` (dhat, 100,000 `i64` entries):
+
+| | HashMap | OrdMap | OrdMap fewer |
+|--|:-------:|:------:|:------------:|
+| Allocations | 29,633 | 6,641 | ×4.5 |
+| Bytes | 13.9 MB | 3.6 MB | ×3.9 |
+
+OrdMap packs up to 16 key-value pairs per leaf allocation. HAMT nodes are
+per-trie-level and multiply with tree depth.
+
+---
+
+### Usage patterns
+
+**Use `HashMap` / Hash variants when:**
+- Keys are not `Ord` (e.g. unordered tuples, custom types without a natural order).
+- Your workload is dominated by **random point lookups** and writes are infrequent.
+  The ~2× lookup advantage compounds when lookups are the overwhelming majority of
+  operations.
+- You rely on `ptr_eq` structural-sharing fast-paths: `HashMap::par_union` short-circuits
+  to O(1) when both operands share the same root (common after `clone()` with no mutation).
+  This benefits patterns like "start from a common snapshot, make one change, union back".
+- You accumulate incremental Merkle hashes without rescan. HAMT root hashes update
+  atomically on each insert; `OrdMap` (`ord-hash`) recomputes lazily. If you clone a map,
+  mutate it once, and compare it immediately, HAMT avoids the deferred rescan.
+
+**Use `OrdMap` / Ord variants when:**
+- You need **sorted order** at any point — sorted output, priority processing, stable
+  serialisation, or deterministic comparison. Iteration is sorted by definition and
+  ×2–4× faster than HashMap at large sizes.
+- You need **range queries**: "all keys between X and Y", "everything from key K onwards".
+  This is only available on `OrdMap`.
+- You need **minimum / maximum access** without a full scan (`get_min`, `get_max`,
+  `without_min`, `without_max`). These are O(log n).
+- You perform **parallel set operations** (`par_union`, `par_intersection`, etc.). At
+  100K entries OrdMap's join algorithm is ~15× faster than HashMap's filter+reduce.
+- Your workload is **write-heavy or bulk-construction-heavy**. Sole-owner in-place
+  mutation gives OrdMap a consistent ×1.5–2× advantage over HashMap for inserts,
+  removes, and `from_iter`.
+- You are in a **`no_std` environment** without the `foldhash` feature. OrdMap requires
+  no hasher.
+- You want **lower memory pressure**. At 100K entries OrdMap uses 4.5× fewer allocations
+  and 3.9× less memory than HashMap.
+- Keys are expensive to hash. `Ord` comparison is often cheaper than hashing for
+  numeric or short-string keys, and OrdMap's B+ tree stops as soon as a comparison
+  resolves the branch.
+
+**Use either when:**
+- Immutable snapshots / structural sharing: both types share subtrees on clone and write
+  only the changed path.
+- Serde round-trips: both implement `Serialize`/`Deserialize` (behind `serde` feature).
+- Rayon parallel iteration: both support `par_iter()` and `FromParallelIterator`.
+- As a key in another map: both implement `Hash` (via `ord-hash` for `OrdMap`; built-in
+  for `HashMap`) and can be used as keys in `HashMap<OrdMap<_,_>, _>` etc.
+
+---
+
+### The same choice for derived types
+
+Every Hash-variant / Ord-variant pair follows the same pattern:
+
+| Hash variant | Ord variant | Primary addition in Ord variant |
+|---|---|---|
+| `Bag<A>` | `OrdBag<A>` | sorted element order, range count queries |
+| `HashMultiMap<K,V>` | `OrdMultiMap<K,V>` | sorted keys and values, range scans |
+| `BiMap<K,V>` | `OrdBiMap<K,V>` | sorted forward and reverse iteration |
+| `SymMap<A>` | `OrdSymMap<A>` | sorted pair iteration |
+| `Trie<K,V>` | `OrdTrie<K,V>` | lexicographic prefix iteration in sorted order |
+| `InsertionOrderMap<K,V>` | `OrdInsertionOrderMap<K,V>` | no `Hash` needed on keys |
+| `InsertionOrderSet<A>` | `OrdInsertionOrderSet<A>` | no `Hash` needed on elements |
+
+For each pair: the Hash variant requires `Hash + Eq`, the Ord variant requires only `Ord`.
+Performance characteristics mirror the `HashMap` / `OrdMap` comparison above: the Ord
+variant is faster for writes, iteration, and parallel ops; the Hash variant is faster for
+random point lookups on large collections. The `OrdInsertionOrder*` types have no Hash
+variant analogue for the iteration-order guarantee when keys lack `Hash`.
+
+---
 
 ### Allocation counts — measured with dhat
 
@@ -144,6 +255,10 @@ The gap opens with scale because HAMT promotes nodes through three tiers (SmallS
 LargeSimdNode → HamtNode) and each trie level adds allocations. OrdMap's B+ tree is
 bounded by the tree height: at 100,000 entries, roughly one allocation per 15 entries
 (100,000 / 16 ≈ 6,250 leaves; 6,641 includes internal branch nodes).
+
+**Small-map behaviour:** for ≤ 16 entries, `HashMap` uses a `SmallSimdNode` — a single
+flat allocation with SIMD lookup. For ≤ 32 entries it promotes to `LargeSimdNode`. At
+these sizes HashMap's allocation count is comparable to OrdMap.
 
 For your own workload, run `cargo bench --bench memory` or instrument with:
 
