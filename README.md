@@ -108,7 +108,7 @@ a different collection set and design philosophy.
 | `triomphe` | Yes | Use `triomphe::Arc` as the default shared pointer — no weak count, 8 bytes smaller per node, one fewer atomic op per clone/drop. |
 | `proptest` | No | Proptest strategies for all collection types |
 | `quickcheck` | No | `Arbitrary` implementations for all collection types |
-| `rayon` | No | Parallel iterators for all collection types |
+| `rayon` | No | Parallel iterators for all collection types. `InsertionOrderMap` and `InsertionOrderSet` support read-only `par_iter` only (`FromParallelIterator`/`ParallelExtend` omitted — parallel collection loses insertion order). `Trie` is excluded. `Bag` adds `par_elements()` for flat element expansion. |
 | `serde` | No | `Serialize` / `Deserialize` for all collection types |
 | `arbitrary` | No | `Arbitrary` implementations for fuzzing |
 | `foldhash` | No | Enables `HashMap`/`HashSet`/etc. type aliases in `no_std` via `foldhash::fast::RandomState` |

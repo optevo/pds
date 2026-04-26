@@ -1702,3 +1702,50 @@ Remove `Add`, `Mul`, and `Sum` from all collection types. Keep `Add` on `Vector`
   `.reduce(|a, b| a.union(b))` or `fold(Default::default(), |a, b| a.union(b))`.
 - All collections retain their named `union()`, `difference()`,
   `intersection()`, and (where applicable) `symmetric_difference()` methods.
+
+---
+
+## DEC-033: Rayon scope for newer collection types {#sec:dec-033}
+
+**Date:** 2026-04-26
+**Status:** Accepted (R.2)
+
+**Context:**
+R.2 added rayon support to Bag, HashMultiMap, BiMap, SymMap, InsertionOrderMap, and
+InsertionOrderSet. Several non-obvious design choices were required.
+
+**Decision:**
+
+1. **InsertionOrderMap / InsertionOrderSet — read-only `par_iter` only.**
+   `FromParallelIterator` and `ParallelExtend` are intentionally omitted: parallel
+   collection fans out across threads with no ordering guarantee, so the resulting
+   collection would have an arbitrary insertion order. The sequential `FromIterator`
+   and `Extend` impls must be used when insertion order matters.
+
+2. **Trie excluded from rayon entirely.**
+   The trie's branching factor and depth are key/path-dependent, making uniform
+   work distribution difficult. No rayon impl added; not advertised in feature docs.
+
+3. **BiMap / SymMap / HashMultiMap — `par_iter` delegates to the underlying
+   `GenericHashMap` forward map.** These types store their data in a
+   `GenericHashMap<K, V, S, P>` (default `H = u64`). The existing `hash/rayon.rs`
+   only covers the default `H = u64` case (see DEC-024 for why full H-threading
+   is deferred). Consequently, `par_iter`, `FromParallelIterator`, and
+   `ParallelExtend` for these types only work with the default H. All user-facing
+   type aliases (`BiMap`, `SymMap`, `HashMultiMap`) use this default, so no
+   practical limitation exists for downstream consumers.
+
+4. **Bag provides two parallel iterators.**
+   `par_iter()` → `(&A, usize)` pairs (matches sequential `iter()` signature).
+   `par_elements()` → flat expansion: each element is yielded once per occurrence
+   (equivalent to sequential `elements()`). Implemented via `repeat_n(a, count)`.
+
+**Alternatives considered:**
+- Full H-threading in `hash/rayon.rs` for BiMap/SymMap/HashMultiMap: rejected —
+  requires threading H through 12 internal HAMT iteration types (Entry, Node,
+  MapIterFrame, SetIterFrame variants). Significant refactoring for zero practical
+  benefit since all public APIs use the default H = u64.
+
+**Consequences:**
+- Users who construct `GenericBiMap<K, V, S, P, MyHashWidth>` with a non-default H
+  will not get `par_iter`. Acceptable given the target audience uses type aliases.
