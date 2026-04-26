@@ -121,6 +121,19 @@ where
     pub fn len(&self) -> usize {
         self.total
     }
+
+    /// Test whether two multimaps share the same underlying allocation.
+    ///
+    /// Returns `true` if `self` and `other` are the same version of
+    /// the multimap — i.e. one is a clone of the other with no
+    /// intervening mutations. This is a cheap pointer comparison, not
+    /// a structural equality check.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.map.ptr_eq(&other.map)
+    }
 }
 
 impl<K, V, S, P, H: HashWidth> GenericHashMultiMap<K, V, S, P, H>

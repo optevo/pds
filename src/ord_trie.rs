@@ -113,6 +113,20 @@ impl<K, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
     pub fn child_count(&self) -> usize {
         self.children.len()
     }
+
+    /// Test whether two tries share the same underlying allocation.
+    ///
+    /// Returns `true` if the root-level children map of `self` and
+    /// `other` are structurally shared (same pointer). This is always
+    /// true immediately after `clone()`, before any mutation. The root
+    /// value (if any) is not compared — `ptr_eq` is a pointer check,
+    /// not a structural equality check.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.children.ptr_eq(&other.children)
+    }
 }
 
 impl<K: Ord, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {

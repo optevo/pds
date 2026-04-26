@@ -117,6 +117,19 @@ where
     pub fn len(&self) -> usize {
         self.forward.len()
     }
+
+    /// Test whether two bimaps share the same underlying allocation.
+    ///
+    /// Returns `true` if `self` and `other` are the same version of
+    /// the bimap — i.e. one is a clone of the other with no intervening
+    /// mutations. This is a cheap pointer comparison, not a structural
+    /// equality check.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.forward.ptr_eq(&other.forward)
+    }
 }
 
 impl<K, V, S, P, H: HashWidth> GenericBiMap<K, V, S, P, H>

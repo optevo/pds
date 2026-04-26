@@ -1,7 +1,7 @@
 # Architecture {#sec:architecture}
 
 Internal architecture of pds's core data structure modules. This document
-covers the current implementation as of v7.0.0 (~7.5K lines across 6 core
+covers the current implementation as of v1.0.0 (~10K lines across 6 core
 files). It is a prerequisite for making safe structural changes — read this
 before modifying any module described here.
 
@@ -19,16 +19,23 @@ before modifying any module described here.
 
 ## Overview {#overview}
 
-pds provides five persistent collection types, each backed by a different
-tree structure:
+pds provides twenty persistent collection types. The five core types each
+have their own backing structure; the remaining fifteen are derived types
+built on top of the core five:
 
 | Type | Backing structure | Module | Lines |
 |------|-------------------|--------|-------|
-| `Vector<A>` | RRB tree | `vector/mod.rs`, `nodes/rrb.rs` | ~4K |
-| `HashMap<K, V>` | SIMD HAMT | `nodes/hamt.rs` | ~1.1K |
+| `Vector<A>` | RRB tree | `vector/mod.rs`, `nodes/rrb.rs` | ~6K |
+| `HashMap<K, V>` | SIMD HAMT | `nodes/hamt.rs` | ~1.3K |
 | `HashSet<A>` | SIMD HAMT (via HashMap) | `nodes/hamt.rs` | (shared) |
-| `OrdMap<K, V>` | B+ tree | `nodes/btree.rs` | ~1.3K |
+| `OrdMap<K, V>` | B+ tree | `nodes/btree.rs` | ~1.9K |
 | `OrdSet<A>` | B+ tree (via OrdMap) | `nodes/btree.rs` | (shared) |
+
+Derived types (`Bag`, `OrdBag`, `HashMultiMap`, `OrdMultiMap`, `BiMap`,
+`OrdBiMap`, `SymMap`, `OrdSymMap`, `Trie`, `OrdTrie`, `InsertionOrderMap`,
+`InsertionOrderSet`, `OrdInsertionOrderMap`, `OrdInsertionOrderSet`,
+`UniqueVector`) delegate to the core five internally. See `src/*.rs` for
+their implementations.
 
 All collections are generic over `SharedPointerKind` (see @sec:shared-pointer),
 enabling copy-on-write via `SharedPointer::make_mut`. The concrete pointer
@@ -38,7 +45,7 @@ type is selected by the `DefaultSharedPtr` alias in `shared_ptr.rs`.
 
 ## SharedPointer abstraction {#shared-pointer}
 
-**File:** `src/shared_ptr.rs` (24 lines — re-export shim)
+**File:** `src/shared_ptr.rs` (~32 lines — re-export shim)
 
 All internal node pointers use `archery::SharedPointer<T, P>` where `P`
 implements `SharedPointerKind`. This abstraction provides:
@@ -63,7 +70,7 @@ The `DefaultSharedPtr` type alias selects the concrete pointer:
 
 ## HAMT — Hash Array Mapped Trie {#hamt}
 
-**File:** `src/nodes/hamt.rs` (1084 lines)
+**File:** `src/nodes/hamt.rs` (~1330 lines)
 **Backs:** `HashMap<K, V>`, `HashSet<A>`
 
 ### Architecture — 3-tier SIMD hybrid
@@ -90,15 +97,15 @@ store `(value, hash)` pairs directly.
 
 ### Entry enum
 
-The `Entry` enum (line 617) has 5 variants:
+The `Entry` enum (line ~757) has 5 variants:
 
 ```rust
-enum Entry<A, P: SharedPointerKind> {
-    HamtNode(SharedPointer<HamtNode<A, P>, P>),
-    SmallSimdNode(SharedPointer<SmallSimdNode<A>, P>),
-    LargeSimdNode(SharedPointer<LargeSimdNode<A>, P>),
-    Value(A, HashBits),
-    Collision(SharedPointer<CollisionNode<A>, P>),
+enum Entry<A, P: SharedPointerKind, H: HashWidth = u64> {
+    HamtNode(SharedPointer<HamtNode<A, P, H>, P>),
+    SmallSimdNode(SharedPointer<SmallSimdNode<A, H>, P>),
+    LargeSimdNode(SharedPointer<LargeSimdNode<A, H>, P>),
+    Value(A, H),
+    Collision(SharedPointer<CollisionNode<A, H>, P>),
 }
 ```
 
@@ -111,30 +118,30 @@ value arrays with no children.
 
 Lookup uses `wide::u8x16` for parallel byte comparison:
 
-1. Compute `ctrl_hash` — the top 8 bits of the hash, clamped to `≥ 1`
-   (0 means empty slot). (`ctrl_hash`, line 191)
+1. Compute the control byte — the top 8 bits of the hash, clamped to `≥ 1`
+   (0 means empty slot). (`HashWidth::ctrl_byte()` in `hash_width.rs`)
 2. Determine which SIMD group to search (for `LargeSimdNode` with 2
-   groups, the group is selected by hash bits). (`ctrl_hash_and_group`,
-   line 181)
+   groups, the group is selected by hash bits). (`HashWidth::ctrl_group()`
+   in `hash_width.rs`)
 3. SIMD `cmp_eq` + `move_mask` produces a bitmap of matching slots.
-   (`group_find`, line 54)
+   (`group_find`, line ~69 in `nodes/hamt.rs`)
 4. Iterate matches, verify with full key equality.
 
 ### hash_may_eq optimisation
 
-`hash_may_eq` (line 660) skips the hash equality check for small,
+`hash_may_eq` (line ~894) skips the hash equality check for small,
 non-Drop keys (≤ 16 bytes). For these types, the key comparison itself
 is cheap enough that the extra hash comparison is wasted work:
 
 ```rust
-fn hash_may_eq<A: HashValue>(hash: HashBits, other_hash: HashBits) -> bool {
+fn hash_may_eq<A: HashValue, H: HashWidth>(hash: H, other_hash: H) -> bool {
     (!mem::needs_drop::<A::Key>() && mem::size_of::<A::Key>() <= 16) || hash == other_hash
 }
 ```
 
 ### node_with — zero-copy construction
 
-`node_with` (line 62) constructs a `SharedPointer<T>` without extra
+`node_with` (line ~78) constructs a `SharedPointer<T>` without extra
 copies. It allocates an uninitialised `UnsafeCell<MaybeUninit<T>>`,
 writes the default, then transmutes the pointer type. This avoids the
 memcpy that `SharedPointer::new(T::default())` would incur for large
@@ -153,7 +160,7 @@ Constants from `config.rs`:
 
 ## RRB tree — Relaxed Radix Balanced tree {#rrb}
 
-**Files:** `src/nodes/rrb.rs` (1117 lines), `src/vector/mod.rs` (2916 lines)
+**Files:** `src/nodes/rrb.rs` (~1327 lines), `src/vector/mod.rs` (~4737 lines)
 **Backs:** `Vector<A>`
 
 ### VectorInner — 3-tier representation
@@ -249,7 +256,7 @@ with L'orange's algorithm.
 
 ## B+ tree {#btree}
 
-**File:** `src/nodes/btree.rs` (1327 lines)
+**File:** `src/nodes/btree.rs` (~1936 lines)
 **Backs:** `OrdMap<K, V>`, `OrdSet<A>`
 
 ### Node types
@@ -261,7 +268,7 @@ enum Node<K, V, P: SharedPointerKind> {
 }
 ```
 
-**Branch** (line 108):
+**Branch** (line ~126):
 ```rust
 struct Branch<K, V, P: SharedPointerKind> {
     keys: Chunk<K, NODE_SIZE>,
@@ -275,7 +282,7 @@ enum Children<K, V, P: SharedPointerKind> {
 }
 ```
 
-**Leaf** (line 259):
+**Leaf** (line ~277):
 ```rust
 struct Leaf<K, V> {
     keys: Chunk<(K, V), NODE_SIZE>,
@@ -289,10 +296,10 @@ children are leaves or branches.
 
 ### Constants
 
-- `NODE_SIZE`: 16 (or 6 with `small-chunks`) — from `ORD_CHUNK_SIZE`
-- `MEDIAN`: `NODE_SIZE / 2` = 8 — minimum keys for non-root branches
-- `THIRD`: `NODE_SIZE / 3` = 5 — minimum keys for non-root leaves
-- `NUM_CHILDREN`: `NODE_SIZE + 1` = 17
+- `NODE_SIZE`: 32 (or 6 with `small-chunks`) — from `ORD_CHUNK_SIZE`
+- `MEDIAN`: `NODE_SIZE / 2` = 16 — minimum keys for non-root branches
+- `THIRD`: `NODE_SIZE / 3` = 10 — minimum keys for non-root leaves
+- `NUM_CHILDREN`: `NODE_SIZE + 1` = 33
 
 ### Invariants
 
@@ -308,7 +315,7 @@ Leaf (line 255):
 
 ### Cursor
 
-`Cursor<'a, K, V, P>` (line 1073) provides stack-based tree navigation:
+`Cursor<'a, K, V, P>` (line ~1140) provides stack-based tree navigation:
 
 ```rust
 struct Cursor<'a, K, V, P: SharedPointerKind> {
@@ -323,7 +330,7 @@ Used by `Iter`, `get_next`, `get_prev`, and range queries.
 
 ### Binary search
 
-A custom `binary_search_by` (line 1279) optimises for non-trivial
+A custom `binary_search_by` (line ~1883) optimises for non-trivial
 comparison functions. For small non-Drop types (≤ 16 bytes), it defers to
 the stdlib's branchless implementation. For larger types (e.g. string keys),
 it uses an early-return loop that minimises comparisons.
@@ -375,7 +382,7 @@ See `src/ord/rayon.rs` for the implementation.
 
 ## Focus and FocusMut {#focus}
 
-**File:** `src/vector/focus.rs` (1007 lines)
+**File:** `src/vector/focus.rs` (~1031 lines)
 **Used by:** `Vector<A>` iteration and indexed access
 
 Focus and FocusMut are zipper-like cursors that cache the last-accessed
@@ -423,7 +430,7 @@ pub enum FocusMut<'a, A, P: SharedPointerKind> {
 }
 ```
 
-`TreeFocusMut` (line 808):
+`TreeFocusMut` (line ~820):
 ```rust
 struct TreeFocusMut<'a, A, P: SharedPointerKind> {
     tree: Lock<&'a mut RRB<A, P>>,  // mutex-wrapped mutable reference
@@ -464,21 +471,20 @@ Summary of all `unsafe` code in the core modules. The crate root has
 `#![allow(unsafe_code)]`. Other modules use inline `#[allow(unsafe_code)]`
 on specific functions.
 
-### nodes/hamt.rs — 4 unsafe sites
+### nodes/hamt.rs — 2 unsafe sites
 
 | Line | Code | Purpose |
 |------|------|---------|
-| 62-77 | `node_with` | `UnsafeCell` + `transmute_copy` for zero-copy `SharedPointer` construction. Avoids memcpy for large node types. |
-| 237-238 | `get_mut` | Reborrow `&mut self` through raw pointer to work around borrow checker limitation in SIMD probe loop. |
-| 495-560 | `insert` | `ptr::read` + `ptr::write` for in-place entry replacement without intermediate drop/clone. |
+| ~78–94 | `node_with` | `UnsafeCell` + `transmute_copy` for zero-copy `SharedPointer` construction. Avoids memcpy for large node types. |
+| ~271–290 | `SmallSimdNode::get_mut` | Reborrow `&mut self` through raw pointer to work around borrow checker limitation in SIMD probe loop. |
 
 ### nodes/btree.rs — 3 unsafe sites
 
 | Line | Code | Purpose |
 |------|------|---------|
-| 1307 | `get_unchecked(mid)` | Skip bounds check in binary search hot path. Guarded by loop invariant `mid < slice.len()`. |
-| 1315-1317 | `assert_unchecked(mid < slice.len())` | Hint to optimiser after early return on `Equal`. |
-| 1322-1324 | `assert_unchecked(low <= slice.len())` | Hint to optimiser for return value. |
+| ~1912 | `get_unchecked(mid)` | Skip bounds check in binary search hot path. Guarded by loop invariant `mid < slice.len()`. |
+| ~1922 | `assert_unchecked(mid < slice.len())` | Hint to optimiser after early return on `Equal`. |
+| ~1931 | `assert_unchecked(low <= slice.len())` | Hint to optimiser for return value. |
 
 All three are in the custom `binary_search_by` function. For small
 non-Drop keys (≤ 16 bytes), the function delegates to stdlib instead,
@@ -488,31 +494,35 @@ so the unsafe path only runs for expensive-to-compare types.
 
 The RRB node module is entirely safe Rust.
 
-### vector/mod.rs — 9 unsafe sites
+### vector/mod.rs — multiple unsafe sites
 
-| Line | Code | Purpose |
-|------|------|---------|
-| 46 | `#![allow(unsafe_code)]` | Module-level allow (only module with this). |
-| 868 | `swap` | Pointer-based swap in `GenericVector::swap`. |
-| 2036, 2057 | `Iter` methods | Self-referential focus cast: `&mut Focus` → raw pointer → `&'a mut Focus`. Extends the borrow lifetime to match the iterator's lifetime. |
-| 2112, 2136 | `IterMut` methods | Same pattern for `FocusMut`. |
-| 2216, 2232 | `Chunks` methods | Same pattern for chunk iteration. |
-| 2273, 2289 | `ChunksMut` methods | Same pattern for mutable chunk iteration. |
+The module has `#![allow(unsafe_code)]` at line ~64 (only module with this).
 
-The 8 iterator casts all follow the same pattern: they cast a `&mut self`
-field to a raw pointer and back with a longer lifetime, because Rust's
-borrow checker cannot express that the iterator borrows from itself.
+All unsafe blocks follow one of two patterns:
+
+1. **Self-referential focus cast** — `Iter`, `IterMut`, `Chunks`, `ChunksMut`,
+   and `Drain` iterators cast `&mut self.focus` to a raw pointer and back
+   with a longer lifetime, because Rust's borrow checker cannot express that
+   the iterator borrows from itself. There are approximately 12 sites of
+   this pattern across the iterator implementations.
+
+2. **Pointer-based swap** — `GenericVector::swap` uses raw pointer arithmetic
+   for an element swap operation.
+
+Line numbers are omitted here; the module has grown to ~4737 lines and
+exact references go stale quickly. Search for `unsafe {` in `vector/mod.rs`
+to locate all sites.
 
 ### vector/focus.rs — 6 unsafe sites
 
 | Line | Code | Purpose |
 |------|------|---------|
-| 306 | `unsafe impl Send for TreeFocus` | Raw `target_ptr` is not auto-Send. Safe because the pointer is derived from `tree` which is Send. |
-| 307 | `unsafe impl Sync for TreeFocus` | Same reasoning for Sync. |
-| 400 | `&*self.target_ptr` | Dereference cached raw pointer to chunk. Safe because `tree` keeps the chunk alive. |
-| 660 | `&mut *chunk.add(index)` | Index into chunk via raw pointer in `get_many_mut`. Bounds checked by `check_indices`. |
-| 898 | `&mut *self.target_ptr.load(Relaxed)` | Dereference `AtomicPtr` in `TreeFocusMut`. The `Lock` on `tree` ensures exclusive access. |
-| 979-983 | `get_many` | Raw pointer arithmetic for multi-index access. Bounds checked by `check_indices`. |
+| ~310 | `unsafe impl Send for TreeFocus` | Raw `target_ptr` is not auto-Send. Safe because the pointer is derived from `tree` which is Send. |
+| ~311 | `unsafe impl Sync for TreeFocus` | Same reasoning for Sync. |
+| ~411 | `&*self.target_ptr` | Dereference cached raw pointer to chunk. Safe because `tree` keeps the chunk alive. |
+| ~672 | `&mut *chunk.add(index)` | Index into chunk via raw pointer in `get_many_mut`. Bounds checked by `check_indices`. |
+| ~919 | `&mut *self.target_ptr.load(Relaxed)` | Dereference `AtomicPtr` in `TreeFocusMut`. The `Lock` on `tree` ensures exclusive access. |
+| ~1003 | `get_many` | Raw pointer arithmetic for multi-index access. Bounds checked by `check_indices`. |
 
 ### shared_ptr.rs — 0 unsafe sites
 

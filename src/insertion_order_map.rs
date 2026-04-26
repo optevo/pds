@@ -143,6 +143,19 @@ where
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+
+    /// Test whether two maps share the same underlying allocation.
+    ///
+    /// Returns `true` if `self` and `other` are the same version of the
+    /// map — i.e. one is a clone of the other with no intervening
+    /// mutations. This is a cheap pointer comparison, not a structural
+    /// equality check.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.index.ptr_eq(&other.index) && self.entries.ptr_eq(&other.entries)
+    }
 }
 
 impl<K, V, S, P, H: HashWidth> GenericInsertionOrderMap<K, V, S, P, H>

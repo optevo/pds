@@ -140,6 +140,19 @@ where
     pub fn total_count(&self) -> usize {
         self.total
     }
+
+    /// Test whether two bags share the same underlying allocation.
+    ///
+    /// Returns `true` if `self` and `other` are the same version of the
+    /// bag — i.e. one is a clone of the other with no intervening
+    /// mutations. This is a cheap pointer comparison, not a structural
+    /// equality check.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.map.ptr_eq(&other.map)
+    }
 }
 
 impl<A, S, P> GenericBag<A, S, P>

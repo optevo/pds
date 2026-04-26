@@ -1984,3 +1984,83 @@ are warm, `Hash` impl) is substantial.
 - `OrdMap<K, V>` / `OrdSet<A>` are now usable as `HashMap` keys when `K: Hash + Ord`.
 - `PartialEq` is O(1) when both maps have cached hashes; O(n) otherwise (same as before).
 - Feature can be disabled: `default-features = false` or explicit `--no-default-features`.
+
+---
+
+## DEC-037: Performance review — April 2026 (implemented and rejected changes)
+
+**Date:** 2026-04-27
+**Status:** Accepted
+
+**Context:**
+Detailed performance review of `nodes/hamt.rs`, `nodes/btree.rs`, `hash/map.rs`,
+`nodes/rrb.rs`, `vector/mod.rs`, and `ord/map.rs`. Two optimisations were implemented
+and four candidates were evaluated and rejected.
+
+### Implemented
+
+**1. `OrdMap::PartialEq` — `ptr_eq` fast path**
+
+`GenericOrdMap::PartialEq::eq` was missing the `ptr_eq` check that `HashMap` already
+had. Fresh clones have `content_hash_cache = 0` (uncached), so the hash fast-path was
+cold and the comparison fell through to O(n) `diff()` scan.
+
+Fix: check `self.ptr_eq(other)` before the content hash check. Structurally-shared
+clones compare in O(1) regardless of cache state.
+
+Benchmark (`eq_clone` in `benches/ordmap.rs`): 1.15–1.16 ns flat from 1K to 100K
+entries (was O(n) before). Recorded in `docs/baselines.md`.
+
+**2. `HashMap::insert` — deferred `value_hash` computation**
+
+`insert` was computing `value_hash = self.hasher.hash_one(&v)` unconditionally at the
+start of the function, before moving `v` into `root.insert`. The hash was only used
+inside `if self.kv_merkle_valid` branches. The wasted computation on every insert when
+`kv_merkle_valid = false` was the cost.
+
+Fix: restructured `insert` into two branches: when `kv_merkle_valid` is true, compute
+`value_hash` before the move and use it; when false, skip the hash entirely. The
+pre-move requirement (v is moved into root.insert) forced the restructuring.
+
+### Rejected
+
+**3. SIMD control byte `to_array()` + scalar replace + `SimdGroup::from()`**
+
+Pattern: `ctrl_array = control.to_array(); ctrl_array[offset] = new_byte; control =
+SimdGroup::from(ctrl_array)`. Looked expensive but compiles to 3 cheap instructions
+on arm64 (UMOV, MOV byte into register, INS). The `wide::u8x16` API has no
+`replace_lane()` method. No improvement possible without changing the SIMD library.
+
+**4. `Cursor<Vec<...>>` stack allocation per iteration**
+
+The B+ tree `Cursor` uses a `Vec` for its stack of `(index, branch_ref)` pairs.
+The alloc is amortised over the entire bulk iteration (one `Vec` per traversal, not
+per element) and is negligible compared to B+ tree node access cost. Converting to
+a fixed-size inline array would risk stack overflow for very deep trees and require
+a const-generic bound on tree depth. Not worth the complexity.
+
+**5. `ConsumingIter` `make_mut` per leaf**
+
+`ConsumingIter` calls `SharedPointer::make_mut` to get mutable access to each leaf
+before draining it. On arm64, when refcount == 1 (the common case for a consuming
+iter), `Arc::make_mut` is a single relaxed load + branch-not-taken (no clone). The
+cost is effectively free. Adding unsafe `Arc::get_mut`-first logic would only help
+when refcount > 1, which is the rare case in a consuming iterator.
+
+**6. `LargeSimdNode` upgrade: batch control byte initialisation**
+
+When `SmallSimdNode` promotes to `LargeSimdNode`, the second SIMD group's control
+bytes are initialised to zero in a loop. This is a cold promotion path (one per
+node upgrade, amortised over many inserts) and the initialisation is a single
+`SimdGroup::default()` assignment — one instruction. Not measurable.
+
+**Alternatives considered:**
+- Unsafe `replace_lane` for the SIMD control byte — `wide` has no such API; would
+  require forking the `wide` crate. Not worth it for 3 already-cheap instructions.
+- Inline array for Cursor stack — risk of stack overflow for deep trees; const-generic
+  depth bound adds API complexity disproportionate to the gain.
+
+**Consequences:**
+- `OrdMap::PartialEq` is now O(1) for structurally-shared clones.
+- `HashMap::insert` skips `hash_one` when `kv_merkle_valid = false`.
+- All other performance review candidates are confirmed not worth changing.

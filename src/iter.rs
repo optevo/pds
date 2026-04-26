@@ -40,3 +40,21 @@ where
         })
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::unfold;
+
+    #[test]
+    fn unfold_produces_sequence() {
+        let vals: Vec<i32> = unfold(0i32, |i| Some((i, i + 1))).take(5).collect();
+        assert_eq!(vals, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn unfold_terminates_on_none() {
+        let vals: Vec<i32> =
+            unfold(0i32, |i| if i < 3 { Some((i, i + 1)) } else { None }).collect();
+        assert_eq!(vals, vec![0, 1, 2]);
+    }
+}

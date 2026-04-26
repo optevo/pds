@@ -98,6 +98,19 @@ impl<K, V, P: SharedPointerKind> GenericOrdInsertionOrderMap<K, V, P> {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+
+    /// Test whether two maps share the same underlying allocation.
+    ///
+    /// Returns `true` if `self` and `other` are the same version of the
+    /// map — i.e. one is a clone of the other with no intervening
+    /// mutations. This is a cheap pointer comparison, not a structural
+    /// equality check.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.entries.ptr_eq(&other.entries)
+    }
 }
 
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap<K, V, P> {

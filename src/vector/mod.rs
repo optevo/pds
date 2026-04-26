@@ -1485,6 +1485,31 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
+    /// Split the vector into two vectors based on a predicate.
+    ///
+    /// Returns `(matching, non_matching)` where `matching` contains all
+    /// elements for which `f` returned `true`, and `non_matching`
+    /// contains all elements for which `f` returned `false`. Both
+    /// output vectors preserve the relative order of elements.
+    ///
+    /// Time: O(n)
+    #[must_use]
+    pub fn partition<F>(&self, mut f: F) -> (Self, Self)
+    where
+        F: FnMut(&A) -> bool,
+    {
+        let mut matching = Self::new();
+        let mut non_matching = Self::new();
+        for elem in self.iter() {
+            if f(elem) {
+                matching.push_back(elem.clone());
+            } else {
+                non_matching.push_back(elem.clone());
+            }
+        }
+        (matching, non_matching)
+    }
+
     /// Split a vector at a given index.
     ///
     /// Split a vector at a given index, consuming the vector and
@@ -2202,30 +2227,28 @@ impl<A: Clone, P: SharedPointerKind> Clone for GenericVector<A, P> {
 }
 
 impl<A, P: SharedPointerKind> GenericVector<A, P> {
-    /// Whether the cached Merkle hash is current.
+    /// Whether the cached content hash is current.
     ///
-    /// Returns `false` after any mutation. Call
-    /// [`recompute_merkle`][GenericVector::recompute_merkle] to restore validity.
+    /// Returns `false` after any mutation. The next call to
+    /// [`content_hash`][GenericVector::content_hash] will recompute it.
     #[inline]
     #[must_use]
-    pub fn merkle_valid(&self) -> bool {
+    pub fn content_hash_valid(&self) -> bool {
         self.merkle_valid
     }
 }
 
 impl<A: Clone + Hash, P: SharedPointerKind> GenericVector<A, P> {
-    /// Recompute the Merkle hash from the tree structure.
+    /// Recompute the content hash from the tree structure.
     ///
+    /// Called automatically by [`content_hash`][Self::content_hash].
     /// The hash is position-sensitive: `[a, b]` and `[b, a]` produce
-    /// different hashes. For the `Full` representation this combines
-    /// the hashes of all five RRB segments (outer_f, inner_f, middle,
-    /// inner_b, outer_b) using the same prime-multiply scheme as the
-    /// per-node hashes. The middle tree's hash is computed lazily —
+    /// different hashes. The middle tree's hash is computed lazily —
     /// only modified subtrees are recomputed.
     ///
     /// Time: O(k log n) where k is the number of modified nodes since
     /// the last computation. O(1) when no nodes have changed.
-    pub fn recompute_merkle(&mut self) {
+    fn recompute_merkle(&mut self) {
         if self.merkle_valid {
             return;
         }
@@ -2264,15 +2287,19 @@ impl<A: Clone + Hash, P: SharedPointerKind> GenericVector<A, P> {
         self.merkle_valid = true;
     }
 
-    /// Get the Merkle hash, recomputing if necessary.
+    /// Return the content hash of this vector, recomputing if necessary.
     ///
-    /// Equivalent to calling [`recompute_merkle`][Self::recompute_merkle]
-    /// then reading the cached value, but expressed as a single call.
+    /// The hash is position-sensitive: `[a, b]` and `[b, a]` produce
+    /// different values. It is invalidated by any mutation and
+    /// recomputed lazily on the next call.
     ///
-    /// Time: O(k log n) amortised — see
-    /// [`recompute_merkle`][Self::recompute_merkle].
+    /// When both operands have a valid content hash, `PartialEq`
+    /// returns directly from the hash comparison in O(1).
+    ///
+    /// Time: O(k log n) amortised where k is the number of nodes
+    /// modified since the last call; O(1) when nothing has changed.
     #[inline]
-    pub fn merkle_hash(&mut self) -> u64 {
+    pub fn content_hash(&mut self) -> u64 {
         self.recompute_merkle();
         self.merkle_hash
     }
@@ -2295,8 +2322,8 @@ impl<A: Debug, P: SharedPointerKind> Debug for GenericVector<A, P> {
 impl<A: PartialEq, P: SharedPointerKind> PartialEq for GenericVector<A, P> {
     /// Compare two vectors for equality.
     ///
-    /// Time: **O(1)** when both vectors have valid Merkle hashes and
-    /// they match (positive equality via [`recompute_merkle`][Self::recompute_merkle]).
+    /// Time: **O(1)** when both vectors have a valid content hash and
+    /// they match (positive equality via [`content_hash`][Self::content_hash]).
     /// O(1) when they are pointer-equal (clones that haven't diverged).
     /// O(n) otherwise (element-by-element comparison).
     ///
@@ -4410,22 +4437,22 @@ mod test {
     #[test]
     fn merkle_empty_vector_is_valid() {
         let v: Vector<i32> = Vector::new();
-        assert!(v.merkle_valid());
+        assert!(v.content_hash_valid());
     }
 
     #[test]
     fn merkle_new_vector_invalidated_after_push() {
         let mut v: Vector<i32> = Vector::new();
         v.push_back(1);
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
     fn merkle_recompute_makes_valid() {
         let mut v: Vector<i32> = vector![1, 2, 3];
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
         v.recompute_merkle();
-        assert!(v.merkle_valid());
+        assert!(v.content_hash_valid());
     }
 
     #[test]
@@ -4460,7 +4487,7 @@ mod test {
         let mut a: Vector<i32> = vector![1, 2, 3];
         a.recompute_merkle();
         let b = a.clone();
-        assert!(b.merkle_valid());
+        assert!(b.content_hash_valid());
         assert_eq!(a.merkle_hash, b.merkle_hash);
     }
 
@@ -4469,7 +4496,7 @@ mod test {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
         v.set(1, 20);
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4477,7 +4504,7 @@ mod test {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
         v.push_front(0);
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4485,7 +4512,7 @@ mod test {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
         v.push_back(4);
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4493,7 +4520,7 @@ mod test {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
         v.pop_front();
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4501,7 +4528,7 @@ mod test {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
         v.pop_back();
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4509,7 +4536,7 @@ mod test {
         let mut a: Vector<i32> = vector![1, 2, 3];
         a.recompute_merkle();
         a.append(vector![4, 5]);
-        assert!(!a.merkle_valid());
+        assert!(!a.content_hash_valid());
     }
 
     #[test]
@@ -4517,8 +4544,8 @@ mod test {
         let mut v: Vector<i32> = vector![1, 2, 3, 4, 5];
         v.recompute_merkle();
         let right = v.split_off(3);
-        assert!(!v.merkle_valid());
-        assert!(!right.merkle_valid());
+        assert!(!v.content_hash_valid());
+        assert!(!right.content_hash_valid());
     }
 
     #[test]
@@ -4526,7 +4553,7 @@ mod test {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
         v.insert(1, 10);
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4534,7 +4561,7 @@ mod test {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
         v.remove(1);
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4542,7 +4569,7 @@ mod test {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
         let _ = v.get_mut(1);
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4552,7 +4579,7 @@ mod test {
         {
             let _ = v.iter_mut();
         }
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4562,7 +4589,7 @@ mod test {
         {
             let _ = v.focus_mut();
         }
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4570,7 +4597,7 @@ mod test {
         let mut v: Vector<i32> = vector![3, 1, 2];
         v.recompute_merkle();
         v.sort();
-        assert!(!v.merkle_valid());
+        assert!(!v.content_hash_valid());
     }
 
     #[test]
@@ -4578,7 +4605,7 @@ mod test {
         let mut v: Vector<i32> = vector![1, 2, 3];
         v.recompute_merkle();
         v.clear();
-        assert!(v.merkle_valid());
+        assert!(v.content_hash_valid());
         assert_eq!(v.merkle_hash, 0);
     }
 
@@ -4594,30 +4621,30 @@ mod test {
     }
 
     #[test]
-    fn merkle_hash_method_recomputes() {
+    fn content_hash_method_recomputes() {
         let mut v: Vector<i32> = vector![1, 2, 3];
-        assert!(!v.merkle_valid());
-        let h = v.merkle_hash();
-        assert!(v.merkle_valid());
+        assert!(!v.content_hash_valid());
+        let h = v.content_hash();
+        assert!(v.content_hash_valid());
         assert_ne!(h, 0); // non-trivial hash
     }
 
     #[test]
-    fn merkle_stable_across_recomputation() {
+    fn content_hash_stable_across_recomputation() {
         let mut v: Vector<i32> = vector![1, 2, 3, 4, 5];
-        let h1 = v.merkle_hash();
+        let h1 = v.content_hash();
         v.merkle_valid = false; // force recomputation
-        let h2 = v.merkle_hash();
+        let h2 = v.content_hash();
         assert_eq!(h1, h2);
     }
 
     #[test]
-    fn merkle_large_vector() {
+    fn content_hash_large_vector() {
         // Test with a vector large enough to use the Full representation.
         let mut a: Vector<i32> = (0..10000).collect();
         let mut b: Vector<i32> = (0..10000).collect();
-        let ha = a.merkle_hash();
-        let hb = b.merkle_hash();
+        let ha = a.content_hash();
+        let hb = b.content_hash();
         assert_eq!(ha, hb);
 
         // Mutate one element — hashes should diverge.

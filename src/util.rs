@@ -66,6 +66,27 @@ impl Hasher for FnvHasher {
 }
 
 #[cfg(test)]
+mod tests {
+    use core::ops::Bound;
+
+    use super::to_range;
+
+    #[test]
+    fn to_range_excluded_start() {
+        // (Excluded(2), Unbounded) → start = 2 + 1 = 3
+        let r = to_range(&(Bound::Excluded(2usize), Bound::Unbounded), 10);
+        assert_eq!(r, 3..10);
+    }
+
+    #[test]
+    fn to_range_included_end() {
+        // ..=5 has Unbounded start and Included(5) end → 0..6
+        let r = to_range(&(..=5usize), 10);
+        assert_eq!(r, 0..6);
+    }
+}
+
+#[cfg(test)]
 macro_rules! assert_covariant {
     ($name:ident<$($gen:tt),*> in $param:ident) => {
         #[allow(dead_code, unused_assignments, unused_variables)] // The variance proof function is never called; its body uses assignments to convince the compiler.

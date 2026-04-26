@@ -717,9 +717,9 @@ mod tests {
         if let Some(v) = map.get_mut(&0) {
             *v = 999;
         }
-        assert!(!map.kv_merkle_valid());
+        assert!(!map.content_hash_valid());
         map.intern_and_seal(&mut pool);
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
     }
 
     #[test]
@@ -731,8 +731,8 @@ mod tests {
         let mut map2: HashMap<i32, i32> = (0..500).map(|i| (i, i)).collect();
         map1.intern_and_seal(&mut pool);
         map2.intern_and_seal(&mut pool);
-        assert!(map1.kv_merkle_valid());
-        assert!(map2.kv_merkle_valid());
+        assert!(map1.content_hash_valid());
+        assert!(map2.content_hash_valid());
         assert_eq!(map1, map2);
         assert_eq!(map1.diff(&map2).count(), 0);
     }

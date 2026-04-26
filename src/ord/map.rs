@@ -1965,6 +1965,24 @@ where
         }
     }
 
+    /// Remove the smallest key from the map in place, returning the
+    /// key-value pair, or `None` if the map is empty.
+    ///
+    /// Time: O(log n)
+    pub fn remove_min(&mut self) -> Option<(K, V)> {
+        let min_key = self.get_min()?.0.clone();
+        self.remove_with_key(&min_key)
+    }
+
+    /// Remove the largest key from the map in place, returning the
+    /// key-value pair, or `None` if the map is empty.
+    ///
+    /// Time: O(log n)
+    pub fn remove_max(&mut self) -> Option<(K, V)> {
+        let max_key = self.get_max()?.0.clone();
+        self.remove_with_key(&max_key)
+    }
+
     /// Get the [`Entry`][Entry] for a key in the map for in-place manipulation.
     ///
     /// Time: O(log n)
@@ -2531,6 +2549,19 @@ where
         let h = if h == 0 { 1 } else { h };
         self.content_hash_cache.store(h, AtomicOrdering::Relaxed);
         h
+    }
+
+    /// Whether the content hash cache is populated (non-zero).
+    ///
+    /// Returns `false` when the map has not been hashed yet or was recently
+    /// mutated. The next call to [`content_hash`][Self::content_hash] will
+    /// compute and cache the hash.
+    ///
+    /// Time: O(1)
+    #[inline]
+    #[must_use]
+    pub fn content_hash_valid(&self) -> bool {
+        self.content_hash_cache.load(AtomicOrdering::Relaxed) != 0
     }
 }
 

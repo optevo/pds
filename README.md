@@ -311,21 +311,27 @@ a different collection set and design philosophy.
 | **List / Stack / Queue** | — | — | — | yes |
 | **Merkle hashing** | O(1) equality | — | — | — |
 | **SIMD node ops** | yes | yes | — | — |
-| **`no_std`** | yes (via `foldhash`) | — | — | yes |
+| **`no_std`** | yes (`default-features = false`; type aliases via `foldhash`) | — | — | yes |
 | **`triomphe::Arc`** | yes | — | — | — |
 | **Hash consing** | yes (`InternPool`) | — | — | — |
 | **SSP serialisation** | yes (`HashMapPool`) | — | — | — |
 | **serde** | yes | yes | yes | yes |
 | **rayon** | yes | yes | yes | yes (hash maps only) |
-| **Par set ops** | yes (all types) | — | — | — |
+| **Par set ops** | yes (Hash + OrdMap/OrdSet)† | — | — | — |
 | **proptest / quickcheck** | yes | yes | yes | — |
+
+†`par_union`, `par_intersection`, `par_difference`, `par_symmetric_difference` are
+available on all Hash-backed types and on `OrdMap`/`OrdSet`. `Trie`, `InsertionOrderMap`,
+`InsertionOrderSet`, and all Ord-derived types (`OrdBag`, `OrdMultiMap`, `OrdBiMap`,
+`OrdSymMap`, `OrdTrie`, `OrdInsertionOrderMap`, `OrdInsertionOrderSet`) do not have
+parallel set operations.
 
 **Key differences from imbl:**
 - Merkle hashing on all collections for O(1) structural equality checks
 - Fifteen additional collection types: Bag, OrdBag, HashMultiMap, OrdMultiMap, InsertionOrderMap, InsertionOrderSet, OrdInsertionOrderMap, OrdInsertionOrderSet, BiMap, OrdBiMap, SymMap, OrdSymMap, Trie, OrdTrie, UniqueVector
 - Hash consing via `InternPool` — deduplicates identical HAMT subtrees across collections
 - Structural-sharing-preserving serialisation via `HashMapPool` — serialises/deserialises trees with node deduplication and cross-session interning
-- `no_std` support via the `foldhash` feature flag
+- `no_std` support via `default-features = false`; `foldhash` feature provides type aliases in no_std environments
 - `triomphe::Arc` support (no weak count, 8 bytes smaller per node)
 - Deprecated API aliases removed; breaking changes for correctness accepted
 

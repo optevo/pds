@@ -124,6 +124,19 @@ where
         self.forward.len()
     }
 
+    /// Test whether two symmaps share the same underlying allocation.
+    ///
+    /// Returns `true` if `self` and `other` are the same version of
+    /// the symmap — i.e. one is a clone of the other with no
+    /// intervening mutations. This is a cheap pointer comparison, not
+    /// a structural equality check.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.forward.ptr_eq(&other.forward)
+    }
+
     /// Swap the forward and backward maps in O(1).
     ///
     /// After swapping, what was the forward direction becomes backward and

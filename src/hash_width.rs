@@ -129,3 +129,60 @@ impl HashWidth for u128 {
         self as u64
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn u128_from_hash64_preserves_low_bits() {
+        let h = 42u64;
+        let wide = <u128 as HashWidth>::from_hash64(h);
+        // Low 64 bits must equal the original hash
+        assert_eq!(wide as u64, h);
+        // High 64 bits must be fmix64 of the original hash
+        assert_eq!((wide >> 64) as u64, fmix64(h));
+    }
+
+    #[test]
+    fn u128_trie_index() {
+        // Pack two 5-bit values: low = 0b00110 = 6, next = 0b00101 = 5
+        let h: u128 = (0b00101_u128 << 5) | 0b00110_u128;
+        assert_eq!(h.trie_index(0, 31), 6);
+        assert_eq!(h.trie_index(5, 31), 5);
+    }
+
+    #[test]
+    fn u128_ctrl_byte_clamps_zero() {
+        // All-zero hash → top byte is 0, clamped to 1
+        assert_eq!(0u128.ctrl_byte(), 1u8);
+    }
+
+    #[test]
+    fn u128_ctrl_byte_high_bits() {
+        // High byte = 0xAB → returned as-is (≥ 1)
+        let h: u128 = 0xAB_u128 << (128 - 8);
+        assert_eq!(h.ctrl_byte(), 0xABu8);
+    }
+
+    #[test]
+    fn u128_ctrl_group_single() {
+        // num_groups == 1 → always 0
+        assert_eq!(u128::MAX.ctrl_group(1), 0);
+        assert_eq!(0u128.ctrl_group(1), 0);
+    }
+
+    #[test]
+    fn u128_ctrl_group_two_in_range() {
+        // Result must be < num_groups for both extremes
+        assert!(0u128.ctrl_group(2) < 2);
+        assert!(u128::MAX.ctrl_group(2) < 2);
+    }
+
+    #[test]
+    fn u128_to_u64_truncates() {
+        // High 64 bits are discarded; low 64 bits returned
+        let h: u128 = (0xDEAD_BEEF_u128 << 64) | 0xCAFE_BABE_u128;
+        assert_eq!(h.to_u64(), 0xCAFE_BABEu64);
+    }
+}

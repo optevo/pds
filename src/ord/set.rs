@@ -705,6 +705,25 @@ where
         out
     }
 
+    /// Remove a value from the set, returning the stored element and
+    /// the updated set, or `None` if the value was not present.
+    ///
+    /// This is the functional counterpart to [`remove`][Self::remove].
+    /// It is particularly useful when the stored type carries data
+    /// beyond what the `Ord` implementation covers — the returned
+    /// element is the original stored value, not the query.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn extract<Q>(&self, value: &Q) -> Option<(A, Self)>
+    where
+        Q: Comparable<A> + ?Sized,
+    {
+        let mut out = self.clone();
+        let elem = out.remove(value)?;
+        Some((elem, out))
+    }
+
     /// Remove the smallest value from a set, and return that value as
     /// well as the updated set.
     ///
@@ -980,6 +999,41 @@ impl<A: Ord + Hash, P: SharedPointerKind> Hash for GenericOrdSet<A, P> {
         for i in self.iter() {
             i.hash(state);
         }
+    }
+}
+
+#[cfg(feature = "ord-hash")]
+impl<A, P> GenericOrdSet<A, P>
+where
+    A: Ord + Hash,
+    P: SharedPointerKind,
+{
+    /// Return a content hash of this set.
+    ///
+    /// The hash is order-independent: two sets with the same elements
+    /// produce the same value regardless of insertion history. It is
+    /// computed once and cached; subsequent calls are O(1).
+    ///
+    /// **`PartialEq` integration:** when both operands have a populated
+    /// cache, `eq` returns in O(1) via hash comparison.
+    ///
+    /// Time: O(n) first call; O(1) thereafter.
+    #[must_use]
+    pub fn content_hash(&self) -> u64 {
+        self.map.content_hash()
+    }
+
+    /// Whether the content hash cache is populated (non-zero).
+    ///
+    /// Returns `false` when the set has not been hashed yet or was
+    /// recently mutated. The next call to [`content_hash`][Self::content_hash]
+    /// will compute and cache the hash.
+    ///
+    /// Time: O(1)
+    #[inline]
+    #[must_use]
+    pub fn content_hash_valid(&self) -> bool {
+        self.map.content_hash_valid()
     }
 }
 

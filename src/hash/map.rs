@@ -137,7 +137,7 @@ pub type HashMap<K, V> = GenericHashMap<K, V, foldhash::fast::RandomState, Defau
 /// \* = amortised. † = requires both maps to share a hasher instance
 /// (common ancestor via `clone`, which is the normal persistent-data
 /// workflow). Invalidated by in-place mutations; call
-/// [`recompute_kv_merkle`][Self::recompute_kv_merkle] to restore.
+/// [`content_hash`][Self::content_hash] to recompute.
 ///
 /// The O(log₃₂ n) operations are *effectively* O(1) for practical sizes:
 /// log₃₂(1 billion) < 7, so the depth never exceeds single digits.
@@ -156,11 +156,11 @@ pub type HashMap<K, V> = GenericHashMap<K, V, foldhash::fast::RandomState, Defau
 ///    the subtrie. Maintained automatically. Used for O(1) inequality
 ///    detection — different key Merkle → maps are definitely not equal.
 ///
-/// 2. **KV Merkle** (per map): commutative hash covering both keys and
+/// 2. **Content hash** (per map): commutative hash covering both keys and
 ///    values. Maintained incrementally by [`insert`][Self::insert] and
 ///    [`remove`][Self::remove] (requires `V: Hash`). In-place mutations
 ///    (`get_mut`, `index_mut`, entry API) invalidate it — call
-///    [`recompute_kv_merkle`][Self::recompute_kv_merkle] to re-seal.
+///    [`content_hash`][Self::content_hash] to recompute on demand.
 ///
 /// When both maps have valid KV Merkle and the same hasher instance:
 /// matching hash + matching size = equal (O(1)). The false-positive
@@ -440,14 +440,14 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         self.kv_merkle_valid = true;
     }
 
-    /// Recompute the key-value Merkle hash by traversing all entries.
+    /// Recompute the content hash by traversing all entries.
     ///
-    /// Call this after operations that invalidate the kv_merkle
-    /// (`get_mut`, `index_mut`, entry API mutations, set operations)
-    /// to re-enable O(1) positive equality checks.
+    /// Called automatically by [`content_hash`][Self::content_hash] when
+    /// the hash has been invalidated. Made crate-internal so that
+    /// `intern_and_seal` can seal the hash after interning.
     ///
     /// Time: O(n)
-    pub fn recompute_kv_merkle(&mut self)
+    pub(crate) fn recompute_kv_merkle(&mut self)
     where
         K: Hash + Eq,
         V: Hash,
@@ -465,11 +465,42 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         self.kv_merkle_valid = true;
     }
 
-    /// Whether the key-value Merkle hash is currently valid. When true,
-    /// equality checks against maps sharing the same hasher are O(1).
+    /// Return a content hash of this map.
+    ///
+    /// The hash covers both keys and values and is order-independent:
+    /// two maps with the same key-value pairs produce the same hash
+    /// regardless of insertion history. It is maintained incrementally
+    /// during `insert` and `remove`; in-place mutations (`get_mut`,
+    /// `iter_mut`, entry API) invalidate it and trigger a full O(n)
+    /// recompute on the next call.
+    ///
+    /// When both operands have a valid content hash, `PartialEq`
+    /// returns directly from the hash comparison in O(1).
+    ///
+    /// Time: O(1) amortised; O(n) after in-place mutations.
     #[inline]
     #[must_use]
-    pub fn kv_merkle_valid(&self) -> bool {
+    pub fn content_hash(&mut self) -> u64
+    where
+        K: Hash + Eq,
+        V: Hash,
+        S: BuildHasher,
+    {
+        if !self.kv_merkle_valid {
+            self.recompute_kv_merkle();
+        }
+        self.kv_merkle_hash
+    }
+
+    /// Whether the content hash is currently valid (not invalidated by
+    /// an in-place mutation since the last `insert`/`remove`/`content_hash`
+    /// call).
+    ///
+    /// When `false`, the next call to [`content_hash`][Self::content_hash]
+    /// will recompute the hash in O(n).
+    #[inline]
+    #[must_use]
+    pub fn content_hash_valid(&self) -> bool {
         self.kv_merkle_valid
     }
 
@@ -2592,20 +2623,20 @@ where
     S: BuildHasher,
     P: SharedPointerKind,
 {
-    /// Intern the HAMT nodes and seal the kv_merkle hash in one pass.
+    /// Intern the HAMT nodes and seal the content hash in one pass.
     ///
     /// Equivalent to calling [`intern`][Self::intern] followed by
-    /// [`recompute_kv_merkle`][Self::recompute_kv_merkle]. After this
-    /// call the map has both deduplicated nodes and a valid kv_merkle,
-    /// enabling all three fast-paths in `diff` and `PartialEq`:
+    /// [`content_hash`][Self::content_hash]. After this call the map has
+    /// both deduplicated nodes and a valid content hash, enabling all three
+    /// fast-paths in `diff` and `PartialEq`:
     ///
     /// 1. O(1) `ptr_eq` for maps sharing structure
-    /// 2. O(1) kv_merkle equality check for same-lineage maps
+    /// 2. O(1) content hash equality check for same-lineage maps
     /// 3. O(1) subtree skipping via pointer comparison in the tree walk
     ///
     /// Use this instead of `intern()` when the map was constructed via
     /// bulk insertion (`from_iter`, repeated `insert_bulk`) that leaves
-    /// `kv_merkle` invalid. Calling `intern()` alone after bulk
+    /// the content hash invalid. Calling `intern()` alone after bulk
     /// construction deduplicates nodes but leaves the O(1) positive
     /// equality fast-path disabled.
     ///
@@ -2632,16 +2663,16 @@ where
     /// let mut map1 = base.clone();
     /// let mut map2 = base.clone();
     ///
-    /// // Apply the same bulk mutations independently (invalidates kv_merkle).
+    /// // Apply the same bulk mutations independently (invalidates content hash).
     /// for i in 1000..1100 { map1.insert(i, i); }
     /// for i in 1000..1100 { map2.insert(i, i); }
     ///
     /// map1.intern_and_seal(&mut pool);
     /// map2.intern_and_seal(&mut pool);
     ///
-    /// // kv_merkle is valid and both maps share a lineage — O(1) fast-paths
+    /// // Content hash is valid and both maps share a lineage — O(1) fast-paths
     /// // fire for equality and diff.
-    /// assert!(map1.kv_merkle_valid());
+    /// assert!(map1.content_hash_valid());
     /// assert_eq!(map1, map2);
     /// assert_eq!(map1.diff(&map2).count(), 0);
     /// # }
@@ -4048,9 +4079,9 @@ mod test {
         for i in 0..500 {
             base.insert(i, i * 2);
         }
-        assert!(base.kv_merkle_valid());
+        assert!(base.content_hash_valid());
         let other = base.clone();
-        assert!(other.kv_merkle_valid());
+        assert!(other.content_hash_valid());
         assert_eq!(base.diff(&other).count(), 0);
     }
 
@@ -4069,8 +4100,8 @@ mod test {
             m.remove(&9999);
             m
         };
-        assert!(map1.kv_merkle_valid());
-        assert!(map2.kv_merkle_valid());
+        assert!(map1.content_hash_valid());
+        assert!(map2.content_hash_valid());
         assert_eq!(map1.diff(&map2).count(), 0);
     }
 
@@ -4087,7 +4118,7 @@ mod test {
         if let Some(v) = map2.get_mut(&0) {
             *v = 999;
         }
-        assert!(!map2.kv_merkle_valid());
+        assert!(!map2.content_hash_valid());
         let diffs: Vec<_> = map1.diff(&map2).collect();
         assert_eq!(diffs.len(), 1);
     }
@@ -4649,35 +4680,35 @@ mod test {
         assert_eq!(map1, map2);
     }
 
-    // ---- kv_merkle tests ----
+    // ---- content_hash tests ----
     //
-    // kv_merkle_hash depends on the hasher, so tests that compare hashes
+    // content_hash depends on the hasher, so tests that compare hash values
     // across independently built maps must use a deterministic hasher
     // (LolMap). Tests that only check validity/invalidation can use HashMap.
 
     #[test]
-    fn kv_merkle_empty_map() {
+    fn content_hash_empty_map() {
         let map: LolMap<i32, i32> = LolMap::default();
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
         assert_eq!(map.kv_merkle_hash, 0);
     }
 
     #[test]
-    fn kv_merkle_identical_maps_match() {
+    fn content_hash_identical_maps_match() {
         let mut a: LolMap<i32, i32> = LolMap::default();
         let mut b: LolMap<i32, i32> = LolMap::default();
         for i in 0..100 {
             a.insert(i, i * 10);
             b.insert(i, i * 10);
         }
-        assert!(a.kv_merkle_valid());
-        assert!(b.kv_merkle_valid());
+        assert!(a.content_hash_valid());
+        assert!(b.content_hash_valid());
         assert_eq!(a.kv_merkle_hash, b.kv_merkle_hash);
         assert_eq!(a, b);
     }
 
     #[test]
-    fn kv_merkle_different_values_differ() {
+    fn content_hash_different_values_differ() {
         let mut a: LolMap<i32, i32> = LolMap::default();
         let mut b: LolMap<i32, i32> = LolMap::default();
         for i in 0..100 {
@@ -4686,14 +4717,14 @@ mod test {
         }
         // Change one value
         b.insert(50, 999);
-        assert!(a.kv_merkle_valid());
-        assert!(b.kv_merkle_valid());
+        assert!(a.content_hash_valid());
+        assert!(b.content_hash_valid());
         assert_ne!(a.kv_merkle_hash, b.kv_merkle_hash);
         assert_ne!(a, b);
     }
 
     #[test]
-    fn kv_merkle_order_independent() {
+    fn content_hash_order_independent() {
         let mut forward: LolMap<i32, i32> = LolMap::default();
         let mut reverse: LolMap<i32, i32> = LolMap::default();
         for i in 0..50 {
@@ -4702,14 +4733,14 @@ mod test {
         for i in (0..50).rev() {
             reverse.insert(i, i * 3);
         }
-        assert!(forward.kv_merkle_valid());
-        assert!(reverse.kv_merkle_valid());
+        assert!(forward.content_hash_valid());
+        assert!(reverse.content_hash_valid());
         assert_eq!(forward.kv_merkle_hash, reverse.kv_merkle_hash);
         assert_eq!(forward, reverse);
     }
 
     #[test]
-    fn kv_merkle_insert_remove_roundtrip() {
+    fn content_hash_insert_remove_roundtrip() {
         let mut map: LolMap<i32, i32> = LolMap::default();
         for i in 0..20 {
             map.insert(i, i);
@@ -4724,15 +4755,15 @@ mod test {
     }
 
     #[test]
-    fn kv_merkle_update_maintains() {
+    fn content_hash_update_maintains() {
         let mut map: LolMap<i32, i32> = LolMap::default();
         for i in 0..20 {
             map.insert(i, i);
         }
         // Persistent update
         let map2 = map.update(5, 500);
-        assert!(map.kv_merkle_valid());
-        assert!(map2.kv_merkle_valid());
+        assert!(map.content_hash_valid());
+        assert!(map2.content_hash_valid());
         assert_ne!(map.kv_merkle_hash, map2.kv_merkle_hash);
 
         // Update with same value — should restore original
@@ -4741,22 +4772,22 @@ mod test {
     }
 
     #[test]
-    fn kv_merkle_clone_preserves() {
+    fn content_hash_clone_preserves() {
         let mut map: LolMap<i32, i32> = LolMap::default();
         for i in 0..50 {
             map.insert(i, i * 7);
         }
         let cloned = map.clone();
-        assert!(cloned.kv_merkle_valid());
+        assert!(cloned.content_hash_valid());
         assert_eq!(map.kv_merkle_hash, cloned.kv_merkle_hash);
     }
 
     #[test]
-    fn kv_merkle_from_iterator() {
+    fn content_hash_from_iterator() {
         // Build via from_iter and via manual insert; hashes should match
         // when using the same deterministic hasher.
         let map: LolMap<i32, i32> = (0..30).map(|i| (i, i * 2)).collect();
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
 
         let mut manual: LolMap<i32, i32> = LolMap::default();
         for i in 0..30 {
@@ -4766,22 +4797,22 @@ mod test {
     }
 
     #[test]
-    fn kv_merkle_get_mut_invalidates() {
+    fn content_hash_get_mut_invalidates() {
         let mut map: LolMap<i32, i32> = LolMap::default();
         for i in 0..10 {
             map.insert(i, i);
         }
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
 
         // get_mut should invalidate
         if let Some(v) = map.get_mut(&5) {
             *v = 999;
         }
-        assert!(!map.kv_merkle_valid());
+        assert!(!map.content_hash_valid());
 
         // recompute should restore validity
         map.recompute_kv_merkle();
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
 
         // The recomputed hash should match a freshly built map
         let mut fresh: LolMap<i32, i32> = LolMap::default();
@@ -4796,63 +4827,63 @@ mod test {
     }
 
     #[test]
-    fn kv_merkle_iter_mut_invalidates() {
+    fn content_hash_iter_mut_invalidates() {
         let mut map = HashMap::new();
         for i in 0..10 {
             map.insert(i, i);
         }
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
         // iter_mut invalidates on call; drop the iterator before checking
         {
             let _ = map.iter_mut();
         }
-        assert!(!map.kv_merkle_valid());
+        assert!(!map.content_hash_valid());
     }
 
     #[test]
-    fn kv_merkle_retain_invalidates() {
+    fn content_hash_retain_invalidates() {
         let mut map = HashMap::new();
         for i in 0..10 {
             map.insert(i, i);
         }
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
         map.retain(|k, _| *k < 5);
-        assert!(!map.kv_merkle_valid());
+        assert!(!map.content_hash_valid());
     }
 
     #[test]
-    fn kv_merkle_entry_api_invalidates() {
+    fn content_hash_entry_api_invalidates() {
         let mut map = HashMap::new();
         map.insert(1, 10);
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
 
         // or_insert on vacant entry invalidates
         map.entry(2).or_insert(20);
-        assert!(!map.kv_merkle_valid());
+        assert!(!map.content_hash_valid());
 
         // Recompute and verify occupied entry get_mut invalidates
         map.recompute_kv_merkle();
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
         if let crate::hashmap::Entry::Occupied(mut occ) = map.entry(1) {
             let _v = occ.get_mut();
         }
-        assert!(!map.kv_merkle_valid());
+        assert!(!map.content_hash_valid());
     }
 
     #[test]
-    fn kv_merkle_clear_resets() {
+    fn content_hash_clear_resets() {
         let mut map = HashMap::new();
         for i in 0..10 {
             map.insert(i, i);
         }
         assert_ne!(map.kv_merkle_hash, 0);
         map.clear();
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
         assert_eq!(map.kv_merkle_hash, 0);
     }
 
     #[test]
-    fn kv_merkle_replace_value_incremental() {
+    fn content_hash_replace_value_incremental() {
         // Replacing a value should update kv_merkle incrementally.
         // The result should match a fresh build with the same hasher.
         let mut map: LolMap<i32, i32> = LolMap::default();
@@ -4860,7 +4891,7 @@ mod test {
             map.insert(i, i);
         }
         map.insert(10, 999); // replace value for key 10
-        assert!(map.kv_merkle_valid());
+        assert!(map.content_hash_valid());
 
         let mut fresh: LolMap<i32, i32> = LolMap::default();
         for i in 0..20 {
@@ -4874,28 +4905,28 @@ mod test {
     }
 
     #[test]
-    fn kv_merkle_set_operations_invalidate() {
+    fn content_hash_set_operations_invalidate() {
         let a: HashMap<i32, i32> = (0..10).map(|i| (i, i)).collect();
         let b: HashMap<i32, i32> = (5..15).map(|i| (i, i * 2)).collect();
 
         // Union invalidates kv_merkle (uses internal helpers)
         let union = a.clone().union(b.clone());
-        assert!(!union.kv_merkle_valid());
+        assert!(!union.content_hash_valid());
 
         // After recompute, should match manual construction
         let mut union_recomputed = union.clone();
         union_recomputed.recompute_kv_merkle();
-        assert!(union_recomputed.kv_merkle_valid());
+        assert!(union_recomputed.content_hash_valid());
     }
 
     #[test]
-    fn kv_merkle_without_maintains() {
+    fn content_hash_without_maintains() {
         let mut map: LolMap<i32, i32> = LolMap::default();
         for i in 0..20 {
             map.insert(i, i * 5);
         }
         let without5 = map.without(&5);
-        assert!(without5.kv_merkle_valid());
+        assert!(without5.content_hash_valid());
 
         let mut fresh: LolMap<i32, i32> = LolMap::default();
         for i in 0..20 {
@@ -4907,13 +4938,13 @@ mod test {
     }
 
     #[test]
-    fn kv_merkle_extract_with_key_maintains() {
+    fn content_hash_extract_with_key_maintains() {
         let map: LolMap<i32, i32> = (0..10).map(|i| (i, i * 3)).collect();
         let result = map.extract_with_key(&5);
         let (k, v, remaining) = result.unwrap();
         assert_eq!(k, 5);
         assert_eq!(v, 15);
-        assert!(remaining.kv_merkle_valid());
+        assert!(remaining.content_hash_valid());
 
         let expected: LolMap<i32, i32> = (0..10).filter(|&i| i != 5).map(|i| (i, i * 3)).collect();
         assert_eq!(remaining.kv_merkle_hash, expected.kv_merkle_hash);
@@ -4921,7 +4952,7 @@ mod test {
 
     proptest! {
         #[test]
-        fn kv_merkle_proptest_insert_order(
+        fn content_hash_proptest_insert_order(
             pairs in collection::vec((0i32..1000, 0i32..1000), 0..200)
         ) {
             // Build two maps with the same deterministic hasher in different
@@ -4944,7 +4975,7 @@ mod test {
         }
 
         #[test]
-        fn kv_merkle_proptest_insert_remove_roundtrip(
+        fn content_hash_proptest_insert_remove_roundtrip(
             base in collection::vec((0i32..500, 0i32..500), 0..100),
             extra in collection::vec((500i32..1000, 0i32..500), 1..50),
         ) {
@@ -4953,7 +4984,7 @@ mod test {
                 map.insert(k, v);
             }
             let original_hash = map.kv_merkle_hash;
-            let original_valid = map.kv_merkle_valid();
+            let original_valid = map.content_hash_valid();
 
             // Insert extras then remove them
             for &(k, v) in &extra {
@@ -4965,7 +4996,7 @@ mod test {
 
             // kv_merkle should match original (extras don't overlap base keys)
             if original_valid {
-                assert!(map.kv_merkle_valid());
+                assert!(map.content_hash_valid());
                 assert_eq!(original_hash, map.kv_merkle_hash);
             }
         }

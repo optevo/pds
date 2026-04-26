@@ -49,6 +49,7 @@ use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator};
 use core::ops::Deref;
+use core::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
 
@@ -151,6 +152,12 @@ pub type HashSet<A> = GenericHashSet<A, foldhash::fast::RandomState, DefaultShar
 /// For sets with independent hashers (no shared ancestor), equality falls
 /// back to O(n) element-by-element comparison.
 ///
+/// A whole-set fingerprint is available via
+/// [`content_hash`][GenericHashSet::content_hash] /
+/// [`content_hash_valid`][GenericHashSet::content_hash_valid]. Unlike the
+/// per-node Merkle used for equality, this hash is cached with interior
+/// mutability and invalidated on every mutation.
+///
 /// Values must implement [`Hash`][std::hash::Hash] and [`Eq`][std::cmp::Eq].
 ///
 /// [`std::HashSet`]: https://doc.rust-lang.org/std/collections/struct.HashSet.html
@@ -164,6 +171,9 @@ pub struct GenericHashSet<A, S, P: SharedPointerKind, H: HashWidth = u64> {
     pub(crate) hasher_id: u64,
     pub(crate) root: Option<SharedPointer<Node<Value<A>, P, H>, P>>,
     pub(crate) size: usize,
+    /// Cached content hash. Zero means not yet computed or invalidated.
+    /// Uses interior mutability so `content_hash` can take `&self`.
+    pub(crate) content_hash_cache: AtomicU64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -296,6 +306,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
             root: None,
             hasher,
             hasher_id: next_hasher_id(),
+            content_hash_cache: AtomicU64::new(0),
         }
     }
 
@@ -320,6 +331,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
             root: None,
             hasher: self.hasher.clone(),
             hasher_id: self.hasher_id,
+            content_hash_cache: AtomicU64::new(0),
         }
     }
 
@@ -342,6 +354,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
     pub fn clear(&mut self) {
         self.root = None;
         self.size = 0;
+        self.content_hash_cache.store(0, AtomicOrdering::Relaxed);
     }
 
     /// Get an iterator over the values in a hash set.
@@ -356,6 +369,52 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
         Iter {
             it: NodeIter::new(self.root.as_deref(), self.size),
         }
+    }
+
+    /// Return a deterministic fingerprint of the set's contents.
+    ///
+    /// Computed by combining the per-element HAMT hashes using `fmix64`.
+    /// Because HAMT hashes are order-independent (stored at insertion time),
+    /// the result is stable across clones and independent of iteration order.
+    ///
+    /// The result is cached after the first call and invalidated on any
+    /// mutation (`insert`, `remove`, `retain`, `clear`). Subsequent calls
+    /// on an unmodified set are O(1).
+    ///
+    /// Note: this hash is suitable for equality fast-paths and change
+    /// detection within a single session. It is **not** guaranteed to be
+    /// stable across process restarts because the per-element hashes come
+    /// from a randomised hasher (e.g. `RandomState`). For persistent
+    /// fingerprints, use a deterministic hasher.
+    ///
+    /// Time: O(n) first call; O(1) subsequent calls if unmodified.
+    #[must_use]
+    pub fn content_hash(&self) -> u64 {
+        let cached = self.content_hash_cache.load(AtomicOrdering::Relaxed);
+        if cached != 0 {
+            return cached;
+        }
+        use crate::nodes::hamt::fmix64;
+        let mut h: u64 = 0;
+        for (_, hash) in NodeIter::new(self.root.as_deref(), self.size) {
+            h = h.wrapping_add(fmix64(hash.to_u64()));
+        }
+        // Reserve 0 as "not computed"; map an actual 0 result to 1.
+        let h = if h == 0 { 1 } else { h };
+        self.content_hash_cache.store(h, AtomicOrdering::Relaxed);
+        h
+    }
+
+    /// Return `true` if the content hash has been computed and is currently
+    /// cached.
+    ///
+    /// A `false` result means the next call to [`content_hash`][Self::content_hash]
+    /// will perform a full O(n) traversal.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn content_hash_valid(&self) -> bool {
+        self.content_hash_cache.load(AtomicOrdering::Relaxed) != 0
     }
 }
 
@@ -427,6 +486,28 @@ where
             root.get(hash_key(&self.hasher, value), 0, value).is_some()
         } else {
             false
+        }
+    }
+
+    /// Get a reference to the element in the set that is equal to the
+    /// given value, if it exists.
+    ///
+    /// This is useful when the stored type carries data beyond what
+    /// the `Eq` and `Hash` implementations cover — for example, a
+    /// newtype wrapping `Arc<str>` where you look up by `&str` and
+    /// want back the stored `Arc<str>`.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get<Q>(&self, value: &Q) -> Option<&A>
+    where
+        Q: Hash + Equivalent<A> + ?Sized,
+    {
+        if let Some(root) = &self.root {
+            root.get(hash_key(&self.hasher, value), 0, value)
+                .map(|v| &v.0)
+        } else {
+            None
         }
     }
 
@@ -557,6 +638,7 @@ where
         match root.insert(hash, 0, Value(a)) {
             None => {
                 self.size += 1;
+                self.content_hash_cache.store(0, AtomicOrdering::Relaxed);
                 None
             }
             Some(Value(old_value)) => Some(old_value),
@@ -574,6 +656,7 @@ where
         let result = root.remove(hash_key(&self.hasher, value), 0, value);
         if result.is_some() {
             self.size -= 1;
+            self.content_hash_cache.store(0, AtomicOrdering::Relaxed);
         }
         result.map(|v| v.0)
     }
@@ -606,10 +689,15 @@ where
         };
         let old_root = root.clone();
         let root = SharedPointer::make_mut(root);
+        let mut removed = false;
         for (value, hash) in NodeIter::new(Some(&old_root), self.size) {
             if !f(value) && root.remove(hash, 0, &**value).is_some() {
                 self.size -= 1;
+                removed = true;
             }
+        }
+        if removed {
+            self.content_hash_cache.store(0, AtomicOrdering::Relaxed);
         }
     }
 
@@ -819,6 +907,25 @@ where
         out
     }
 
+    /// Remove a value from the set, returning the stored element and
+    /// the updated set, or `None` if the value was not present.
+    ///
+    /// This is the functional counterpart to [`remove`][Self::remove].
+    /// It is particularly useful when the stored type carries data
+    /// beyond what the `Eq` and `Hash` implementations cover — the
+    /// returned element is the original stored value, not the query.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn extract<Q>(&self, value: &Q) -> Option<(A, Self)>
+    where
+        Q: Hash + Equivalent<A> + ?Sized,
+    {
+        let mut out = self.clone();
+        let elem = out.remove(value)?;
+        Some((elem, out))
+    }
+
     /// Keep only values that are in the given set.
     ///
     /// Time: O(n log m) where n = self.len(), m = other.len()
@@ -916,6 +1023,9 @@ where
             hasher_id: self.hasher_id,
             root: self.root.clone(),
             size: self.size,
+            content_hash_cache: AtomicU64::new(
+                self.content_hash_cache.load(AtomicOrdering::Relaxed),
+            ),
         }
     }
 }
@@ -1014,6 +1124,7 @@ where
             hasher_id: next_hasher_id(),
             root: None,
             size: 0,
+            content_hash_cache: AtomicU64::new(0),
         }
     }
 }
@@ -2040,5 +2151,101 @@ mod test {
         b.insert(1);
         b.insert(2); // different insertion order
         assert_eq!(hash_of(&a), hash_of(&b));
+    }
+
+    // ---- content_hash tests ----
+
+    #[test]
+    fn content_hash_empty_set() {
+        let set: HashSet<i32> = HashSet::new();
+        // Empty set: not yet computed.
+        assert!(!set.content_hash_valid());
+        let h = set.content_hash();
+        assert!(set.content_hash_valid());
+        assert_ne!(h, 0);
+    }
+
+    #[test]
+    fn content_hash_order_independent() {
+        // Two sets sharing the same hasher (via new_from) but built with
+        // different insertion orders must produce the same content hash,
+        // because the HAMT element hashes are identical (same hasher) and
+        // the combination via wrapping_add is commutative.
+        let mut a: HashSet<i32> = HashSet::new();
+        for i in 0..50 {
+            a.insert(i);
+        }
+        let mut b = a.new_from::<i32>();
+        for i in (0..50).rev() {
+            b.insert(i);
+        }
+        assert_eq!(a.content_hash(), b.content_hash());
+    }
+
+    #[test]
+    fn content_hash_different_sets_differ() {
+        // Clone shares the hasher, so content hashes are comparable.
+        let mut a: HashSet<i32> = (0..20).collect();
+        let mut b = a.clone();
+        b.insert(999);
+        // Probability of collision ≈ 2⁻⁶⁴.
+        assert_ne!(a.content_hash(), b.content_hash());
+    }
+
+    #[test]
+    fn content_hash_clone_inherits_cache() {
+        let mut set: HashSet<i32> = (0..30).collect();
+        let h = set.content_hash();
+        assert!(set.content_hash_valid());
+        let cloned = set.clone();
+        // Clone copies the cached value — no recomputation needed.
+        assert!(cloned.content_hash_valid());
+        assert_eq!(h, cloned.content_hash());
+    }
+
+    #[test]
+    fn content_hash_insert_invalidates() {
+        let mut set: HashSet<i32> = (0..10).collect();
+        let _ = set.content_hash(); // populate cache
+        assert!(set.content_hash_valid());
+        set.insert(999);
+        assert!(!set.content_hash_valid());
+    }
+
+    #[test]
+    fn content_hash_remove_invalidates() {
+        let mut set: HashSet<i32> = (0..10).collect();
+        let _ = set.content_hash();
+        assert!(set.content_hash_valid());
+        set.remove(&0);
+        assert!(!set.content_hash_valid());
+    }
+
+    #[test]
+    fn content_hash_retain_invalidates() {
+        let mut set: HashSet<i32> = (0..10).collect();
+        let _ = set.content_hash();
+        assert!(set.content_hash_valid());
+        set.retain(|v| *v < 5);
+        assert!(!set.content_hash_valid());
+    }
+
+    #[test]
+    fn content_hash_clear_invalidates() {
+        let mut set: HashSet<i32> = (0..10).collect();
+        let _ = set.content_hash();
+        assert!(set.content_hash_valid());
+        set.clear();
+        assert!(!set.content_hash_valid());
+    }
+
+    #[test]
+    fn content_hash_stable_after_recomputation() {
+        let mut set: HashSet<i32> = (0..20).collect();
+        let h1 = set.content_hash();
+        set.insert(9999);
+        set.remove(&9999);
+        // Back to the same content — hash should match.
+        assert_eq!(h1, set.content_hash());
     }
 }

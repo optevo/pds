@@ -311,4 +311,56 @@ mod tests {
             assert_eq!(map.get(&key), Some(&i));
         }
     }
+
+    #[test]
+    fn write_u16_is_identity() {
+        let bh = IdentityBuildHasher;
+        assert_eq!(hash_value(&bh, 0u16), 0);
+        assert_eq!(hash_value(&bh, 1000u16), 1000);
+        assert_eq!(hash_value(&bh, u16::MAX), u16::MAX as u64);
+    }
+
+    #[test]
+    fn write_i8_is_cast() {
+        let bh = IdentityBuildHasher;
+        assert_eq!(hash_value(&bh, 0i8), 0);
+        assert_eq!(hash_value(&bh, 1i8), 1);
+        // Negative values cast to u64 via as-cast (wrapping)
+        assert_eq!(hash_value(&bh, -1i8), (-1i8 as u64));
+    }
+
+    #[test]
+    fn write_i16_is_cast() {
+        let bh = IdentityBuildHasher;
+        assert_eq!(hash_value(&bh, 0i16), 0);
+        assert_eq!(hash_value(&bh, -1i16), (-1i16 as u64));
+    }
+
+    #[test]
+    fn write_i32_is_cast() {
+        let bh = IdentityBuildHasher;
+        assert_eq!(hash_value(&bh, 42i32), 42);
+        assert_eq!(hash_value(&bh, -42i32), (-42i32 as u64));
+    }
+
+    #[test]
+    fn write_i64_is_cast() {
+        let bh = IdentityBuildHasher;
+        assert_eq!(hash_value(&bh, 0i64), 0);
+        assert_eq!(hash_value(&bh, i64::MIN), (i64::MIN as u64));
+    }
+
+    #[test]
+    fn write_i128_xor_folds() {
+        let bh = IdentityBuildHasher;
+        let val: i128 = 0x0102030405060708_090a0b0c0d0e0f10_i128;
+        let expected = (val as u64) ^ ((val >> 64) as u64);
+        assert_eq!(hash_value(&bh, val), expected);
+    }
+
+    #[test]
+    fn write_isize_is_cast() {
+        let bh = IdentityBuildHasher;
+        assert_eq!(hash_value(&bh, 123isize), 123);
+    }
 }
