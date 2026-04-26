@@ -36,6 +36,9 @@
 | Appel, "Hash-Consing Garbage Collection" (Princeton TR-412-93, 1993) | GC-integrated hash consing, only intern survivors |
 | Anderson, Blelloch & Wei, "Turning Manual Concurrent Memory Reclamation into Automatic Reference Counting" (2022) | CDRC — validates Arc-based approach |
 | Ankur Dave, "Persistent Adaptive Radix Trees" (UC Berkeley) | PART — persistent ART for analytics (byte-string keys only) |
+| Blelloch, Dhulipala, Shun, Sun, Zhang, "PaC-trees: Supporting Parallel and Compressed Purely-Functional Collections Using Joinable Trees" (PLDI 2022) | Blocked-leaf balanced BST with parallel union/intersection/difference via join; 2.1–7.8× less space than PAM. Primary reference for future parallel OrdMap/OrdSet bulk ops. doi:10.1145/3519939.3523733 |
+| Blelloch, Ferizovic, Sun, "Joinable Parallel Balanced Binary Trees" (ACM TOPC 2022) | Foundational formalisation: a single `join` primitive unifies insert/delete/union/intersection/difference/split/filter/range for AVL, red-black, weight-balanced, and treap trees with work-efficient parallel algorithms. doi:10.1145/3512769 |
+| Allain, Clément, "Snapshottable Stores" (ICFP 2024, Distinguished Paper) | Imperative store with O(1) snapshot/restore on any subset of mutable references; journaled version tree; "record elision" makes reads/writes near-free when snapshots are infrequent. Background for future snapshot/undo-redo API on top of pds. |
 
 ---
 

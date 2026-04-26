@@ -2545,6 +2545,44 @@ shows 1.1.x, use that; if 1.2.0 has been released and is available, update the d
 
 ---
 
+### R.11 Parallel bulk operations for OrdMap and OrdSet (MEDIUM)
+
+**What:** Add `par_union`, `par_intersection`, `par_difference`, and `par_symmetric_difference`
+to `OrdMap` and `OrdSet` using join-based parallel algorithms.
+
+**Why:** pds's parallel set operations currently cover only `HashMap` and `HashSet` (and Bag,
+HashMultiMap, BiMap, SymMap via sequential delegation). `OrdMap` and `OrdSet` have fast
+sequential set ops but no parallel equivalents.
+
+**Algorithmic basis:**
+- Blelloch et al., "Joinable Parallel Balanced Binary Trees" (ACM TOPC 2022) — a single
+  `join` primitive unifies all set/map operations on balanced BSTs with work-efficient
+  parallel algorithms (O(m log(n/m + 2)) work, O(log² n) span for inputs of size m ≤ n).
+- Blelloch et al., "PaC-trees" (PLDI 2022) — demonstrates the approach works on blocked-leaf
+  trees (structurally similar to pds's B+ tree).
+
+**Implementation outline:**
+1. Expose a `split(key)` primitive on `GenericOrdMap` returning `(left, present, right)`.
+2. Expose a `join(left, key, right)` primitive that reconstructs a valid tree from two halves
+   and a separator.
+3. Implement `par_union` as parallel split + merge, recursing at each level via rayon.
+4. `par_intersection`, `par_difference`, `par_symmetric_difference` follow from the same
+   join/split building blocks.
+
+**Prerequisites:** Verify that `split` and `join` on pds's B+ tree are feasible without
+violating the `ORD_CHUNK_SIZE` fill-factor invariant. Prototype split/join sequentially
+before adding parallelism.
+
+**Complexity:** Medium-high. Split/join on B+ trees requires propagating underflow/overflow
+across levels, which is more involved than for BSTs. Profile against the current `par_iter().collect()`
+baseline to confirm speedup on large maps (≥100k entries) before committing.
+
+**Acceptance:** `par_union/par_intersection/par_difference/par_symmetric_difference` added
+to `OrdMap` and `OrdSet`. Criterion benchmarks show improvement over sequential equivalents
+at ≥50k entries. `test.sh` passes; property tests comparing par vs seq outputs.
+
+---
+
 ### 6.11 Cross-session interning: verbatim-hash pool reconstruction
 
 **Context:** `to_maps()` rebuilds maps via `FromIterator`, which re-hashes each
