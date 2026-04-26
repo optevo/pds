@@ -5,9 +5,16 @@
 use arbitrary::{size_hint, Arbitrary, MaxRecursionReached, Result, Unstructured};
 use core::hash::{BuildHasher, Hash};
 
+#[cfg(any(feature = "std", feature = "foldhash"))]
+use crate::hash_width::HashWidth;
 use crate::{
     shared_ptr::SharedPointerKind, GenericHashMap, GenericHashSet, GenericOrdMap, GenericOrdSet,
     GenericVector,
+};
+#[cfg(any(feature = "std", feature = "foldhash"))]
+use crate::{
+    GenericBag, GenericBiMap, GenericHashMultiMap, GenericInsertionOrderMap,
+    GenericInsertionOrderSet, GenericSymMap, GenericTrie,
 };
 
 impl<'a, A: Arbitrary<'a> + Clone, P: SharedPointerKind + 'static> Arbitrary<'a>
@@ -113,6 +120,200 @@ where
 impl<'a, A, S, P> Arbitrary<'a> for GenericHashSet<A, S, P>
 where
     A: Arbitrary<'a> + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default + 'static,
+    P: SharedPointerKind + 'static,
+{
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_iter()?.collect()
+    }
+
+    fn arbitrary_take_rest(u: Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_take_rest_iter()?.collect()
+    }
+
+    fn try_size_hint(
+        depth: usize,
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+        size_hint::try_recursion_guard(depth, |depth| {
+            Ok(size_hint::and(
+                <usize as Arbitrary>::try_size_hint(depth)?,
+                (0, None),
+            ))
+        })
+    }
+}
+
+#[cfg(any(feature = "std", feature = "foldhash"))]
+impl<'a, A, S, P> Arbitrary<'a> for GenericBag<A, S, P>
+where
+    A: Arbitrary<'a> + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default + 'static,
+    P: SharedPointerKind + 'static,
+{
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_iter()?.collect()
+    }
+
+    fn arbitrary_take_rest(u: Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_take_rest_iter()?.collect()
+    }
+
+    fn try_size_hint(
+        depth: usize,
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+        size_hint::try_recursion_guard(depth, |depth| {
+            Ok(size_hint::and(
+                <usize as Arbitrary>::try_size_hint(depth)?,
+                (0, None),
+            ))
+        })
+    }
+}
+
+#[cfg(any(feature = "std", feature = "foldhash"))]
+impl<'a, K, V, S, P, H: HashWidth> Arbitrary<'a> for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Arbitrary<'a> + Hash + Eq + Clone,
+    // HashMultiMap stores values in a per-key set, so V must also be Hash + Eq.
+    V: Arbitrary<'a> + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default + 'static,
+    P: SharedPointerKind + 'static,
+{
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_iter()?.collect()
+    }
+
+    fn arbitrary_take_rest(u: Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_take_rest_iter()?.collect()
+    }
+
+    fn try_size_hint(
+        depth: usize,
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+        size_hint::try_recursion_guard(depth, |depth| {
+            Ok(size_hint::and(
+                <usize as Arbitrary>::try_size_hint(depth)?,
+                (0, None),
+            ))
+        })
+    }
+}
+
+#[cfg(any(feature = "std", feature = "foldhash"))]
+impl<'a, K, V, S, P, H: HashWidth> Arbitrary<'a> for GenericInsertionOrderMap<K, V, S, P, H>
+where
+    K: Arbitrary<'a> + Hash + Eq + Clone,
+    V: Arbitrary<'a> + Clone,
+    S: BuildHasher + Clone + Default + 'static,
+    P: SharedPointerKind + 'static,
+{
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_iter()?.collect()
+    }
+
+    fn arbitrary_take_rest(u: Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_take_rest_iter()?.collect()
+    }
+
+    fn try_size_hint(
+        depth: usize,
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+        size_hint::try_recursion_guard(depth, |depth| {
+            Ok(size_hint::and(
+                <usize as Arbitrary>::try_size_hint(depth)?,
+                (0, None),
+            ))
+        })
+    }
+}
+
+#[cfg(any(feature = "std", feature = "foldhash"))]
+impl<'a, A, S, P, H: HashWidth> Arbitrary<'a> for GenericInsertionOrderSet<A, S, P, H>
+where
+    A: Arbitrary<'a> + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default + 'static,
+    P: SharedPointerKind + 'static,
+{
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_iter()?.collect()
+    }
+
+    fn arbitrary_take_rest(u: Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_take_rest_iter()?.collect()
+    }
+
+    fn try_size_hint(
+        depth: usize,
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+        size_hint::try_recursion_guard(depth, |depth| {
+            Ok(size_hint::and(
+                <usize as Arbitrary>::try_size_hint(depth)?,
+                (0, None),
+            ))
+        })
+    }
+}
+
+#[cfg(any(feature = "std", feature = "foldhash"))]
+impl<'a, K, V, S, P, H: HashWidth> Arbitrary<'a> for GenericBiMap<K, V, S, P, H>
+where
+    K: Arbitrary<'a> + Hash + Eq + Clone,
+    V: Arbitrary<'a> + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default + 'static,
+    P: SharedPointerKind + 'static,
+{
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_iter()?.collect()
+    }
+
+    fn arbitrary_take_rest(u: Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_take_rest_iter()?.collect()
+    }
+
+    fn try_size_hint(
+        depth: usize,
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+        size_hint::try_recursion_guard(depth, |depth| {
+            Ok(size_hint::and(
+                <usize as Arbitrary>::try_size_hint(depth)?,
+                (0, None),
+            ))
+        })
+    }
+}
+
+#[cfg(any(feature = "std", feature = "foldhash"))]
+impl<'a, A, S, P, H: HashWidth> Arbitrary<'a> for GenericSymMap<A, S, P, H>
+where
+    A: Arbitrary<'a> + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default + 'static,
+    P: SharedPointerKind + 'static,
+{
+    fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_iter()?.collect()
+    }
+
+    fn arbitrary_take_rest(u: Unstructured<'a>) -> Result<Self> {
+        u.arbitrary_take_rest_iter()?.collect()
+    }
+
+    fn try_size_hint(
+        depth: usize,
+    ) -> core::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+        size_hint::try_recursion_guard(depth, |depth| {
+            Ok(size_hint::and(
+                <usize as Arbitrary>::try_size_hint(depth)?,
+                (0, None),
+            ))
+        })
+    }
+}
+
+#[cfg(any(feature = "std", feature = "foldhash"))]
+impl<'a, K, V, S, P> Arbitrary<'a> for GenericTrie<K, V, S, P>
+where
+    K: Arbitrary<'a> + Hash + Eq + Clone,
+    V: Arbitrary<'a> + Clone,
     S: BuildHasher + Clone + Default + 'static,
     P: SharedPointerKind + 'static,
 {

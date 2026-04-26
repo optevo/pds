@@ -613,7 +613,7 @@ goal is to make the project safe to change: CI catches regressions,
 benchmarks quantify impact, fuzz targets catch edge cases, miri catches UB,
 and architecture documentation ensures changes are made with understanding.
 
-### 0.1 CI pipeline, test.sh, build.sh
+### 0.1 CI pipeline, test.sh, build.sh — DONE [2026-04-24]
 
 **What:** Set up GitHub Actions and standard project entry points.
 
@@ -637,7 +637,7 @@ feature is designed for testing but there's no evidence it's regularly run.
 
 ---
 
-### 0.2 Complete fuzz coverage
+### 0.2 Complete fuzz coverage — DONE [2026-04-24]
 
 **What:** Add missing fuzz targets and extend existing ones to cover
 unsafe-heavy code paths.
@@ -666,7 +666,7 @@ arithmetic will not be caught.
 
 ---
 
-### 0.3 Complete benchmark coverage
+### 0.3 Complete benchmark coverage — DONE [2026-04-24]
 
 **What:** Fill gaps in the benchmark suite and add measurement types that
 don't currently exist.
@@ -705,7 +705,7 @@ buffer), 4.2 (CHAMP prototype), 5.1 (triomphe default).
 
 ---
 
-### 0.4 Dependency audit
+### 0.4 Dependency audit — DONE [2026-04-24]
 
 **What:** Full review of all dependencies in `Cargo.toml` — both direct and
 transitive — for security, performance, staleness, and compatibility issues.
@@ -739,7 +739,7 @@ fixes that benefit pds directly.
 
 ---
 
-### 0.5 Architecture documentation
+### 0.5 Architecture documentation — DONE [2026-04-24]
 
 **What:** Document the current internal architecture of each data structure
 module before modifying it. This is a prerequisite for making safe changes,
@@ -791,7 +791,7 @@ audit), 4.1 (prefix buffer), 4.2 (CHAMP prototype).
 Low-risk cleanup that can proceed in parallel with Phase 0 or immediately
 after. Each item is an independent PR.
 
-### 1.1 Merge or close stale dependabot PRs
+### 1.1 Merge or close stale dependabot PRs — DONE [2026-04-24]
 
 **What:** Five dependabot PRs (#142, #132, #126, #125, #124) bumping rayon,
 rand, rpds, criterion, and half have sat unmerged for 6-12 months.
@@ -803,7 +803,7 @@ contain security fixes.
 
 ---
 
-### 1.2 Remove dead pool code
+### 1.2 Remove dead pool code — DONE [2026-04-24]
 
 **What:** Remove `fakepool.rs`, `vector/pool.rs`, and all references to
 `POOL_SIZE` (which doesn't exist in `config.rs` — the code referencing it
@@ -827,7 +827,7 @@ Removed entirely at v1.0.0 (DEC-025). See Done section.
 
 ---
 
-### 1.4 Edition 2021 migration
+### 1.4 Edition 2021 migration — DONE [2026-04-24]
 
 **What:** The crate uses `edition = "2018"` despite MSRV 1.85 (which
 supports edition 2021). Migrate to edition 2021.
@@ -846,7 +846,7 @@ Non-breaking changes that fix bugs or add missing API surface. Each is an
 independent PR suitable for upstream submission. These can start once the
 relevant Phase 0 items have landed.
 
-### 2.1 Fix RRB tree concatenation (issue [#35](https://github.com/jneem/imbl/issues/35))
+### 2.1 Fix RRB tree concatenation (issue [#35](https://github.com/jneem/imbl/issues/35)) — DONE [2026-04-24]
 
 **What:** Vector concatenation produces excessively deep trees. With
 branching factor 64, height 3 should accommodate ~200K elements, but vectors
@@ -883,7 +883,7 @@ General Purpose Immutable Sequence" (ICFP 2015); imbl issue #35.
 
 ---
 
-### 2.2 `get_next_exclusive` / `get_prev_exclusive` (issue [#157](https://github.com/jneem/imbl/issues/157))
+### 2.2 `get_next_exclusive` / `get_prev_exclusive` (issue [#157](https://github.com/jneem/imbl/issues/157)) — DONE [2026-04-24]
 
 **What:** `OrdMap::get_next(key)` uses `Bound::Included(key)`, so it returns
 the entry for `key` itself if it exists. Add `get_next_exclusive` (using
@@ -904,7 +904,7 @@ This is a pure addition — no existing API changes.
 
 ---
 
-### 2.3 OrdMap `iter_mut` (issue [#156](https://github.com/jneem/imbl/issues/156))
+### 2.3 OrdMap `iter_mut` (issue [#156](https://github.com/jneem/imbl/issues/156)) — DONE [2026-04-24]
 
 **What:** Add a mutable iterator to `OrdMap` and `OrdSet`. HashMap already
 has `iter_mut` (via `NodeIterMut` in hamt.rs), but btree.rs has zero mutable
@@ -932,7 +932,7 @@ position across nodes, yielding references) needs to be written.
 
 ---
 
-### 2.4 HashMap/HashSet diff
+### 2.4 HashMap/HashSet diff — DONE [2026-04-24]
 
 **What:** Add `diff()` to HashMap and HashSet, producing a `DiffIter` that
 yields `DiffItem::{Add, Update, Remove}` — matching the existing
@@ -964,7 +964,7 @@ for bitmap tries); Clojure `clojure.data/diff`.
 
 ---
 
-### 2.5 Vector diff
+### 2.5 Vector diff — DONE [2026-04-24]
 
 **What:** Add `diff()` to Vector, producing a `DiffIter` that yields
 positional `DiffItem::{Add(index, value), Update{index, old, new},
@@ -989,7 +989,7 @@ indices provide trivial alignment.
 
 ---
 
-### 2.6 Patch/apply from diff
+### 2.6 Patch/apply from diff — DONE [2026-04-24]
 
 **What:** Add an `apply_diff()` method that takes a DiffIter (or any
 iterator of `DiffItem`) and produces a new collection with the diff
@@ -1018,7 +1018,7 @@ exist.
 
 ---
 
-### 2.7 General merge
+### 2.7 General merge — DONE [2026-04-24]
 
 **What:** Add a general-purpose `merge_with` that combines two maps in a
 single traversal, handling all three partitions: keys only in the left
@@ -1061,7 +1061,7 @@ require parallel HAMT traversal — shared infrastructure.
 
 ---
 
-### 2.8 Map value and key transformations
+### 2.8 Map value and key transformations — DONE [2026-04-24]
 
 **What:** Add a family of map transformation methods that produce new
 maps with transformed values or keys. Currently, all such transforms
@@ -1108,7 +1108,7 @@ nodes since order is preserved. `try_map_values` adds early-exit logic.
 
 ---
 
-### 2.9 Map/set partitioning and bulk filtering
+### 2.9 Map/set partitioning and bulk filtering — DONE [2026-04-24]
 
 **What:** Add partitioning and bulk key-set filtering operations to maps
 and sets.
@@ -1154,7 +1154,7 @@ simultaneous traversal on OrdMap.
 
 ---
 
-### 2.10 Vector convenience operations
+### 2.10 Vector convenience operations — DONE [2026-04-24]
 
 **What:** Add commonly-needed Vector operations found in Scala and
 Haskell's sequence libraries.
@@ -1197,7 +1197,7 @@ window (use `skip`/`take` which are O(log n) on RRB trees).
 
 ---
 
-### 2.11 Companion collection types
+### 2.11 Companion collection types — DONE [2026-04-24]
 
 **What:** Add new collection types built on existing pds primitives,
 filling common patterns that currently require manual composition.
@@ -1267,7 +1267,7 @@ The core performance track. 3.1 is the foundation, 3.2 validates safety,
 all collection types, and 3.5–3.6 optimise equality and diff operations
 for structurally-shared collections.
 
-### 3.1 `Arc::get_mut` in-place mutation
+### 3.1 `Arc::get_mut` in-place mutation — DONE [2026-04-24]
 
 **What:** When a node's `SharedPointer` refcount is 1, mutate it in place
 instead of clone-on-write. Replace calls to `SharedPointer::make_mut` (which
@@ -1310,7 +1310,7 @@ Zach Tellman.
 
 ---
 
-### 3.2 Unsafe code audit (issue [#27](https://github.com/jneem/imbl/issues/27))
+### 3.2 Unsafe code audit (issue [#27](https://github.com/jneem/imbl/issues/27)) — DONE [2026-04-24]
 
 **What:** Audit, document, and where possible eliminate `unsafe` blocks. The
 crate uses `#[deny(unsafe_code)]` at the crate root (lib.rs:321) with
@@ -1365,7 +1365,7 @@ atomic CAS overhead but requires ~5000 lines of parallel node types.
 
 ---
 
-### 3.4 Parallel iterators and bulk operations (rayon)
+### 3.4 Parallel iterators and bulk operations (rayon) — DONE [2026-04-25]
 
 **What:** Extend rayon support beyond Vector to all collection types.
 Currently only `Vector` has `par_iter()` and `par_iter_mut()`. HashMap,
@@ -1431,7 +1431,7 @@ resolved DEC-004) and 3.3 (resolved DEC-008 — `&mut self` is sufficient).
 
 ---
 
-### 3.5 PartialEq ptr_eq fast paths
+### 3.5 PartialEq ptr_eq fast paths — DONE [2026-04-24]
 
 **What:** Add a `ptr_eq` early-exit check to the `PartialEq`
 implementation for HashMap, HashSet, and Vector. If two collections share
@@ -1459,7 +1459,7 @@ method.
 
 ---
 
-### 3.6 Pointer-aware subtree skipping in diff
+### 3.6 Pointer-aware subtree skipping in diff — DONE [2026-04-24]
 
 **What:** When diffing two collections that share structure, skip entire
 subtrees where `Arc::ptr_eq` confirms the subtree is physically
@@ -1506,7 +1506,7 @@ Structural changes to individual data structures. Each is a significant
 body of work. Items within this phase are independent of each other and
 can proceed in parallel.
 
-### 4.1 Vector prefix buffer
+### 4.1 Vector prefix buffer — DONE [2026-04-24]
 
 **What:** Add a prefix (head) buffer to complement the existing tail
 buffer. The current RRB structure has 4 buffers (`outer_f`, `inner_f`,
@@ -1635,7 +1635,7 @@ aligns with structural sharing philosophy.
 
 ---
 
-### 4.6 Vector Merkle hash caching
+### 4.6 Vector Merkle hash caching — DONE [2026-04-25]
 
 **What:** Maintain an incremental `u64` hash per RRB tree node, analogous
 to 4.4 (HAMT Merkle hash). When comparing two Vectors, if root hashes
@@ -1783,7 +1783,7 @@ implementation pattern and overhead analysis).
 
 ---
 
-### 4.7 Pluggable hash width and fast-path hashing
+### 4.7 Pluggable hash width and fast-path hashing — DONE [2026-04-25]
 
 **What:** Abstract the HAMT's internal hash representation to support
 wider hashes and provide convenience hashers for well-distributed key
@@ -2003,7 +2003,7 @@ eliminating this by wrapping the hasher in `SharedPointer`.
 
 ### 5.3 Configurable branching factor (issue [#145](https://github.com/jneem/imbl/issues/145)) — DEFERRED (nightly-gate path identified)
 
-**Status:** Deferred. See DEC-011.
+**Status:** Deferred — tracked as [R.13](#r13-configurable-branching-factor-via-const-generics-large--deferred). See DEC-011.
 
 **Blocker:** Stable Rust cannot compute derived constants from const generic
 parameters (`generic_const_exprs` is unstable, tracking issue
@@ -2467,7 +2467,7 @@ comment explaining what it checks.
 
 ---
 
-### R.8 Extend proptest / quickcheck / arbitrary to newer collection types (LOW)
+### R.8 Extend proptest / quickcheck / arbitrary to newer collection types (LOW) — DONE [2026-04-26]
 
 **What:** `proptest`, `quickcheck`, and `arbitrary` feature implementations exist only for the
 five original types (Vector, OrdMap, OrdSet, HashMap, HashSet). The seven newer types
@@ -2590,7 +2590,7 @@ at ≥50k entries. `test.sh` passes; property tests comparing par vs seq outputs
 
 ---
 
-### 6.11 Cross-session interning: verbatim-hash pool reconstruction
+### R.12 Cross-session interning: verbatim-hash pool reconstruction (MEDIUM-HIGH) — DEFERRED
 
 **Context:** `to_maps()` rebuilds maps via `FromIterator`, which re-hashes each
 key with a fresh `RandomState`. This means loaded maps have a different hasher
@@ -2598,25 +2598,35 @@ seed from the original session. Consequently, their HAMT Merkle hashes differ
 from the original, and `InternPool` cannot merge loaded nodes with in-memory
 ones — they appear content-different even when semantically equal.
 
-**What:** Add `to_maps_verbatim()` (and set/bag/bimap/symmap variants) that
-reconstruct maps by inserting (key, value, pre-computed-hash) triples directly
-into the HAMT, bypassing re-hashing. The stored H values in `PoolEntry::Value(A, H)`
-are verbatim from the original session. After verbatim reconstruction, the loaded
-map has the same H values, same HAMT structure, and same Merkle hashes as the
-original — so a subsequent `intern(pool)` call can merge it with the live
-in-memory original, restoring full pointer sharing.
+**Option A — Deterministic hashing (recommended simple path):**
+If the caller uses a fixed-seed hasher (`IdentityHasher` for integer keys, or a
+seeded `FxHasher`/`AHash` with a hard-coded seed), the same key always produces
+the same hash across sessions. In that case `to_maps()` already works — no new
+API needed. The maps round-trip with identical HAMT structure, identical Merkle
+hashes, and `InternPool` merges them correctly.
 
-**Why this matters:** Without this, every serialise+load cycle breaks the sharing
-boundary. With it, a global `InternPool` becomes a true singleton that rationalises
-all content-equal nodes as they are loaded — regardless of session boundaries.
+Additional benefits of deterministic hashing:
+- **Reproducible test failures:** property tests that expose a bug can be replayed
+  exactly; non-deterministic hasher seeds cause spurious failures to not reproduce.
+- **Deterministic debugging:** inspecting a map's internal HAMT layout is stable
+  across runs — the same key always lands in the same slot.
+- **Comparable snapshots:** Merkle hashes for the same logical content are equal
+  across processes and restarts, enabling efficient diff and sync operations.
 
-**Precondition:** The pool must have been serialised from a map using the same
-hasher configuration that will be active when loading. Violating this produces a
-structurally valid but semantically incorrect map (wrong slot assignments). This
-should be documented as a user invariant and, where possible, enforced by storing
-a hasher fingerprint in the pool format.
+Trade-off: Deterministic hashers (especially identity hashers) are vulnerable to
+Hash DoS if keys come from untrusted sources (web inputs, adversarial data). For
+controlled environments (internal data, pre-validated keys), this is not a concern.
+Recommended hasher for integer keys: `IdentityHasher` (already in this crate).
+For string/byte keys in non-adversarial contexts: `FxHasher` with a fixed seed.
 
-**API sketch:**
+**Option B — Verbatim reconstruction (original design, higher complexity):**
+Add `to_maps_verbatim()` (and set/bag/bimap/symmap variants) that reconstruct
+maps by inserting (key, value, pre-computed-hash) triples directly into the HAMT,
+bypassing re-hashing. The stored H values in `PoolEntry::Value(A, H)` are verbatim
+from the original session. After verbatim reconstruction, the loaded map has the
+same H values, same HAMT structure, and same Merkle hashes as the original.
+
+**API sketch (Option B):**
 ```rust
 impl<K: Clone, V: Clone, H: HashWidth> HashMapPool<K, V, H> {
     /// Reconstruct maps using stored hash values verbatim (no re-hashing).
@@ -2628,19 +2638,50 @@ impl<K: Clone, V: Clone, H: HashWidth> HashMapPool<K, V, H> {
 }
 ```
 
-**Complexity:** Medium-high. Requires a new HAMT insertion path that accepts a
-pre-computed hash and bypasses `BuildHasher`. The `insert_with_hash` internal API
-exists in some form already (used by `from_iter`). Fuzz coverage essential —
-incorrect hash values corrupt the HAMT invariants silently.
+**Precondition (Option B):** The pool must have been serialised from a map using the same
+hasher configuration that will be active when loading. Violating this produces a
+structurally valid but semantically incorrect map (wrong slot assignments). This
+should be documented as a user invariant and, where possible, enforced by storing
+a hasher fingerprint in the pool format.
 
-**Go/no-go question:** Is deterministic hashing (option 1: fixed seed) a simpler
-path to the same goal? If the caller is willing to use a non-random hasher,
-`to_maps()` already works — no new API needed. Verbatim reconstruction is the
-right path only when hash-randomisation is non-negotiable.
+**Recommendation:** Start with Option A (document deterministic hashing as the
+cross-session interning pattern). Implement Option B only if a concrete use case
+requires hash-randomisation to remain enabled (e.g. public-facing APIs accepting
+untrusted keys). Option A is zero additional implementation cost.
+
+**Complexity:** Option A — zero (documentation + IdentityHasher example). Option B —
+medium-high (new HAMT insertion path + fuzz coverage).
 
 **Prerequisites:** 6.6 ✓ (SSP serialisation), 6.5 ✓ (InternPool).
 
+**Acceptance:** Either: (A) documentation + example demonstrating cross-session
+round-trip with deterministic hasher, confirming Merkle hash stability; or (B)
+`to_maps_verbatim()` and variants with fuzz target and round-trip test. `test.sh` passes.
+
 ---
+
+### R.13 Configurable branching factor via const generics (LARGE) — DEFERRED
+
+**Blocker:** `generic_const_exprs` is unstable on stable Rust (rust-lang/rust#76560).
+The HAMT's SIMD node hierarchy requires `SparseChunk<..., 2^HASH_LEVEL_SIZE>` — a
+computed const generic argument. Full historical context in [Phase 5.3](#phase-5).
+
+**What:** Replace the hard-coded size constants in `config.rs` (`HASH_LEVEL_SIZE`,
+`VECTOR_CHUNK_SIZE`, `ORD_CHUNK_SIZE`) with const generic parameters on the
+collection types, letting callers specialise pds for their workload at compile time.
+
+**Nightly-gate approach:** Add a `nightly-branching` feature flag that enables
+`#![feature(generic_const_exprs)]`. Gated behind the feature, all collection types
+accept const generic size parameters.
+
+**Complexity:** Large (~140 type sites, ~80 impl blocks).
+
+**Dependencies:** `generic_const_exprs` stabilisation, or decision to accept a
+nightly-only `nightly-branching` feature flag for specific consumers.
+
+**Acceptance:** All collection types accept const generic size parameters under
+the `nightly-branching` flag. `test.sh` passes including the `small-chunks` variant.
+A stable-Rust path exists once `generic_const_exprs` stabilises.
 
 ### 3.4: Parallel bulk operations — DONE
 
@@ -2669,17 +2710,6 @@ identity property, map/set integration at 1000 entries. Exposed as
 `pds::identity_hasher::{IdentityHasher, IdentityBuildHasher}`.
 
 **Dependencies:** None (4.7 stages 1+2 done).
-
----
-
-### 5.3: Configurable branching factor — DEFERRED
-
-**Status:** Blocked on `generic_const_exprs` stabilisation (tracking
-issue rust-lang/rust#76560). Nightly-gate approach identified but the
-scope (~140 type sites, ~80 impl blocks) is disproportionate to the
-benefit over the existing `small-chunks` feature flag. See DEC-011.
-
-**Dependencies:** `generic_const_exprs` stabilisation.
 
 ---
 
