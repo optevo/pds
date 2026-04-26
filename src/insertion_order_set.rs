@@ -170,6 +170,30 @@ where
         self.map.remove(elem).is_some()
     }
 
+    /// Return a reference to the first element in insertion order, or `None` if empty.
+    pub fn front(&self) -> Option<&A> {
+        self.map.front().map(|(a, _)| a)
+    }
+
+    /// Return a reference to the last element in insertion order, or `None` if empty.
+    pub fn back(&self) -> Option<&A> {
+        self.map.back().map(|(a, _)| a)
+    }
+
+    /// Remove and return the first element in insertion order (FIFO dequeue).
+    ///
+    /// Returns `None` if the set is empty.
+    pub fn pop_front(&mut self) -> Option<A> {
+        self.map.pop_front().map(|(a, _)| a)
+    }
+
+    /// Remove and return the last element in insertion order (LIFO dequeue).
+    ///
+    /// Returns `None` if the set is empty.
+    pub fn pop_back(&mut self) -> Option<A> {
+        self.map.pop_back().map(|(a, _)| a)
+    }
+
     /// Iterate over elements in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = &A> {
         self.map.iter().map(|(a, _)| a)
@@ -750,5 +774,59 @@ mod test {
         let v = vec![1i32, 2, 3];
         let s: InsertionOrderSet<i32> = InsertionOrderSet::from(&v);
         assert_eq!(s.len(), 3);
+    }
+
+    #[test]
+    fn front_back_empty() {
+        let s: InsertionOrderSet<i32> = InsertionOrderSet::new();
+        assert_eq!(s.front(), None);
+        assert_eq!(s.back(), None);
+    }
+
+    #[test]
+    fn front_back_order() {
+        let mut s = InsertionOrderSet::new();
+        s.insert(10i32);
+        s.insert(20i32);
+        s.insert(30i32);
+        assert_eq!(s.front(), Some(&10));
+        assert_eq!(s.back(), Some(&30));
+    }
+
+    #[test]
+    fn pop_front_fifo() {
+        let mut s = InsertionOrderSet::new();
+        s.insert("a");
+        s.insert("b");
+        s.insert("c");
+        assert_eq!(s.pop_front(), Some("a"));
+        assert_eq!(s.pop_front(), Some("b"));
+        assert_eq!(s.pop_front(), Some("c"));
+        assert_eq!(s.pop_front(), None);
+    }
+
+    #[test]
+    fn pop_back_lifo() {
+        let mut s = InsertionOrderSet::new();
+        s.insert("a");
+        s.insert("b");
+        s.insert("c");
+        assert_eq!(s.pop_back(), Some("c"));
+        assert_eq!(s.pop_back(), Some("b"));
+        assert_eq!(s.pop_back(), Some("a"));
+        assert_eq!(s.pop_back(), None);
+    }
+
+    #[test]
+    fn dedup_queue_simulation() {
+        // Classic BFS / work-queue pattern: enqueue only if not already pending.
+        let mut queue: InsertionOrderSet<&str> = InsertionOrderSet::new();
+        queue.insert("node-1");
+        queue.insert("node-2");
+        queue.insert("node-1"); // already queued — ignored
+        queue.insert("node-3");
+        assert_eq!(queue.len(), 3);
+        let drained: Vec<_> = core::iter::from_fn(|| queue.pop_front()).collect();
+        assert_eq!(drained, vec!["node-1", "node-2", "node-3"]);
     }
 }

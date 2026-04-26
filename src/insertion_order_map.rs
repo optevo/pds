@@ -211,6 +211,36 @@ where
         self.entries.remove(&idx).map(|(_, v)| v)
     }
 
+    /// Return a reference to the first key-value pair in insertion order, or `None` if empty.
+    pub fn front(&self) -> Option<(&K, &V)> {
+        self.entries.get_min().map(|(_, (k, v))| (k, v))
+    }
+
+    /// Return a reference to the last key-value pair in insertion order, or `None` if empty.
+    pub fn back(&self) -> Option<(&K, &V)> {
+        self.entries.get_max().map(|(_, (k, v))| (k, v))
+    }
+
+    /// Remove and return the first key-value pair in insertion order (FIFO dequeue).
+    ///
+    /// Returns `None` if the map is empty.
+    pub fn pop_front(&mut self) -> Option<(K, V)> {
+        let counter = self.entries.get_min()?.0;
+        let (k, v) = self.entries.remove(&counter)?;
+        self.index.remove(&k);
+        Some((k, v))
+    }
+
+    /// Remove and return the last key-value pair in insertion order (LIFO dequeue).
+    ///
+    /// Returns `None` if the map is empty.
+    pub fn pop_back(&mut self) -> Option<(K, V)> {
+        let counter = self.entries.get_max()?.0;
+        let (k, v) = self.entries.remove(&counter)?;
+        self.index.remove(&k);
+        Some((k, v))
+    }
+
     /// Iterate over key-value pairs in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.entries.iter().map(|(_, (k, v))| (k, v))
@@ -896,5 +926,82 @@ mod test {
         *m.get_mut("a").unwrap() = 42;
         assert_eq!(m.get("a"), Some(&42));
         assert_eq!(m.get_mut("z"), None);
+    }
+
+    #[test]
+    fn front_and_back_empty() {
+        let m: InsertionOrderMap<&str, i32> = InsertionOrderMap::new();
+        assert_eq!(m.front(), None);
+        assert_eq!(m.back(), None);
+    }
+
+    #[test]
+    fn front_and_back_single() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("only", 1i32);
+        assert_eq!(m.front(), Some((&"only", &1)));
+        assert_eq!(m.back(), Some((&"only", &1)));
+    }
+
+    #[test]
+    fn front_and_back_multiple() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("a", 1i32);
+        m.insert("b", 2i32);
+        m.insert("c", 3i32);
+        assert_eq!(m.front(), Some((&"a", &1)));
+        assert_eq!(m.back(), Some((&"c", &3)));
+    }
+
+    #[test]
+    fn pop_front_fifo_order() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("a", 1i32);
+        m.insert("b", 2i32);
+        m.insert("c", 3i32);
+        assert_eq!(m.pop_front(), Some(("a", 1)));
+        assert_eq!(m.pop_front(), Some(("b", 2)));
+        assert_eq!(m.pop_front(), Some(("c", 3)));
+        assert_eq!(m.pop_front(), None);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn pop_back_lifo_order() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("a", 1i32);
+        m.insert("b", 2i32);
+        m.insert("c", 3i32);
+        assert_eq!(m.pop_back(), Some(("c", 3)));
+        assert_eq!(m.pop_back(), Some(("b", 2)));
+        assert_eq!(m.pop_back(), Some(("a", 1)));
+        assert_eq!(m.pop_back(), None);
+    }
+
+    #[test]
+    fn pop_front_removes_from_lookup() {
+        // After pop_front, the key must no longer be findable via get().
+        let mut m = InsertionOrderMap::new();
+        m.insert("x", 42i32);
+        m.insert("y", 99i32);
+        m.pop_front();
+        assert_eq!(m.get("x"), None);
+        assert!(m.contains_key("y"));
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn pop_front_unique_queue_dedup() {
+        // Simulate a deduplicating FIFO work queue.
+        let mut queue = InsertionOrderMap::<&str, ()>::new();
+        queue.insert("task-a", ());
+        queue.insert("task-b", ());
+        queue.insert("task-a", ()); // duplicate — no-op
+        queue.insert("task-c", ());
+        assert_eq!(queue.len(), 3);
+        assert_eq!(queue.pop_front().map(|(k, _)| k), Some("task-a"));
+        assert_eq!(queue.pop_front().map(|(k, _)| k), Some("task-b"));
+        assert_eq!(queue.pop_front().map(|(k, _)| k), Some("task-c"));
+        assert_eq!(queue.pop_front(), None);
     }
 }

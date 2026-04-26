@@ -58,6 +58,15 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-26] Queue/deque ops on InsertionOrderSet and OrdInsertionOrderSet.**
+  Added `front()`, `back()`, `pop_front()`, `pop_back()` to
+  `GenericInsertionOrderMap`, `GenericInsertionOrderSet`,
+  `GenericOrdInsertionOrderMap`, `GenericOrdInsertionOrderSet`.
+  All four ops are O(log n) via `OrdMap::get_min/get_max`. This enables
+  use of `InsertionOrderSet` as a persistent deduplicating FIFO queue —
+  push via `insert()`, dequeue via `pop_front()`. Re-inserting a key that
+  is already queued is a no-op (standard `insert` behaviour). 11 new tests.
+
 - **[2026-04-26] R.12 Option A — Document deterministic hashing pattern.**
   Zero implementation cost. Added a "Cross-session consistency" section to
   `src/identity_hasher.rs` explaining how `IdentityBuildHasher` enables

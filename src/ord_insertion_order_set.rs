@@ -110,6 +110,30 @@ impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdInsertionOrderSet<A, P> {
         self.map.remove(value).is_some()
     }
 
+    /// Return a reference to the first element in insertion order, or `None` if empty.
+    pub fn front(&self) -> Option<&A> {
+        self.map.front().map(|(a, _)| a)
+    }
+
+    /// Return a reference to the last element in insertion order, or `None` if empty.
+    pub fn back(&self) -> Option<&A> {
+        self.map.back().map(|(a, _)| a)
+    }
+
+    /// Remove and return the first element in insertion order (FIFO dequeue).
+    ///
+    /// Returns `None` if the set is empty.
+    pub fn pop_front(&mut self) -> Option<A> {
+        self.map.pop_front().map(|(a, _)| a)
+    }
+
+    /// Remove and return the last element in insertion order (LIFO dequeue).
+    ///
+    /// Returns `None` if the set is empty.
+    pub fn pop_back(&mut self) -> Option<A> {
+        self.map.pop_back().map(|(a, _)| a)
+    }
+
     /// Iterate over elements in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = &A> {
         self.map.keys()
@@ -515,5 +539,58 @@ mod test {
         set.insert(1i32);
         let s = format!("{:?}", set);
         assert!(s.contains("1"));
+    }
+
+    #[test]
+    fn front_back_empty() {
+        let s: OrdInsertionOrderSet<i32> = OrdInsertionOrderSet::new();
+        assert_eq!(s.front(), None);
+        assert_eq!(s.back(), None);
+    }
+
+    #[test]
+    fn front_back_order() {
+        let mut s = OrdInsertionOrderSet::new();
+        s.insert(10i32);
+        s.insert(20i32);
+        s.insert(30i32);
+        assert_eq!(s.front(), Some(&10));
+        assert_eq!(s.back(), Some(&30));
+    }
+
+    #[test]
+    fn pop_front_fifo() {
+        let mut s = OrdInsertionOrderSet::new();
+        s.insert(1i32);
+        s.insert(2i32);
+        s.insert(3i32);
+        assert_eq!(s.pop_front(), Some(1));
+        assert_eq!(s.pop_front(), Some(2));
+        assert_eq!(s.pop_front(), Some(3));
+        assert_eq!(s.pop_front(), None);
+    }
+
+    #[test]
+    fn pop_back_lifo() {
+        let mut s = OrdInsertionOrderSet::new();
+        s.insert(1i32);
+        s.insert(2i32);
+        s.insert(3i32);
+        assert_eq!(s.pop_back(), Some(3));
+        assert_eq!(s.pop_back(), Some(2));
+        assert_eq!(s.pop_back(), Some(1));
+        assert_eq!(s.pop_back(), None);
+    }
+
+    #[test]
+    fn dedup_queue_simulation() {
+        let mut queue: OrdInsertionOrderSet<i32> = OrdInsertionOrderSet::new();
+        queue.insert(1);
+        queue.insert(2);
+        queue.insert(1); // duplicate — ignored
+        queue.insert(3);
+        assert_eq!(queue.len(), 3);
+        let drained: Vec<_> = core::iter::from_fn(|| queue.pop_front()).collect();
+        assert_eq!(drained, vec![1, 2, 3]);
     }
 }

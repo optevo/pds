@@ -160,6 +160,36 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap
         self.entries.remove(&idx).map(|(_, v)| v)
     }
 
+    /// Return a reference to the first key-value pair in insertion order, or `None` if empty.
+    pub fn front(&self) -> Option<(&K, &V)> {
+        self.entries.get_min().map(|(_, (k, v))| (k, v))
+    }
+
+    /// Return a reference to the last key-value pair in insertion order, or `None` if empty.
+    pub fn back(&self) -> Option<(&K, &V)> {
+        self.entries.get_max().map(|(_, (k, v))| (k, v))
+    }
+
+    /// Remove and return the first key-value pair in insertion order (FIFO dequeue).
+    ///
+    /// Returns `None` if the map is empty.
+    pub fn pop_front(&mut self) -> Option<(K, V)> {
+        let counter = self.entries.get_min()?.0;
+        let (k, v) = self.entries.remove(&counter)?;
+        self.key_index.remove(&k);
+        Some((k, v))
+    }
+
+    /// Remove and return the last key-value pair in insertion order (LIFO dequeue).
+    ///
+    /// Returns `None` if the map is empty.
+    pub fn pop_back(&mut self) -> Option<(K, V)> {
+        let counter = self.entries.get_max()?.0;
+        let (k, v) = self.entries.remove(&counter)?;
+        self.key_index.remove(&k);
+        Some((k, v))
+    }
+
     /// Iterate over key-value pairs in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.entries.iter().map(|(_, (k, v))| (k, v))
@@ -735,5 +765,72 @@ mod test {
         let s = format!("{:?}", map);
         assert!(s.contains("1"));
         assert!(s.contains("10"));
+    }
+
+    #[test]
+    fn front_and_back_empty() {
+        let m: OrdInsertionOrderMap<i32, i32> = OrdInsertionOrderMap::new();
+        assert_eq!(m.front(), None);
+        assert_eq!(m.back(), None);
+    }
+
+    #[test]
+    fn front_and_back_multiple() {
+        let mut m = OrdInsertionOrderMap::new();
+        m.insert(1i32, 10i32);
+        m.insert(2i32, 20i32);
+        m.insert(3i32, 30i32);
+        assert_eq!(m.front(), Some((&1, &10)));
+        assert_eq!(m.back(), Some((&3, &30)));
+    }
+
+    #[test]
+    fn pop_front_fifo_order() {
+        let mut m = OrdInsertionOrderMap::new();
+        m.insert(1i32, 10i32);
+        m.insert(2i32, 20i32);
+        m.insert(3i32, 30i32);
+        assert_eq!(m.pop_front(), Some((1, 10)));
+        assert_eq!(m.pop_front(), Some((2, 20)));
+        assert_eq!(m.pop_front(), Some((3, 30)));
+        assert_eq!(m.pop_front(), None);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn pop_back_lifo_order() {
+        let mut m = OrdInsertionOrderMap::new();
+        m.insert(1i32, 10i32);
+        m.insert(2i32, 20i32);
+        m.insert(3i32, 30i32);
+        assert_eq!(m.pop_back(), Some((3, 30)));
+        assert_eq!(m.pop_back(), Some((2, 20)));
+        assert_eq!(m.pop_back(), Some((1, 10)));
+        assert_eq!(m.pop_back(), None);
+    }
+
+    #[test]
+    fn pop_front_removes_from_key_index() {
+        let mut m = OrdInsertionOrderMap::new();
+        m.insert(10i32, "a");
+        m.insert(20i32, "b");
+        m.pop_front();
+        assert_eq!(m.get(&10), None);
+        assert!(m.contains_key(&20));
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn pop_front_unique_queue_dedup() {
+        let mut queue = OrdInsertionOrderMap::<i32, ()>::new();
+        queue.insert(1, ());
+        queue.insert(2, ());
+        queue.insert(1, ()); // duplicate — no-op
+        queue.insert(3, ());
+        assert_eq!(queue.len(), 3);
+        assert_eq!(queue.pop_front().map(|(k, _)| k), Some(1));
+        assert_eq!(queue.pop_front().map(|(k, _)| k), Some(2));
+        assert_eq!(queue.pop_front().map(|(k, _)| k), Some(3));
+        assert_eq!(queue.pop_front(), None);
     }
 }
