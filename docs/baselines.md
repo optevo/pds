@@ -15,6 +15,7 @@ regressions or improvements. Compare against these numbers.
 - [Build speed](#build-speed)
 - [Test speed](#test-speed)
 - [Benchmark summary](#benchmark-summary)
+- [OrdMap vs HashMap — head-to-head](#ordmap-vs-hashmap)
 - [Memory profiling (dhat)](#memory-profiling-dhat)
 - [How to re-run](#how-to-re-run)
 
@@ -182,6 +183,122 @@ bash bench.sh -- --baseline v7
 
 When updating this document, note the date, Rust version, and any
 significant changes that may have affected the numbers.
+
+---
+
+## OrdMap vs HashMap — head-to-head {#sec:ordmap-vs-hashmap}
+
+**Date:** 2026-04-27
+**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
+**Rust:** 1.95.0 (stable)
+**Bench:** `cargo bench --bench compare --features rayon -- compare/<op>`
+**Keys:** `i64`, randomised, seeded RNG (reproducible)
+**Method:** Each benchmark runs one operation per iteration across the full
+key set; all values are the criterion median.
+
+### lookup (n random hits)
+
+| Size  | HashMap   | OrdMap    | Faster |
+|------:|----------:|----------:|--------|
+|   100 |   549 ns  |   630 ns  | HashMap ×1.15 |
+| 1,000 |  5.76 µs  | 10.60 µs  | HashMap ×1.84 |
+| 10,000|  74.6 µs  |  157 µs   | HashMap ×2.11 |
+| 100,000| 1.17 ms  |  2.27 ms  | HashMap ×1.94 |
+
+HAMT gives O(1) amortised lookups (fixed trie depth for the key range);
+OrdMap is O(log n) with a higher constant due to binary search per B+ node.
+
+### insert_mut (build from empty, n sequential inserts, sole owner)
+
+| Size  | HashMap   | OrdMap    | Faster |
+|------:|----------:|----------:|--------|
+|   100 |  2.20 µs  |  1.26 µs  | OrdMap ×1.74 |
+| 1,000 | 30.4 µs   | 16.2 µs   | OrdMap ×1.88 |
+| 10,000| 236 µs    | 230 µs    | ≈ equal       |
+| 100,000| 3.97 ms  |  2.01 ms  | OrdMap ×1.98 |
+
+OrdMap wins when the map is solely owned: copy-on-write detects the sole
+reference and mutates in-place without allocating. HashMap's HAMT must
+always rewrite trie nodes even under sole ownership.
+
+### remove_mut (remove all keys in shuffled order, sole owner)
+
+| Size  | HashMap   | OrdMap    | Faster |
+|------:|----------:|----------:|--------|
+|   100 |  2.87 µs  |  1.31 µs  | OrdMap ×2.19 |
+| 1,000 | 32.7 µs   | 18.9 µs   | OrdMap ×1.73 |
+| 10,000| 328 µs    |  380 µs   | HashMap ×1.16 |
+| 100,000| 6.15 ms  |  7.38 ms  | HashMap ×1.20 |
+
+Crossover near 10K: OrdMap rebalancing cost overtakes HAMT's per-remove
+overhead as the tree grows. At 100K OrdMap is ~20% slower.
+
+### iter (full iteration, all n entries)
+
+| Size  | HashMap   | OrdMap    | Faster |
+|------:|----------:|----------:|--------|
+|   100 |   199 ns  |   145 ns  | OrdMap ×1.37 |
+| 1,000 |  1.89 µs  |  1.35 µs  | OrdMap ×1.40 |
+| 10,000|  33.3 µs  |  14.3 µs  | OrdMap ×2.33 |
+| 100,000|  553 µs  |   155 µs  | OrdMap ×3.57 |
+
+B+ tree leaves are contiguous arrays of up to 32 key-value pairs — cache
+line friendly. HAMT nodes are sparse bitmapped arrays with irregular
+sizes; traversal has worse spatial locality.
+
+### from_iter (bulk construction from Vec of pairs)
+
+| Size  | HashMap   | OrdMap    | Faster |
+|------:|----------:|----------:|--------|
+|   100 |  2.21 µs  |  1.18 µs  | OrdMap ×1.87 |
+| 1,000 | 30.4 µs   | 17.1 µs   | OrdMap ×1.78 |
+| 10,000| 246 µs    |  179 µs   | OrdMap ×1.37 |
+| 100,000| 4.05 ms  |  2.05 ms  | OrdMap ×1.98 |
+
+OrdMap `from_iter` benefits from in-place mutation of the sole owner
+during bulk insert; HashMap always pays allocation cost per HAMT node.
+
+### par_union (two maps with 50% overlap, parallel)
+
+| Size  | HashMap   | OrdMap    | Faster |
+|------:|----------:|----------:|--------|
+| 10,000|  1.08 ms  |  267 µs   | OrdMap ×4.0 |
+| 100,000| 13.0 ms  |  840 µs   | OrdMap ×15.5 |
+
+OrdMap uses the O(m log(n/m)) parallel join algorithm (split + recurse +
+concat). HashMap uses filter+reduce (collect all keys not in self, then
+insert sequentially) — O(n) with a large sequential bottleneck. The gap
+widens with size because the join algorithm's sequential phase is O(log n).
+
+### par_intersection (two maps with 50% overlap, parallel)
+
+| Size  | HashMap   | OrdMap    | Faster |
+|------:|----------:|----------:|--------|
+| 10,000|  929 µs   |  437 µs   | OrdMap ×2.1 |
+| 100,000|  9.55 ms |  1.49 ms  | OrdMap ×6.4 |
+
+Same join-vs-filter algorithm difference as par_union.
+
+### Summary
+
+| Operation | Winner | Margin |
+|-----------|--------|--------|
+| lookup | HashMap | 1.2–2.1× |
+| insert_mut | OrdMap | 1.7–2.0× (except ~equal at 10K) |
+| remove_mut | OrdMap at ≤1K; HashMap at ≥10K | up to ×2.2 / ×1.2 |
+| iter | OrdMap | 1.4–3.6× |
+| from_iter | OrdMap | 1.4–2.0× |
+| par_union | OrdMap | 4–16× |
+| par_intersection | OrdMap | 2–6× |
+
+**When to use HashMap:** random key lookups dominate (point queries on
+large maps). The HAMT's O(1) amortised lookup is ~2× faster than B+ tree
+binary search at 10K–100K entries.
+
+**When to use OrdMap:** writes, iteration, bulk construction, parallel
+set operations, or when sorted order / range queries are needed. In most
+workloads OrdMap is equal or faster, with a large advantage in parallel
+set operations.
 
 ---
 

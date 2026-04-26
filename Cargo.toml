@@ -124,3 +124,7 @@ harness = false
 name = "memory"
 harness = false
 
+[[bench]]
+name = "compare"
+harness = false
+

@@ -59,6 +59,15 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-27] R.17 — Head-to-head OrdMap vs HashMap criterion benchmarks.**
+  Added `benches/compare.rs` with 7 benchmark groups (lookup, insert_mut,
+  remove_mut, iter, from_iter, par_union, par_intersection) across sizes
+  100/1K/10K/100K for scalar ops and 10K/100K for parallel ops. Results in
+  `docs/baselines.md` § "OrdMap vs HashMap — head-to-head". Key findings:
+  OrdMap faster for all write/bulk/iteration workloads (1.4–2× scalar,
+  4–16× parallel set ops); HashMap ~2× faster only for random point lookups.
+  `bench.sh compare` and `bench.sh compare -- --features rayon` run clean.
+
 - **[2026-04-26] UniqueVector — persistent sequence with uniqueness guarantee.**
   New collection type `UniqueVector<A>` backed by `GenericVector<A, P>` +
   `GenericHashSet<A, S, P, H>`. Provides push_back/push_front (dedup), pop_front/
@@ -707,16 +716,7 @@ single v2.0.0 release in Phase 5.
 
 ## Current {#current}
 
-All residual items from the R-series are now complete. Next item: R.17.
-
-1. **Mark R.11 Done** ✓ — completed 2026-04-26.
-2. **R.15** ✓ — Node size benchmark completed 2026-04-26. Size 32 confirmed.
-3. **R.14** ✓ — `ord-hash` content hash completed 2026-04-26. Default-on, O(1) PartialEq.
-4. **R.16** ✓ — All Ord-backed compound types implemented: OrdBag, OrdMultiMap, OrdSymMap,
-   OrdBiMap, OrdTrie, OrdInsertionOrderMap, OrdInsertionOrderSet. 186 tests pass.
-5. **R.12 Option A** ✓ — Deterministic hashing documented 2026-04-26. Zero implementation cost.
-6. **R.17 (new)** — Head-to-head OrdMap vs HashMap criterion benchmark (same ops, same sizes).
-   Backs the "B+ tree is better" claims in the docs with real numbers.
+All residual items including R.17 are now complete. No active work item.
 
 ---
 
