@@ -61,7 +61,7 @@ a different collection set and design philosophy.
 | **Version** | 1.0.0 | 7.0.0 | 15.1.0 | 1.2.0 |
 | **Last release** | 2026 | Jan 2026 | Apr 2022 | Nov 2025 |
 | **Vector** | RRB tree | RRB tree | RRB tree | — (indexable sequence) |
-| **HashMap / Set** | SIMD HAMT | HAMT | HAMT | HAMT |
+| **HashMap / Set** | SIMD HAMT | SIMD HAMT | HAMT | HAMT |
 | **OrdMap / Set** | B+ tree | B+ tree | B-tree | Red-black tree |
 | **Bag** | yes | — | — | — |
 | **HashMultiMap** | yes | — | — | — |
@@ -72,7 +72,7 @@ a different collection set and design philosophy.
 | **Trie** | yes | — | — | — |
 | **List / Stack / Queue** | — | — | — | yes |
 | **Merkle hashing** | O(1) equality | — | — | — |
-| **SIMD node ops** | yes | — | — | — |
+| **SIMD node ops** | yes | yes | — | — |
 | **`no_std`** | yes (via `foldhash`) | — | — | yes |
 | **`triomphe::Arc`** | yes | — | — | — |
 | **Hash consing** | yes (`InternPool`) | — | — | — |
@@ -82,7 +82,6 @@ a different collection set and design philosophy.
 | **proptest / quickcheck** | yes | yes | yes | — |
 
 **Key differences from imbl:**
-- SIMD-accelerated HAMT nodes for faster hash map/set operations
 - Merkle hashing on all collections for O(1) structural equality checks
 - Seven additional collection types (Bag, HashMultiMap, InsertionOrderMap, InsertionOrderSet, BiMap, SymMap, Trie)
 - Hash consing via `InternPool` — deduplicates identical HAMT subtrees across collections
