@@ -504,6 +504,23 @@ where
     })
 }
 
+// ── eq ────────────────────────────────────────────────────────────────────────
+
+/// Benchmarks OrdMap PartialEq on structurally-shared clones (no hash cache).
+/// The ptr_eq fast path should make this O(1) instead of O(n).
+fn bench_eq_clone(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ordmap_i64/eq_clone");
+    for &size in &[1_000usize, 10_000, 100_000] {
+        let keys = i64::generate(size);
+        let m: OrdMap<i64, i64> = keys.iter().copied().zip(keys.iter().copied()).collect();
+        let m2 = m.clone(); // structurally shared — ptr_eq fast path applies
+        group.bench_function(format!("eq_clone_{size}"), |b| {
+            b.iter(|| black_box(black_box(&m) == black_box(&m2)))
+        });
+    }
+    group.finish();
+}
+
 // Benchmark functions for each map type
 fn bench_ordmap(c: &mut Criterion) {
     bench_group::<OrdMap<i64, i64>, i64, i64>(c, "ordmap_i64");
@@ -690,6 +707,7 @@ fn bench_parallel(c: &mut Criterion) {
 // Main benchmark entry point
 fn ordmap_benches(c: &mut Criterion) {
     bench_ordmap(c);
+    bench_eq_clone(c);
     bench_parallel(c);
 
     if std::env::var("BENCH_STD").is_ok() {

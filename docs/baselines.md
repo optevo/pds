@@ -16,6 +16,7 @@ regressions or improvements. Compare against these numbers.
 - [Test speed](#test-speed)
 - [Benchmark summary](#benchmark-summary)
 - [OrdMap vs HashMap — head-to-head](#ordmap-vs-hashmap)
+- [OrdMap PartialEq — ptr_eq fast path](#ordmap-partialeq--ptr_eq-fast-path)
 - [Memory profiling (dhat)](#memory-profiling-dhat)
 - [How to re-run](#how-to-re-run)
 
@@ -299,6 +300,28 @@ binary search at 10K–100K entries.
 set operations, or when sorted order / range queries are needed. In most
 workloads OrdMap is equal or faster, with a large advantage in parallel
 set operations.
+
+---
+
+## OrdMap PartialEq — ptr_eq fast path {#sec:ordmap-eq-ptr-eq}
+
+`cargo bench --bench ordmap --features rayon -- eq_clone`
+
+Measures `map == map.clone()` where both maps are unmodified clones (structurally
+shared root). Before the fix, this fell back to `diff()` — O(n) element-by-element
+scan. After adding the `ptr_eq` fast path, it short-circuits immediately.
+
+| Size | Time (after fix) |
+|------|-----------------|
+| 1,000 | 1.165 ns |
+| 10,000 | 1.146 ns |
+| 100,000 | 1.162 ns |
+
+**O(1) for all sizes** — a single pointer comparison. For a 100K-element map the
+prior O(n) scan would have taken ~hundreds of microseconds; the fix is a >10,000×
+speedup on that pattern. Content hash cache (`ord-hash` feature) would also have
+short-circuited if pre-populated, but a fresh clone has `cache = 0` (uncached) so
+the ptr_eq check is the only reliable O(1) fast path.
 
 ---
 

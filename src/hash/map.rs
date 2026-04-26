@@ -1264,26 +1264,32 @@ where
         V: Hash,
     {
         let hash = hash_key(&self.hasher, &k);
-        let value_hash = self.hasher.hash_one(&v);
         let root = SharedPointer::make_mut(self.root.get_or_insert_with(SharedPointer::default));
-        let result = root.insert(hash, 0, (k, v));
-        if let Some((_, ref old_v)) = result {
-            if self.kv_merkle_valid {
+        if self.kv_merkle_valid {
+            // Compute value_hash before moving v into the HAMT; only done
+            // when kv_merkle_valid so the hash work is never wasted.
+            let value_hash = self.hasher.hash_one(&v);
+            let result = root.insert(hash, 0, (k, v));
+            if let Some((_, ref old_v)) = result {
                 let old_value_hash = self.hasher.hash_one(old_v);
                 self.kv_merkle_hash = self
                     .kv_merkle_hash
                     .wrapping_sub(fmix64(hash.to_u64().wrapping_add(old_value_hash)))
                     .wrapping_add(fmix64(hash.to_u64().wrapping_add(value_hash)));
-            }
-        } else {
-            self.size += 1;
-            if self.kv_merkle_valid {
+            } else {
+                self.size += 1;
                 self.kv_merkle_hash = self
                     .kv_merkle_hash
                     .wrapping_add(fmix64(hash.to_u64().wrapping_add(value_hash)));
             }
+            result.map(|(_, v)| v)
+        } else {
+            let result = root.insert(hash, 0, (k, v));
+            if result.is_none() {
+                self.size += 1;
+            }
+            result.map(|(_, v)| v)
         }
-        result.map(|(_, v)| v)
     }
 
     /// Remove a key/value pair from a map, if it exists, and return

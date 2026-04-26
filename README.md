@@ -359,11 +359,12 @@ a different collection set and design philosophy.
 
 ## Parallel support
 
-All collection types gain parallel capabilities under the `rayon` feature flag.
+The core types and their Hash-backed derived types gain parallel capabilities under
+the `rayon` feature flag. **Ord-backed derived types** (`OrdBag`, `OrdMultiMap`,
+`OrdBiMap`, `OrdSymMap`, `OrdTrie`, `OrdInsertionOrderMap`, `OrdInsertionOrderSet`)
+do not currently have rayon support — only sequential operations.
 
 ### Parallel iteration
-
-Every collection type that supports sequential iteration also supports parallel iteration via `par_iter()` and — where ordering semantics allow — `FromParallelIterator` and `ParallelExtend`.
 
 | Type | `par_iter` | `FromParallelIterator` | `ParallelExtend` | Notes |
 |------|:----------:|:---------------------:|:----------------:|-------|
@@ -373,12 +374,19 @@ Every collection type that supports sequential iteration also supports parallel 
 | `OrdSet<A>` | ✓ | ✓ | ✓ | |
 | `Vector<A>` | ✓ | ✓ | ✓ | |
 | `Bag<A>` | ✓ | ✓ | ✓ | Also `par_elements()` for flat expansion |
+| `OrdBag<A>` | — | — | — | No rayon support |
 | `HashMultiMap<K, V>` | ✓ | ✓ | ✓ | Default hasher only |
+| `OrdMultiMap<K, V>` | — | — | — | No rayon support |
 | `BiMap<K, V>` | ✓ | ✓ | ✓ | Default hasher only |
+| `OrdBiMap<K, V>` | — | — | — | No rayon support |
 | `SymMap<A>` | ✓ | ✓ | ✓ | Default hasher only |
+| `OrdSymMap<A>` | — | — | — | No rayon support |
 | `InsertionOrderMap<K, V>` | ✓ | — | — | Parallel collection loses insertion order |
+| `OrdInsertionOrderMap<K, V>` | — | — | — | No rayon support |
 | `InsertionOrderSet<A>` | ✓ | — | — | Parallel collection loses insertion order |
-| `Trie<K, V>` | — | — | — | Not supported |
+| `OrdInsertionOrderSet<A>` | — | — | — | No rayon support |
+| `Trie<K, V>` | — | — | — | No rayon support |
+| `OrdTrie<K, V>` | — | — | — | No rayon support |
 
 ### Parallel set operations
 
@@ -397,6 +405,9 @@ parallelise the computation.
 | `HashMultiMap<K, V>` | ✓† | ✓ | ✓ | ✓ |
 | `BiMap<K, V>` | ✓† | ✓ | ✓ | ✓ |
 | `SymMap<A>` | ✓† | ✓ | ✓ | ✓ |
+
+All Ord-backed derived types (`OrdBag`, `OrdMultiMap`, `OrdBiMap`, `OrdSymMap`,
+`OrdTrie`, `OrdInsertionOrderMap`, `OrdInsertionOrderSet`): no parallel set operations.
 
 † `par_union` delegates to the sequential implementation for these types.
 `BiMap` and `SymMap` maintain bijection/symmetry invariants that require

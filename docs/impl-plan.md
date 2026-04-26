@@ -59,6 +59,18 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-26] Perf review: OrdMap ptr_eq fast path + HashMap insert guard.**
+  Detailed performance review of `nodes/hamt.rs`, `nodes/btree.rs`, `hash/map.rs`,
+  `nodes/rrb.rs`, `vector/mod.rs`, `ord/map.rs`. Two optimisations implemented:
+  (1) `OrdMap::PartialEq` now checks `ptr_eq` before the content_hash_cache check —
+  structurally-shared clones compare in O(1) (~1.15 ns) rather than O(n) diff traversal.
+  Benchmarked: `eq_clone_100000` = 1.15 ns (flat across 1K/10K/100K).
+  (2) `HashMap::insert` defers `value_hash` computation to inside the
+  `kv_merkle_valid=true` branch, avoiding wasted hash work when the cache is
+  invalidated. README parallel support section corrected: Ord-backed derived types
+  have no rayon support; tables updated with all Ord/Hash variants.
+  Added `bench_eq_clone` to `benches/ordmap.rs`.
+
 - **[2026-04-27] R.17 — Head-to-head OrdMap vs HashMap criterion benchmarks.**
   Added `benches/compare.rs` with 7 benchmark groups (lookup, insert_mut,
   remove_mut, iter, from_iter, par_union, par_intersection) across sizes

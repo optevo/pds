@@ -2416,6 +2416,11 @@ where
         if self.len() != other.len() {
             return false;
         }
+        // Fast path: both roots share the same allocation (or both empty) — identical maps.
+        // Mirrors the ptr_eq fast path in HashMap::PartialEq.
+        if self.ptr_eq(other) {
+            return true;
+        }
         // Fast equality/inequality via cached content hash.
         // `DefaultHasher` uses deterministic keys — identical content produces
         // identical hashes regardless of construction path. Collision probability
