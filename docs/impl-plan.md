@@ -590,8 +590,15 @@ single v2.0.0 release in Phase 5.
 ## Current {#current}
 
 All phases complete. All Phase 6 research items resolved (5 killed, 1
-deprioritised, 3 done). 11 collection types. See [Residual](#residual)
-for the few remaining open items.
+deprioritised, 3 done). 11 collection types.
+
+**Next priority: [R.11](#r11-parallel-bulk-operations-for-ordmap-and-ordset-medium)** —
+Parallel `par_union`, `par_intersection`, `par_difference`, `par_symmetric_difference`
+for `OrdMap` and `OrdSet` using join-based algorithms (PaC-trees PLDI 2022 / TOPC 2022).
+This closes the gap between HashMap/HashSet (parallel set ops done) and OrdMap/OrdSet
+(sequential only). See the R.11 entry below for scope and implementation outline.
+
+See [Residual](#residual) for all remaining open items.
 
 ---
 
