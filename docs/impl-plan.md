@@ -5,10 +5,11 @@ Rust). Forked from [imbl](https://github.com/jneem/imbl) with different
 design priorities: performance over compatibility, Merkle hashing, SIMD
 HAMT nodes, and no_std support.
 
-**Current state (Apr 2026):** v1.0.0, ~12K lines of Rust, 11 collection
-types (Vector, HashMap, HashSet, OrdMap, OrdSet, Bag, HashMultiMap,
-InsertionOrderMap, BiMap, SymMap, Trie). SIMD HAMT, Merkle hashing,
-and no_std support implemented.
+**Current state (Apr 2026):** v1.0.0, ~12K lines of Rust, 19 collection
+types (Vector, HashMap, HashSet, OrdMap, OrdSet, Bag, OrdBag, HashMultiMap,
+OrdMultiMap, InsertionOrderMap, OrdInsertionOrderMap, InsertionOrderSet,
+OrdInsertionOrderSet, BiMap, OrdBiMap, SymMap, OrdSymMap, Trie, OrdTrie).
+SIMD HAMT, Merkle hashing, and no_std support implemented.
 
 ---
 
@@ -56,6 +57,65 @@ single v2.0.0 release in Phase 5.
 ## Done {#done}
 
 *Newest first.*
+
+- **[2026-04-26] R.12 Option A — Document deterministic hashing pattern.**
+  Zero implementation cost. Added a "Cross-session consistency" section to
+  `src/identity_hasher.rs` explaining how `IdentityBuildHasher` enables
+  cross-session `InternPool` merging, reproducible Merkle hashes, and
+  deterministic test snapshots. Added a "Deterministic hashing" section to
+  `src/lib.rs` crate-level docs covering the full set of use cases (integer keys
+  → `IdentityBuildHasher`, string/composite keys → fixed-seed AHash/FxHash),
+  noting that `Ord`-backed collections are always deterministic without
+  configuration. Hash DoS caveat documented in both locations. README and lib.rs
+  collection tables updated for all 19 types; README comparison table updated
+  with 7 new Ord-backed types and `ord-hash` feature row added.
+
+- **[2026-04-26] R.16 — OrdInsertionOrderSet: sorted insertion-ordered set.**
+  `OrdInsertionOrderSet<A>` / `GenericOrdInsertionOrderSet<A, P>` in `src/ord_insertion_order_set.rs`.
+  Backed by `GenericOrdInsertionOrderMap<A, ()>`. `A: Ord + Clone` only. Full trait coverage.
+  Set ops: union, difference, intersection, symmetric_difference. 28 tests.
+
+- **[2026-04-26] R.16 — OrdInsertionOrderMap: sorted insertion-ordered map.**
+  `OrdInsertionOrderMap<K, V>` / `GenericOrdInsertionOrderMap<K, V, P>` in
+  `src/ord_insertion_order_map.rs`. Backed by two OrdMaps:
+  `OrdMap<K, usize>` (key→counter) + `OrdMap<usize, (K, V)>` (counter→entry). No hasher,
+  `K: Ord + Clone`. O(log n) delete, no tombstones (vs HashMap+Vector approach). Full trait
+  coverage + IndexMut. 29 tests.
+
+- **[2026-04-26] R.16 — OrdTrie: sorted persistent prefix tree.**
+  `OrdTrie<K, V>` / `GenericOrdTrie<K, V, P>` in `src/ord_trie.rs`. Children stored in
+  `GenericOrdMap<K, GenericOrdTrie<K, V, P>, P>` — no hasher param. `K: Ord + Clone`.
+  Iteration visits paths in sorted lexicographic order. `subtrie`/`get`/`contains_path` use
+  `Comparable<K>`. Full trait coverage + IndexMut. `prune()`, `iter_prefix()`, set ops. 37 tests.
+
+- **[2026-04-26] R.16 — OrdBiMap: sorted bidirectional map.**
+  `OrdBiMap<K, V>` / `GenericOrdBiMap<K, V, P>` in `src/ord_bimap.rs`. Backed by two OrdMaps
+  (`OrdMap<K, V>` forward + `OrdMap<V, K>` backward). Bijection invariant maintained. No hasher,
+  `K: Ord + Clone`, `V: Ord + Clone`. Full trait coverage. 31 tests.
+
+- **[2026-04-26] R.16 — OrdSymMap: sorted symmetric bidirectional map.**
+  `OrdSymMap<A>` / `GenericOrdSymMap<A, P>` in `src/ord_symmap.rs`. Backed by two OrdMaps.
+  O(1) `swap()`. No hasher, `A: Ord + Clone`. `PartialOrd`/`Ord` via forward iter. Full trait
+  coverage. Reuses `Direction` from `symmap.rs`. 34 tests.
+
+- **[2026-04-26] R.16 (partial) — OrdMultiMap: sorted persistent multimap.**
+  `OrdMultiMap<K, V>` / `GenericOrdMultiMap<K, V, P>` added in `src/ord_multimap.rs`.
+  Backed by `GenericOrdMap<K, GenericOrdSet<V, P>, P>`. No hasher parameter; requires
+  only `K: Ord + Clone`, `V: Ord + Clone`. Full trait coverage: Clone, Debug, Default,
+  PartialEq, Eq, PartialOrd, Ord, Hash, FromIterator, Extend, IntoIterator (owned + &),
+  Index, From<Vec/&Vec/[T;N]>. Set ops (all &self): union, intersection, difference,
+  symmetric_difference. `key_count()`, `contains_key()`, `contains()`, `get()`,
+  `iter_sets()`, `keys()`. Hash uses sequential sorted-order (no XOR combiner). 34 tests.
+  Exported as `pds::OrdMultiMap` and `pds::GenericOrdMultiMap`.
+
+- **[2026-04-26] R.16 (partial) — OrdBag: sorted persistent multiset.**
+  `OrdBag<A>` / `GenericOrdBag<A, P>` added in `src/ord_bag.rs`. Backed by
+  `GenericOrdMap<A, usize, P>`. No hasher parameter; requires only `A: Ord + Clone`.
+  Full trait coverage: Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash,
+  FromIterator, Extend, IntoIterator (owned + &), From<Vec/[T;N]/&[T]/&Vec>. Set ops:
+  union, intersection, difference, symmetric_difference (all O(n)). Range queries via
+  `range()`. Hash uses sequential order (canonical sorted iteration — no XOR combiner
+  needed). 32 tests. Exported as `pds::OrdBag` and `pds::GenericOrdBag`.
 
 - **[2026-04-26] R.14 — `ord-hash` content hash for OrdMap and OrdSet.**
   `AtomicU64` content hash cache added to `GenericOrdMap`. Invalidated on every
@@ -626,15 +686,16 @@ single v2.0.0 release in Phase 5.
 
 ## Current {#current}
 
-Working through the open residual items in the following order:
+All residual items from the R-series are now complete. Next item: R.17.
 
 1. **Mark R.11 Done** ✓ — completed 2026-04-26.
 2. **R.15** ✓ — Node size benchmark completed 2026-04-26. Size 32 confirmed.
 3. **R.14** ✓ — `ord-hash` content hash completed 2026-04-26. Default-on, O(1) PartialEq.
-4. **R.17 (new)** — Head-to-head OrdMap vs HashMap criterion benchmark (same ops, same sizes).
+4. **R.16** ✓ — All Ord-backed compound types implemented: OrdBag, OrdMultiMap, OrdSymMap,
+   OrdBiMap, OrdTrie, OrdInsertionOrderMap, OrdInsertionOrderSet. 186 tests pass.
+5. **R.12 Option A** ✓ — Deterministic hashing documented 2026-04-26. Zero implementation cost.
+6. **R.17 (new)** — Head-to-head OrdMap vs HashMap criterion benchmark (same ops, same sizes).
    Backs the "B+ tree is better" claims in the docs with real numbers.
-5. **R.16** — Ord-backed compound types: `OrdBag` → `OrdMultiMap` → `OrdSymMap` → `OrdBiMap`.
-6. **R.12 Option A** — Document deterministic hashing pattern. Zero implementation cost.
 
 ---
 

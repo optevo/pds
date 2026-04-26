@@ -39,6 +39,13 @@ share unchanged subtrees with the original.
 | Type | Algorithm | Constraints | Description |
 |------|-----------|-------------|-------------|
 | `Bag<A>` | SIMD HAMT | `Clone + Hash + Eq` | Persistent multiset — tracks element counts |
+| `OrdBag<A>` | B+ tree | `Clone + Ord` | Sorted multiset — `Ord`, `Hash`, range queries |
+| `OrdMultiMap<K, V>` | B+ tree | `Clone + Ord` | Sorted key → sorted value-set multimap — `Ord`, `Hash`, range queries |
+| `OrdSymMap<A>` | 2× B+ tree | `Clone + Ord` | Sorted symmetric bidirectional map — `Ord`, `Hash` |
+| `OrdBiMap<K, V>` | 2× B+ tree | `Clone + Ord` | Sorted bidirectional map — bijection, `Ord`, `Hash` |
+| `OrdTrie<K, V>` | B+ tree of B+ trees | `Clone + Ord` | Sorted prefix tree — lexicographic path iteration |
+| `OrdInsertionOrderMap<K, V>` | 2× B+ tree | `Clone + Ord` | Insertion-ordered map — `Ord`-only, O(log n) delete |
+| `OrdInsertionOrderSet<A>` | 2× B+ tree | `Clone + Ord` | Insertion-ordered set — `Ord`-only, O(log n) delete |
 | `HashMultiMap<K, V>` | SIMD HAMT | `Clone + Hash + Eq` | Key → set of values multimap |
 | `InsertionOrderMap<K, V>` | SIMD HAMT + B+ tree | `Clone + Hash + Eq` | Map that iterates in insertion order |
 | `InsertionOrderSet<A>` | SIMD HAMT + B+ tree | `Clone + Hash + Eq` | Set that iterates in insertion order |
@@ -89,11 +96,13 @@ depends on hash distribution and trie depth — see [Allocation profiling] below
   in `par_union` and `par_intersection` detect when both operands share the same root
   pointer and short-circuit to O(1). Maps that are frequently cloned and then re-unioned
   with minimal changes benefit from this.
-- You rely on **Merkle hash fast-paths for equality on same-lineage maps.** Two maps
-  with equal Merkle hashes and equal length are structurally equal in O(1). For general
-  equality checks, OrdMap's sorted scan is comparably fast; this fast-path is specifically
-  useful in version-tree or content-addressed-cache patterns where the same map instance
-  is compared against many others.
+- You need **O(1) equality on frequently cloned maps.** Both `HashMap` and `OrdMap`
+  have content-hash equality fast-paths, but the HAMT's per-node Merkle hashes update
+  incrementally on each mutation so the root hash is always valid without a rescan.
+  `OrdMap`'s `ord-hash` (default-on) gives the same O(1) positive and negative
+  fast-paths but recomputes lazily after each mutation. For patterns where a map is
+  cloned many times, mutated once, and compared immediately, the HAMT avoids the
+  deferred rescan cost.
 
 The `ord-hash` feature (default-on) adds a cached content hash to `OrdMap`/`OrdSet`,
 giving them an O(1) `PartialEq` negative fast-path (different hash → definitely unequal)
@@ -169,12 +178,19 @@ a different collection set and design philosophy.
 | **HashMap / Set** | SIMD HAMT | SIMD HAMT | HAMT | HAMT |
 | **OrdMap / Set** | B+ tree | B+ tree | B-tree | Red-black tree |
 | **Bag** | yes | — | — | — |
+| **OrdBag** | yes | — | — | — |
 | **HashMultiMap** | yes | — | — | — |
+| **OrdMultiMap** | yes | — | — | — |
 | **InsertionOrderMap** | yes | — | — | — |
 | **InsertionOrderSet** | yes | — | — | — |
+| **OrdInsertionOrderMap** | yes | — | — | — |
+| **OrdInsertionOrderSet** | yes | — | — | — |
 | **BiMap** | yes | — | — | — |
+| **OrdBiMap** | yes | — | — | — |
 | **SymMap** | yes | — | — | — |
+| **OrdSymMap** | yes | — | — | — |
 | **Trie** | yes | — | — | — |
+| **OrdTrie** | yes | — | — | — |
 | **List / Stack / Queue** | — | — | — | yes |
 | **Merkle hashing** | O(1) equality | — | — | — |
 | **SIMD node ops** | yes | yes | — | — |
@@ -189,7 +205,7 @@ a different collection set and design philosophy.
 
 **Key differences from imbl:**
 - Merkle hashing on all collections for O(1) structural equality checks
-- Seven additional collection types (Bag, HashMultiMap, InsertionOrderMap, InsertionOrderSet, BiMap, SymMap, Trie)
+- Fourteen additional collection types: Bag, OrdBag, HashMultiMap, OrdMultiMap, InsertionOrderMap, InsertionOrderSet, OrdInsertionOrderMap, OrdInsertionOrderSet, BiMap, OrdBiMap, SymMap, OrdSymMap, Trie, OrdTrie
 - Hash consing via `InternPool` — deduplicates identical HAMT subtrees across collections
 - Structural-sharing-preserving serialisation via `HashMapPool` — serialises/deserialises trees with node deduplication and cross-session interning
 - `no_std` support via the `foldhash` feature flag
@@ -220,6 +236,7 @@ a different collection set and design philosophy.
 | `atom` | No | Thread-safe atomic state holder via `arc-swap` (requires `std`) |
 | `hash-intern` | No | Hash consing / node interning for HAMT collections via `InternPool` — deduplicates identical subtrees for memory savings and O(1) pointer equality |
 | `persist` | No | Structural-sharing-preserving serialisation via `HashMapPool` — serialises HAMT trees with node deduplication, reconstructs with hash consing. Requires `hash-intern` |
+| `ord-hash` | Yes | Cached content hash on `OrdMap` and `OrdSet` — O(1) `PartialEq` fast-path, `content_hash()` method, and `Hash` impl when `K: Hash, V: Hash`. One atomic store per mutation; overhead is unmeasurable for typical workloads. |
 | `small-chunks` | No | Reduces internal chunk sizes so tree structures can be exercised with small collections. For testing only — not intended for production use. |
 | `debug` | No | Enables internal invariant-checking methods on `Vector` (RRB tree validation). For testing and debugging only. |
 

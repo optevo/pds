@@ -21,11 +21,12 @@
 //! * [`HashMap<K, V>`][hashmap::HashMap] / [`HashSet<A>`][hashset::HashSet] — HAMT-based unordered map and set
 //! * [`OrdMap<K, V>`][ordmap::OrdMap] / [`OrdSet<A>`][ordset::OrdSet] — B+ tree sorted map and set
 //! * [`InsertionOrderMap<K, V>`][crate::InsertionOrderMap] / [`InsertionOrderSet<A>`][crate::InsertionOrderSet] — insertion-ordered map and set
-//! * [`Bag<A>`][crate::Bag] — persistent multiset tracking element counts
-//! * [`HashMultiMap<K, V>`][crate::HashMultiMap] — key → set of values multimap
-//! * [`BiMap<K, V>`][crate::BiMap] — bidirectional bijection map
-//! * [`SymMap<A>`][crate::SymMap] — symmetric bidirectional map
-//! * [`Trie<K, V>`][crate::Trie] — persistent prefix tree
+//! * [`Bag<A>`][crate::Bag] / [`OrdBag<A>`][crate::OrdBag] — persistent multiset tracking element counts
+//! * [`HashMultiMap<K, V>`][crate::HashMultiMap] / [`OrdMultiMap<K, V>`][crate::OrdMultiMap] — key → set of values multimap
+//! * [`BiMap<K, V>`][crate::BiMap] / [`OrdBiMap<K, V>`][crate::OrdBiMap] — bidirectional bijection map
+//! * [`SymMap<A>`][crate::SymMap] / [`OrdSymMap<A>`][crate::OrdSymMap] — symmetric bidirectional map
+//! * [`Trie<K, V>`][crate::Trie] / [`OrdTrie<K, V>`][crate::OrdTrie] — persistent prefix tree
+//! * [`OrdInsertionOrderMap<K, V>`][crate::OrdInsertionOrderMap] / [`OrdInsertionOrderSet<A>`][crate::OrdInsertionOrderSet] — `Ord`-only insertion-ordered collections
 //!
 //! ## Why Would I Want This?
 //!
@@ -262,12 +263,78 @@
 //! | Type | Description | Key Constraints |
 //! | --- | --- | --- |
 //! | [`Bag<A>`][crate::Bag] | Persistent multiset (bag) — tracks element counts | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//! | [`OrdBag<A>`][crate::OrdBag] | Sorted multiset — `Ord`, `Hash`, and `range()` | [`Clone`] + [`Ord`] |
+//! | [`OrdMultiMap<K, V>`][crate::OrdMultiMap] | Sorted key → sorted set of values multimap | [`Clone`] + [`Ord`] |
+//! | [`OrdSymMap<A>`][crate::OrdSymMap] | Sorted symmetric bidirectional map | [`Clone`] + [`Ord`] |
+//! | [`OrdBiMap<K, V>`][crate::OrdBiMap] | Sorted bidirectional map — bijection between two types | [`Clone`] + [`Ord`] |
+//! | [`OrdTrie<K, V>`][crate::OrdTrie] | Sorted prefix tree — lexicographic path iteration | [`Clone`] + [`Ord`] |
+//! | [`OrdInsertionOrderMap<K, V>`][crate::OrdInsertionOrderMap] | Insertion-ordered map — `Ord`-only, no tombstones | [`Clone`] + [`Ord`] |
+//! | [`OrdInsertionOrderSet<A>`][crate::OrdInsertionOrderSet] | Insertion-ordered set — `Ord`-only, no tombstones | [`Clone`] + [`Ord`] |
 //! | [`HashMultiMap<K, V>`][crate::HashMultiMap] | Key → set of values multimap | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`InsertionOrderMap<K, V>`][crate::InsertionOrderMap] | Map that iterates in insertion order | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`InsertionOrderSet<A>`][crate::InsertionOrderSet] | Set that iterates in insertion order | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`BiMap<K, V>`][crate::BiMap] | Bidirectional map — bijection between two types | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`SymMap<A>`][crate::SymMap] | Symmetric bidirectional map with O(1) swap | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`Trie<K, V>`][crate::Trie] | Persistent prefix tree (trie) — paths to values | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//!
+//! ### Ord-backed variants
+//!
+//! Several compound types have an `Ord`-backed variant (prefix `Ord`) alongside the
+//! default hash-backed variant. The `Ord` variants:
+//!
+//! - Require only `Clone + Ord` — no `Hash + Eq` on keys or elements.
+//! - Iterate in **sorted order by definition**, which means they implement
+//!   `PartialOrd`, `Ord`, and `Hash` without an order-independent combiner.
+//! - Support **range queries** over elements or keys.
+//! - Have **no hasher type parameter** (`S`) — the generic signature is simpler.
+//! - Work in `no_std` without the `foldhash` feature because `OrdMap` needs no hasher.
+//!
+//! Where a hash-backed type has both a map and a set form, the `Ord` variant follows the
+//! same pattern: `OrdBag` pairs with `Bag`; `OrdMultiMap` pairs with `HashMultiMap`;
+//! `OrdSymMap` pairs with `SymMap`; `OrdBiMap` pairs with `BiMap`; `OrdTrie` pairs with
+//! `Trie`; `OrdInsertionOrderMap` and `OrdInsertionOrderSet` pair with
+//! `InsertionOrderMap` and `InsertionOrderSet`.
+//!
+//! Use the `Ord` variant when you need ordering, range queries, or the simpler type
+//! signature; use the hash variant when `Hash + Eq` is available and you do not need order.
+//!
+//! ## Deterministic hashing
+//!
+//! By default `HashMap` and `HashSet` use a randomised hasher
+//! (`RandomState`) seeded differently on every process start — a deliberate
+//! defence against hash-flooding attacks. This means that the HAMT node
+//! layout, and therefore every node pointer and Merkle hash, varies between
+//! runs even for identical key sets.
+//!
+//! When cross-session consistency matters — reproducible test snapshots,
+//! node deduplication across serialised pools, or merging an `InternPool`
+//! loaded from disk with one built at runtime — you can opt into deterministic
+//! hashing by choosing a fixed-seed hasher:
+//!
+//! | Use case | Recommended hasher |
+//! |----------|--------------------|
+//! | Integer keys (UUIDs, content hashes, random `u64`) | [`IdentityBuildHasher`](identity_hasher::IdentityBuildHasher) |
+//! | String or composite keys | A seeded instance of `AHasher`, `FxBuildHasher`, or `foldhash` |
+//!
+//! With a fixed-seed hasher the same key always produces the same hash, so:
+//!
+//! - The HAMT trie path is identical across sessions.
+//! - Merkle hashes computed at runtime match those deserialised from a
+//!   previous run — enabling the `hash-intern` + `persist` features to merge
+//!   loaded nodes with in-memory nodes by pointer after verifying Merkle
+//!   equality.
+//! - Tests that assert on internal node structure or serialised bytes are
+//!   reproducible without controlling random seeds externally.
+//!
+//! **Security caveat:** A fixed-seed hasher is vulnerable to Hash DoS from
+//! untrusted input. Use fixed seeds only when all keys come from a trusted
+//! source (your own code, a closed serialisation format, internal integers).
+//! For untrusted user input, keep `RandomState`.
+//!
+//! The `Ord`-backed collections (`OrdMap`, `OrdBag`, `OrdMultiMap`, etc.)
+//! are always deterministic: they have no hasher and iterate in sorted order,
+//! so their content hashes (when `K: Hash, V: Hash`) are canonical across
+//! sessions without any special configuration.
 //!
 //! ## In-place Mutation
 //!
@@ -515,6 +582,13 @@ pub mod persist;
 pub mod bag;
 pub mod bimap;
 pub mod hash_multimap;
+pub mod ord_bag;
+pub mod ord_multimap;
+pub mod ord_symmap;
+pub mod ord_bimap;
+pub mod ord_trie;
+pub mod ord_insertion_order_map;
+pub mod ord_insertion_order_set;
 pub mod insertion_order_map;
 pub mod insertion_order_set;
 pub mod symmap;
@@ -545,6 +619,13 @@ pub use crate::insertion_order_set::GenericInsertionOrderSet;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::insertion_order_set::InsertionOrderSet;
 pub use crate::ordmap::{GenericOrdMap, OrdMap};
+pub use crate::ord_bag::{GenericOrdBag, OrdBag};
+pub use crate::ord_multimap::{GenericOrdMultiMap, OrdMultiMap};
+pub use crate::ord_symmap::{GenericOrdSymMap, OrdSymMap};
+pub use crate::ord_bimap::{GenericOrdBiMap, OrdBiMap};
+pub use crate::ord_trie::{GenericOrdTrie, OrdTrie};
+pub use crate::ord_insertion_order_map::{GenericOrdInsertionOrderMap, OrdInsertionOrderMap};
+pub use crate::ord_insertion_order_set::{GenericOrdInsertionOrderSet, OrdInsertionOrderSet};
 pub use crate::ordset::{GenericOrdSet, OrdSet};
 pub use crate::symmap::GenericSymMap;
 #[cfg(any(feature = "std", feature = "foldhash"))]

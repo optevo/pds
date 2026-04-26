@@ -22,6 +22,31 @@
 //! - Keys are strings, structs, or any non-integer type — the XOR-fold fallback in
 //!   `write()` is not a quality hash
 //!
+//! # Cross-session consistency
+//!
+//! Because `IdentityHasher` applies no randomisation, the same integer key always
+//! produces the same hash value across processes and restarts. This property enables
+//! several advanced use cases:
+//!
+//! - **Cross-session `InternPool` merging.** If a `HashMap` is serialised via the
+//!   `persist` feature and later deserialised, the reconstructed HAMT nodes have the
+//!   same trie paths as nodes built at runtime from the same keys. The `hash-intern`
+//!   feature can then merge both pools by Merkle hash comparison — identical subtrees
+//!   are deduplicated by pointer, saving memory without a full structural comparison.
+//! - **Reproducible Merkle hashes.** The HAMT's per-node Merkle hashes depend on key
+//!   hashes. With `IdentityBuildHasher` those hashes are deterministic, so a snapshot
+//!   taken in one run can be diff-ed against a snapshot from another run using only
+//!   the root Merkle hash — equal roots mean byte-for-byte identical trees.
+//! - **Reproducible tests.** Tests that assert on serialised bytes or internal node
+//!   structure pass consistently across machines and CI runs without controlling the
+//!   random seed externally.
+//!
+//! **Security caveat:** `IdentityBuildHasher` provides no hash randomisation and is
+//! therefore vulnerable to Hash DoS from untrusted input (an attacker who can choose
+//! keys can force all keys into the same trie bucket). Use it only when all keys come
+//! from a trusted source — your own code, a closed serialisation format, or internal
+//! integer identifiers. For untrusted user input, keep the default `RandomState`.
+//!
 //! # Example
 //!
 //! ```
