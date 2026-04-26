@@ -59,6 +59,20 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-27] API gap fill + content hash rationalisation + doc/test consistency pass.**
+  Added `HashSet::get`, `HashSet::extract`, `OrdSet::extract`, `OrdMap::remove_min`,
+  `OrdMap::remove_max`, `Vector::partition`. Added `ptr_eq` to all 14 derived types
+  (Bag, HashMultiMap, BiMap, SymMap, Trie, OrdBag, OrdMultiMap, OrdBiMap, OrdTrie,
+  InsertionOrderMap, InsertionOrderSet, OrdInsertionOrderMap, OrdInsertionOrderSet,
+  UniqueVector). Rationalised content hash API across all five primary types: renamed
+  `merkle_hash` → `content_hash`, `merkle_valid`→`content_hash_valid` on Vector;
+  renamed `kv_merkle_valid` → `content_hash_valid` on HashMap; added `HashSet::content_hash`
+  / `content_hash_valid` (AtomicU64 cache using stored HAMT hashes); added
+  `OrdMap::content_hash_valid`; updated `OrdSet::content_hash_valid` to call delegate.
+  Doc pass: fixed two stale `recompute_kv_merkle` links in HashMap struct doc; updated
+  `intern_and_seal` doc; added `content_hash` API note to HashSet struct doc; renamed all
+  `kv_merkle_*` test functions to `content_hash_*`. 1126 tests pass.
+
 - **[2026-04-26] Perf review: OrdMap ptr_eq fast path + HashMap insert guard.**
   Detailed performance review of `nodes/hamt.rs`, `nodes/btree.rs`, `hash/map.rs`,
   `nodes/rrb.rs`, `vector/mod.rs`, `ord/map.rs`. Two optimisations implemented:
