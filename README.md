@@ -106,11 +106,11 @@ a different collection set and design philosophy.
 |---------|:-------:|-------------|
 | `std` | Yes | Enables `std`-dependent type aliases (`HashMap`, `HashSet`, etc.), `From<std::collections::*>` conversions, and `Mutex`-based locking. Disable for `no_std + alloc` environments. |
 | `triomphe` | Yes | Use `triomphe::Arc` as the default shared pointer — no weak count, 8 bytes smaller per node, one fewer atomic op per clone/drop. |
-| `proptest` | No | Proptest strategies for all collection types |
-| `quickcheck` | No | `Arbitrary` implementations for all collection types |
+| `proptest` | No | Proptest strategies for `Vector`, `OrdMap`, `OrdSet`, `HashMap`, `HashSet`. Newer types (Bag, HashMultiMap, etc.) not yet covered. |
+| `quickcheck` | No | `Arbitrary` implementations for `Vector`, `OrdMap`, `OrdSet`, `HashMap`, `HashSet`. Newer types not yet covered. |
 | `rayon` | No | Parallel iterators for all collection types. `InsertionOrderMap` and `InsertionOrderSet` support read-only `par_iter` only (`FromParallelIterator`/`ParallelExtend` omitted — parallel collection loses insertion order). `Trie` is excluded. `Bag` adds `par_elements()` for flat element expansion. |
 | `serde` | No | `Serialize` / `Deserialize` for all collection types |
-| `arbitrary` | No | `Arbitrary` implementations for fuzzing |
+| `arbitrary` | No | `Arbitrary` implementations for fuzzing (`Vector`, `OrdMap`, `OrdSet`, `HashMap`, `HashSet`). Newer types not yet covered. |
 | `foldhash` | No | Enables `HashMap`/`HashSet`/etc. type aliases in `no_std` via `foldhash::fast::RandomState` |
 | `atom` | No | Thread-safe atomic state holder via `arc-swap` (requires `std`) |
 | `hash-intern` | No | Hash consing / node interning for HAMT collections via `InternPool` — deduplicates identical subtrees for memory savings and O(1) pointer equality |

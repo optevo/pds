@@ -23,6 +23,17 @@
 //! let elems: Vec<_> = set.iter().collect();
 //! assert_eq!(elems, vec![&"c", &"a", &"b"]);
 //! ```
+//!
+//! ## Parallel iteration (`rayon` feature)
+//!
+//! With the `rayon` feature, `InsertionOrderSet` implements
+//! [`IntoParallelRefIterator`][rayon::iter::IntoParallelRefIterator], yielding `&A` references.
+//! Note that parallel iteration does not preserve insertion order.
+//!
+//! [`FromParallelIterator`][rayon::iter::FromParallelIterator] and
+//! [`ParallelExtend`][rayon::iter::ParallelExtend] are intentionally absent — parallel
+//! collection does not preserve insertion order. Use the sequential
+//! `FromIterator` / `Extend` impls instead.
 
 use alloc::vec::Vec;
 use core::fmt::{Debug, Error, Formatter};

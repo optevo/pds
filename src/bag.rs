@@ -23,6 +23,15 @@
 //! assert_eq!(bag.count(&"banana"), 1);
 //! assert_eq!(bag.total_count(), 3);
 //! ```
+//!
+//! ## Parallel iteration (`rayon` feature)
+//!
+//! With the `rayon` feature, `Bag` provides two parallel iterators:
+//!
+//! - [`par_iter()`][rayon::iter::IntoParallelRefIterator::par_iter] — yields `(&A, usize)` pairs,
+//!   one per distinct element (mirrors the sequential [`iter()`][GenericBag::iter] interface).
+//! - [`par_elements()`][GenericBag::par_elements] — yields each element once per occurrence,
+//!   expanding counts (e.g. an element with count 3 produces three references).
 
 use alloc::vec::Vec;
 use core::fmt::{Debug, Error, Formatter};

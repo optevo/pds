@@ -2451,6 +2451,31 @@ comment explaining what it checks.
 
 ---
 
+### R.8 Extend proptest / quickcheck / arbitrary to newer collection types (LOW)
+
+**What:** `proptest`, `quickcheck`, and `arbitrary` feature implementations exist only for the
+five original types (Vector, OrdMap, OrdSet, HashMap, HashSet). The seven newer types
+(Bag, HashMultiMap, BiMap, SymMap, InsertionOrderMap, InsertionOrderSet, Trie) are
+uncovered. The directives table requires all three features for all collection types.
+
+- `src/proptest.rs` — add strategy functions for each newer type
+- `src/quickcheck.rs` — add `quickcheck::Arbitrary` impls
+- `src/arbitrary.rs` — add `arbitrary::Arbitrary` impls
+
+**Why:** Feature flag descriptions in lib.rs and README previously (incorrectly) claimed
+"all datatypes". Fixed to say "5 legacy types" with a "not yet covered" note. This item
+closes the gap.
+
+**Complexity:** Low–medium per type. Each needs a strategy (proptest: compose from existing
+element strategies; quickcheck: generate random elements and insert).
+
+**Prerequisites:** None.
+
+**Acceptance:** All three features compile and test against all 11 collection types.
+Descriptions in lib.rs and README updated to "all collection types".
+
+---
+
 ### R.7 Fix rpds version in README comparison table (LOW) — DONE [2026-04-26]
 
 **What:** README states rpds 1.2.0 in the comparison table, but `Cargo.toml` dev-dep pins 1.1.0.

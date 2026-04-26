@@ -24,6 +24,12 @@
 //! assert_eq!(trie.get(&["etc", "hosts"]), Some(&3));
 //! assert_eq!(trie.get(&["usr"]), None); // no value at interior node
 //! ```
+//!
+//! ## Feature support
+//!
+//! `Trie` supports `serde` serialisation via the `serde` feature flag.
+//! Parallel iteration (`rayon`) is not supported for `Trie` — the path-dependent
+//! branching structure makes uniform work distribution impractical.
 
 use core::fmt::{Debug, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};

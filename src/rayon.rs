@@ -2,9 +2,24 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-//! Parallel iterators for newer collection types.
+//! Parallel iterators for [`Bag`][crate::Bag], [`HashMultiMap`][crate::HashMultiMap],
+//! [`BiMap`][crate::BiMap], [`SymMap`][crate::SymMap],
+//! [`InsertionOrderMap`][crate::InsertionOrderMap], and
+//! [`InsertionOrderSet`][crate::InsertionOrderSet].
 //!
-//! These are only available when using the `rayon` feature flag.
+//! Only available with the `rayon` feature flag.
+//!
+//! ## Coverage and limitations
+//!
+//! | Type | `par_iter` | `FromParallelIterator` | `ParallelExtend` | Notes |
+//! |------|:----------:|:---------------------:|:----------------:|-------|
+//! | `Bag` | ✓ | ✓ | ✓ | Also provides [`GenericBag::par_elements`] for flat expansion |
+//! | `HashMultiMap` | ✓ | ✓ | ✓ | Default `H = u64` only |
+//! | `BiMap` | ✓ | ✓ | ✓ | Default `H = u64` only |
+//! | `SymMap` | ✓ | ✓ | ✓ | Default `H = u64` only |
+//! | `InsertionOrderMap` | ✓ | — | — | Parallel collection would lose insertion order |
+//! | `InsertionOrderSet` | ✓ | — | — | Parallel collection would lose insertion order |
+//! | `Trie` | — | — | — | Not supported |
 //!
 //! Parallel iterators for [`HashMap`][crate::HashMap], [`HashSet`][crate::HashSet],
 //! [`OrdMap`][crate::OrdMap], [`OrdSet`][crate::OrdSet], and [`Vector`][crate::Vector]
