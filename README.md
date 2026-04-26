@@ -79,6 +79,7 @@ a different collection set and design philosophy.
 | **SSP serialisation** | yes (`HashMapPool`) | — | — | — |
 | **serde** | yes | yes | yes | yes |
 | **rayon** | yes | yes | yes | yes (hash maps only) |
+| **Par set ops** | yes (all types) | — | — | — |
 | **proptest / quickcheck** | yes | yes | yes | — |
 
 **Key differences from imbl:**
@@ -107,7 +108,7 @@ a different collection set and design philosophy.
 | `triomphe` | Yes | Use `triomphe::Arc` as the default shared pointer — no weak count, 8 bytes smaller per node, one fewer atomic op per clone/drop. |
 | `proptest` | No | Proptest strategies for `Vector`, `OrdMap`, `OrdSet`, `HashMap`, `HashSet`. Newer types (Bag, HashMultiMap, etc.) not yet covered. |
 | `quickcheck` | No | `Arbitrary` implementations for `Vector`, `OrdMap`, `OrdSet`, `HashMap`, `HashSet`. Newer types not yet covered. |
-| `rayon` | No | Parallel iterators for all collection types. `InsertionOrderMap` and `InsertionOrderSet` support read-only `par_iter` only (`FromParallelIterator`/`ParallelExtend` omitted — parallel collection loses insertion order). `Trie` is excluded. `Bag` adds `par_elements()` for flat element expansion. |
+| `rayon` | No | Parallel iterators and parallel set operations for all collection types. See "Parallel support" below for full coverage. |
 | `serde` | No | `Serialize` / `Deserialize` for all collection types |
 | `arbitrary` | No | `Arbitrary` implementations for fuzzing (`Vector`, `OrdMap`, `OrdSet`, `HashMap`, `HashSet`). Newer types not yet covered. |
 | `foldhash` | No | Enables `HashMap`/`HashSet`/etc. type aliases in `no_std` via `foldhash::fast::RandomState` |
@@ -116,6 +117,87 @@ a different collection set and design philosophy.
 | `persist` | No | Structural-sharing-preserving serialisation via `HashMapPool` — serialises HAMT trees with node deduplication, reconstructs with hash consing. Requires `hash-intern` |
 | `small-chunks` | No | Reduces internal chunk sizes so tree structures can be exercised with small collections. For testing only — not intended for production use. |
 | `debug` | No | Enables internal invariant-checking methods on `Vector` (RRB tree validation). For testing and debugging only. |
+
+## Parallel support
+
+All collection types gain parallel capabilities under the `rayon` feature flag.
+
+### Parallel iteration
+
+Every collection type that supports sequential iteration also supports parallel iteration via `par_iter()` and — where ordering semantics allow — `FromParallelIterator` and `ParallelExtend`.
+
+| Type | `par_iter` | `FromParallelIterator` | `ParallelExtend` | Notes |
+|------|:----------:|:---------------------:|:----------------:|-------|
+| `HashMap<K, V>` | ✓ | ✓ | ✓ | |
+| `HashSet<A>` | ✓ | ✓ | ✓ | |
+| `OrdMap<K, V>` | ✓ | ✓ | ✓ | |
+| `OrdSet<A>` | ✓ | ✓ | ✓ | |
+| `Vector<A>` | ✓ | ✓ | ✓ | |
+| `Bag<A>` | ✓ | ✓ | ✓ | Also `par_elements()` for flat expansion |
+| `HashMultiMap<K, V>` | ✓ | ✓ | ✓ | Default hasher only |
+| `BiMap<K, V>` | ✓ | ✓ | ✓ | Default hasher only |
+| `SymMap<A>` | ✓ | ✓ | ✓ | Default hasher only |
+| `InsertionOrderMap<K, V>` | ✓ | — | — | Parallel collection loses insertion order |
+| `InsertionOrderSet<A>` | ✓ | — | — | Parallel collection loses insertion order |
+| `Trie<K, V>` | — | — | — | Not supported |
+
+### Parallel set operations
+
+Every collection type that exposes `union`, `intersection`, `difference`, and
+`symmetric_difference` also has parallel counterparts named with the `par_`
+prefix. These work identically to the sequential versions but use rayon to
+parallelise the computation.
+
+| Type | `par_union` | `par_intersection` | `par_difference` | `par_symmetric_difference` |
+|------|:-----------:|:-----------------:|:----------------:|:---------------------------:|
+| `HashMap<K, V>` | ✓ | ✓ | ✓ | ✓ |
+| `HashSet<A>` | ✓ | ✓ | ✓ | ✓ |
+| `OrdMap<K, V>` | ✓ | ✓ | ✓ | ✓ |
+| `OrdSet<A>` | ✓ | ✓ | ✓ | ✓ |
+| `Bag<A>` | ✓ | ✓ | ✓ | ✓ |
+| `HashMultiMap<K, V>` | ✓† | ✓ | ✓ | ✓ |
+| `BiMap<K, V>` | ✓† | ✓ | ✓ | ✓ |
+| `SymMap<A>` | ✓† | ✓ | ✓ | ✓ |
+
+† `par_union` delegates to the sequential implementation for these types.
+`BiMap` and `SymMap` maintain bijection/symmetry invariants that require
+sequential conflict resolution on each insert; `HashMultiMap` value-set merging
+has the same constraint. The other three par ops are fully parallelised via
+parallel filter + collect.
+
+**Fast paths for `HashMap` / `HashSet`:** The HAMT-backed types also exploit
+structural sharing for O(1) short-circuits:
+- `ptr_eq` — if both collections share the same root pointer they are identical;
+  union returns one copy, difference returns empty, intersection returns one copy.
+- Merkle hash — same-lineage maps with equal length and equal Merkle hash are
+  definitively equal; the fast-path fires without comparing individual entries.
+
+**Rayon-join parallelism for `symmetric_difference`:** `par_symmetric_difference`
+on all types uses `rayon::join` to compute the two halves (`self \ other` and
+`other \ self`) simultaneously on separate threads.
+
+### Example
+
+```rust
+use pds::{Bag, HashMap, HashSet};
+use rayon::iter::ParallelIterator;
+
+// Parallel iteration
+let map: HashMap<i32, &str> = (0..10_000).map(|i| (i, "x")).collect();
+let sum: i32 = map.par_iter().map(|(&k, _)| k).sum();
+
+// Parallel set operations
+let mut a = Bag::new();
+let mut b = Bag::new();
+a.insert_many("apple", 5);
+a.insert_many("banana", 3);
+b.insert_many("banana", 7);
+b.insert_many("cherry", 2);
+
+let union = a.par_union(&b);          // apple:5, banana:10, cherry:2
+let intersection = a.par_intersection(&b);  // banana:3
+let difference = a.par_difference(&b);     // apple:5
+```
 
 ## Building
 
