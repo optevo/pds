@@ -328,6 +328,49 @@ comparison functions. For small non-Drop types (≤ 16 bytes), it defers to
 the stdlib's branchless implementation. For larger types (e.g. string keys),
 it uses an early-return loop that minimises comparisons.
 
+### Parallel bulk operations — join algorithm
+
+The parallel set operations on `OrdMap` / `OrdSet` (`par_union`,
+`par_intersection`, `par_difference`, `par_symmetric_difference` in
+`src/ord/rayon.rs`) use the join algorithm of Blelloch et al.:
+
+- **"Joinable Parallel Balanced Binary Trees"** (ACM TOPC 2022,
+  doi:10.1145/3512769) — foundational formalisation of split + join
+  as a single primitive for work-efficient parallel set operations on
+  balanced BSTs.
+- **"PaC-trees: Supporting Parallel and Compressed Purely-Functional
+  Collections Using Joinable Trees"** (PLDI 2022, doi:10.1145/3519939.3523733)
+  — extends the approach to blocked-leaf trees structurally similar to pds's
+  B+ tree.
+
+**Algorithm sketch:**
+
+```
+par_union(self, other):
+  if either is small: fall back to sequential union
+  pivot = self.root_pivot_key()          // median key from root — O(1)
+  (l1, v, r1) = split_node(self, pivot)  // O(log n) structural split
+  (l2, _, r2) = split_node(other, pivot)
+  (rl, rr) = rayon::join(
+      || par_union(l1, l2),
+      || par_union(r1, r2),
+  )
+  concat_ordered(rl, insert(rr, pivot, v))
+```
+
+`split_node` walks the spine from root to leaf in O(log n), collecting
+left/right halves at each level. `concat_node` rebuilds the spine in
+O(log n) using height-aware insertion at the correct level.
+
+**Complexity:**
+- Work: O(m log(n/m + 2)) for inputs of size m ≤ n
+- Span: O(log² n)
+
+This is believed to be the first implementation of this algorithm on a
+blocked-leaf persistent B+ tree. The HAMT parallel ops use a different
+approach (filter + fold/reduce) that does not achieve the same span bound.
+See `src/ord/rayon.rs` for the implementation.
+
 ---
 
 ## Focus and FocusMut {#focus}

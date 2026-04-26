@@ -44,6 +44,8 @@ use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator};
 use core::mem;
 use core::ops::{Bound, Index, IndexMut, RangeBounds};
+#[cfg(feature = "ord-hash")]
+use core::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Comparable;
@@ -130,6 +132,12 @@ pub type OrdMap<K, V> = GenericOrdMap<K, V, DefaultSharedPtr>;
 pub struct GenericOrdMap<K, V, P: SharedPointerKind> {
     pub(crate) size: usize,
     pub(crate) root: Option<Node<K, V, P>>,
+    /// Cached content hash. `0` means "not yet computed" (sentinel).
+    /// A computed hash that happens to be `0` is stored as `1`.
+    /// On arm64 `Relaxed` atomics are free — same cost as a plain load/store.
+    /// Only present when the `ord-hash` feature is enabled.
+    #[cfg(feature = "ord-hash")]
+    pub(crate) content_hash_cache: AtomicU64,
 }
 
 impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
@@ -140,6 +148,8 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
         GenericOrdMap {
             size: 0,
             root: None,
+            #[cfg(feature = "ord-hash")]
+            content_hash_cache: AtomicU64::new(0),
         }
     }
 
@@ -162,6 +172,8 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
         Self {
             size: 1,
             root: Some(Node::unit(key, value)),
+            #[cfg(feature = "ord-hash")]
+            content_hash_cache: AtomicU64::new(0),
         }
     }
 
@@ -225,6 +237,15 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
         self.size
     }
 
+    /// Invalidate the cached content hash.
+    ///
+    /// Must be called by every method that mutates map contents.
+    #[cfg(feature = "ord-hash")]
+    #[inline]
+    fn invalidate_hash_cache(&self) {
+        self.content_hash_cache.store(0, AtomicOrdering::Relaxed);
+    }
+
     /// Discard all elements from the map.
     ///
     /// This leaves you with an empty map, and all elements that
@@ -242,6 +263,8 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
     /// assert!(map.is_empty());
     /// ```
     pub fn clear(&mut self) {
+        #[cfg(feature = "ord-hash")]
+        self.invalidate_hash_cache();
         self.root = None;
         self.size = 0;
     }
@@ -786,6 +809,10 @@ where
     where
         Q: Comparable<K> + ?Sized,
     {
+        // Conservative: caller may mutate the returned reference; invalidate
+        // regardless of whether the key is present.
+        #[cfg(feature = "ord-hash")]
+        self.invalidate_hash_cache();
         let root = self.root.as_mut()?;
         root.lookup_mut(key).map(|(_, v)| v)
     }
@@ -831,6 +858,10 @@ where
     /// assert_eq!(ordmap![1 => 11, 2 => 22, 3 => 33], map);
     /// ```
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V, P> {
+        // Conservative: caller may mutate values via the iterator; invalidate
+        // regardless of whether any entry is actually changed.
+        #[cfg(feature = "ord-hash")]
+        self.invalidate_hash_cache();
         IterMut {
             it: NodeIterMut::new(self.root.as_mut(), self.size),
         }
@@ -989,6 +1020,8 @@ where
     /// previous key and value are overwritten and returned.
     #[inline]
     pub(crate) fn insert_key_value(&mut self, key: K, value: V) -> Option<(K, V)> {
+        #[cfg(feature = "ord-hash")]
+        self.invalidate_hash_cache();
         let root = self.root.get_or_insert_with(Node::default);
         match root.insert(key, value) {
             InsertAction::Replaced(old_key, old_value) => return Some((old_key, old_value)),
@@ -1034,6 +1067,8 @@ where
     where
         Q: Comparable<K> + ?Sized,
     {
+        #[cfg(feature = "ord-hash")]
+        self.invalidate_hash_cache();
         let root = self.root.as_mut()?;
         let mut removed = None;
         if root.remove(k, &mut removed) {
@@ -1788,6 +1823,86 @@ where
         )
     }
 
+    /// Split a map at `key` in O(log n), consuming it.
+    ///
+    /// Returns `(left, exact_value, right)` where every key in `left` is strictly
+    /// less than `key`, every key in `right` is strictly greater, and `exact_value`
+    /// is `Some(v)` if `key` was present. Unlike [`split_lookup`][Self::split_lookup]
+    /// (which is O(n log n)), this walk is O(depth × NODE_SIZE) ≈ O(log n).
+    #[cfg(any(test, feature = "rayon"))]
+    #[must_use]
+    pub fn split_at_key_consuming<Q>(self, key: &Q) -> (Self, Option<V>, Self)
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        use crate::nodes::btree::split_node;
+        match self.root {
+            None => (Self::new(), None, Self::new()),
+            Some(root) => {
+                use crate::nodes::btree::count_entries;
+                let orig_size = self.size;
+                let (l, v, r) = split_node(root, key);
+                let left_size = count_entries(&l);
+                let right_size = orig_size - left_size - v.is_some() as usize;
+                (
+                    GenericOrdMap {
+                        root: l,
+                        size: left_size,
+                        #[cfg(feature = "ord-hash")]
+                        content_hash_cache: AtomicU64::new(0),
+                    },
+                    v,
+                    GenericOrdMap {
+                        root: r,
+                        size: right_size,
+                        #[cfg(feature = "ord-hash")]
+                        content_hash_cache: AtomicU64::new(0),
+                    },
+                )
+            }
+        }
+    }
+
+    /// Join two maps where every key in `self` is strictly less than every key in
+    /// `other`, in O(log n).
+    ///
+    /// This is the inverse of [`split_at_key_consuming`][Self::split_at_key_consuming].
+    /// The precondition (all self-keys < all other-keys) is not checked; violating it
+    /// produces a map with incorrect key ordering.
+    #[cfg(any(test, feature = "rayon"))]
+    #[must_use]
+    pub fn concat_ordered(self, other: Self) -> Self {
+        use crate::nodes::btree::concat_node;
+        let total_size = self.size + other.size;
+        // Normalise: `size` is the authoritative entry count. When `size == 0`,
+        // the root may be a retained-allocation empty Leaf (left by in-place
+        // removes in `difference`/`symmetric_difference`) rather than `None`.
+        // Treat any zero-size map as having no root so concat_node is only
+        // called with non-empty nodes.
+        let self_root = if self.size == 0 { None } else { self.root };
+        let other_root = if other.size == 0 { None } else { other.root };
+        match (self_root, other_root) {
+            (None, r) => GenericOrdMap {
+                root: r,
+                size: total_size,
+                #[cfg(feature = "ord-hash")]
+                content_hash_cache: AtomicU64::new(0),
+            },
+            (l, None) => GenericOrdMap {
+                root: l,
+                size: total_size,
+                #[cfg(feature = "ord-hash")]
+                content_hash_cache: AtomicU64::new(0),
+            },
+            (Some(l), Some(r)) => GenericOrdMap {
+                root: Some(concat_node(l, r)),
+                size: total_size,
+                #[cfg(feature = "ord-hash")]
+                content_hash_cache: AtomicU64::new(0),
+            },
+        }
+    }
+
     /// Construct a map with only the `n` smallest keys from a given
     /// map.
     #[must_use]
@@ -2281,6 +2396,11 @@ impl<K, V, P: SharedPointerKind> Clone for GenericOrdMap<K, V, P> {
         GenericOrdMap {
             size: self.size,
             root: self.root.clone(),
+            // Preserve the cached hash — the clone has the same content.
+            #[cfg(feature = "ord-hash")]
+            content_hash_cache: AtomicU64::new(
+                self.content_hash_cache.load(AtomicOrdering::Relaxed),
+            ),
         }
     }
 }
@@ -2293,7 +2413,24 @@ where
     P: SharedPointerKind,
 {
     fn eq(&self, other: &GenericOrdMap<K, V, P>) -> bool {
-        self.len() == other.len() && self.diff(other).next().is_none()
+        if self.len() != other.len() {
+            return false;
+        }
+        // Fast equality/inequality via cached content hash.
+        // `DefaultHasher` uses deterministic keys — identical content produces
+        // identical hashes regardless of construction path. Collision probability
+        // is 2^-64 (~5×10^-20), the same threshold accepted by HashMap's
+        // kv_merkle_hash (DEC-023). A cached `0` means "not yet computed".
+        #[cfg(feature = "ord-hash")]
+        {
+            let h1 = self.content_hash_cache.load(AtomicOrdering::Relaxed);
+            let h2 = other.content_hash_cache.load(AtomicOrdering::Relaxed);
+            if h1 != 0 && h2 != 0 {
+                // Both caches are populated — decide without scanning.
+                return h1 == h2;
+            }
+        }
+        self.diff(other).next().is_none()
     }
 }
 
@@ -2341,6 +2478,54 @@ where
 impl<K, V, P: SharedPointerKind> Default for GenericOrdMap<K, V, P> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// Content hash — requires the ord-hash feature (and std for DefaultHasher).
+#[cfg(feature = "ord-hash")]
+impl<K, V, P> GenericOrdMap<K, V, P>
+where
+    K: Ord + Hash,
+    V: Hash,
+    P: SharedPointerKind,
+{
+    /// Return a content hash of this map.
+    ///
+    /// The hash is order-independent: two maps with the same key/value pairs
+    /// produce the same value regardless of insertion history. It is computed
+    /// once and cached; subsequent calls are O(1).
+    ///
+    /// **`PartialEq` integration:** when both operands have a populated cache,
+    /// `eq` returns directly from the hash comparison in O(1). Equal hashes mean
+    /// equal maps with probability ≥ 1 − 2⁻⁶⁴; different hashes mean definitely
+    /// unequal. The cache is invalidated (reset to 0) on every mutation.
+    ///
+    /// The hash is deterministic for any given compilation (uses `DefaultHasher`
+    /// with fixed keys `k0 = 0, k1 = 0` in current `std`). It is **not**
+    /// guaranteed stable across Rust versions and is not a cryptographic hash.
+    ///
+    /// Returns a non-zero `u64`. A computed hash of `0` is stored as `1`
+    /// (the sentinel `0` means "not yet cached").
+    ///
+    /// Time: O(n) first call; O(1) thereafter.
+    pub fn content_hash(&self) -> u64 {
+        let cached = self.content_hash_cache.load(AtomicOrdering::Relaxed);
+        if cached != 0 {
+            return cached;
+        }
+        use std::collections::hash_map::DefaultHasher;
+        let mut h: u64 = 0;
+        for (k, v) in self.iter() {
+            let mut s = DefaultHasher::new();
+            k.hash(&mut s);
+            v.hash(&mut s);
+            // XOR-combine so the result is order-independent.
+            h ^= s.finish();
+        }
+        // Map 0 → 1: 0 is the "not cached" sentinel.
+        let h = if h == 0 { 1 } else { h };
+        self.content_hash_cache.store(h, AtomicOrdering::Relaxed);
+        h
     }
 }
 

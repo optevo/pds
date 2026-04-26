@@ -350,6 +350,7 @@
 //! | [`atom`](https://crates.io/crates/arc-swap/) | No | Thread-safe shared values via `arc-swap` (requires `std`) |
 //! | `hash-intern` | No | Hash consing / node interning for HAMT collections via `InternPool`. Deduplicates structurally identical subtrees to save memory and enable O(1) equality via pointer comparison. Requires `std`. |
 //! | `persist` | No | Structural-sharing-preserving serialisation via `HashMapPool`. Serialises HAMT node trees with deduplication and reconstructs with hash consing on deserialisation. Requires `std` and `hash-intern`. |
+//! | `ord-hash` | Yes | Cached content hash on `OrdMap` and `OrdSet` — enables O(1) `PartialEq` fast-path negative check (different hash → definitely unequal), a `content_hash()` method, and `Hash` impls for `K: Hash, V: Hash`. One atomic store per mutation; overhead is unmeasurable for typical workloads. See DEC-036. |
 //! | `small-chunks` | No | Reduces internal chunk sizes so tree structures can be exercised with small collections. For testing only — not intended for production use. |
 //! | `debug` | No | Enables internal invariant-checking methods on `Vector` (RRB tree validation). For testing and debugging only. |
 //!

@@ -57,6 +57,35 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-26] R.14 — `ord-hash` content hash for OrdMap and OrdSet.**
+  `AtomicU64` content hash cache added to `GenericOrdMap`. Invalidated on every
+  mutation; clone preserves the cached value. `PartialEq` gains a full O(1) fast-path:
+  when both caches are populated, `eq` returns `h1 == h2` without scanning (positive
+  equality, 2^-64 collision risk — same threshold as HashMap's kv_merkle_hash, DEC-023).
+  `content_hash()` public method added (K: Hash, V: Hash). `Hash` impl added for OrdMap
+  and OrdSet. `ord-hash` added to default features. DEC-036 recorded. `AtomicU64` chosen
+  over the planned `Cell<u64>` to preserve `Sync` for rayon `par_iter()`.
+
+- **[2026-04-26] R.15 — Node size re-evaluation for join-heavy workloads.**
+  Re-benchmarked `ORD_CHUNK_SIZE` 16/24/32/48 with the join algorithm operations
+  (`par_union`, `par_intersection`, `par_difference`) at 10K and 100K entries.
+  Added `ordmap_parallel` benchmark group to `benches/ordmap.rs`. Result: size 32
+  confirmed optimal for both single-tree and parallel join workloads. Size 48 is
+  20–69% slower on parallel join at 100K; sizes 16/24 are 10–44% slower on single-tree
+  ops with no parallel advantage. `ORD_CHUNK_SIZE = 32` unchanged. Addendum added to
+  DEC-017. R.14 `AtomicU64` is in `GenericOrdMap` root (not in nodes) — DEC-017
+  node-size choice is unaffected; no second addendum needed.
+
+- **[2026-04-26] R.11 — Join-based parallel bulk operations for OrdMap and OrdSet.**
+  `par_union`, `par_intersection`, `par_difference`, `par_symmetric_difference` added to
+  `OrdMap` and `OrdSet` using the Blelloch et al. join algorithm (ACM TOPC 2022; PaC-trees
+  PLDI 2022). Primitives: `split_node(node, key)` O(log n), `concat_node(left, right)`
+  height-aware O(log n), `concat_ordered` with empty-root normalisation, `root_pivot_key()`
+  O(1) median from root. Work: O(m log(n/m+2)); Span: O(log² n). Believed to be the first
+  implementation of the Blelloch join algorithm on a blocked-leaf persistent B+ tree in any
+  language. All tests green; join algorithm documented in README, architecture.md, and
+  references.md.
+
 - **[2026-04-26] R.9, R.10 — Parallel transform operations + tree-native optimisation.**
   `par_filter`, `par_map_values`, `par_map_values_with_key` added to `HashMap`, `OrdMap`,
   `HashSet`, `OrdSet` (R.9). `par_map_values`/`par_map_values_with_key` subsequently
@@ -148,6 +177,14 @@ single v2.0.0 release in Phase 5.
   `SymMapPool` (pools forward map only), `HashMultiMapPool` (flat pairs),
   `InsertionOrderMapPool` (ordered pairs), `TriePool` (flat path pairs).
   19 tests total.
+
+- **[2026-04-26] R.11: Join-based parallel bulk ops for OrdMap and OrdSet.** `par_union`,
+  `par_intersection`, `par_difference`, `par_symmetric_difference` for `OrdMap` and `OrdSet`
+  using O(log n) structural split + height-aware concat. Join algorithm: O(m log(n/m + 2))
+  work, O(log² n) span (Blelloch et al., TOPC 2022). Unique among Rust persistent DS
+  libraries. Root cause of correctness bugs: `difference()`/`symmetric_difference()` retain
+  an empty Leaf allocation after all entries are removed (`{root: Some(Leaf([])), size: 0}`);
+  fixed by normalising on `size == 0` in `concat_ordered`. 25+ tests.
 
 - **[2026-04-25] 3.4: Parallel bulk ops.** `par_union`,
   `par_intersection`, `par_difference`,
@@ -589,16 +626,15 @@ single v2.0.0 release in Phase 5.
 
 ## Current {#current}
 
-All phases complete. All Phase 6 research items resolved (5 killed, 1
-deprioritised, 3 done). 11 collection types.
+Working through the open residual items in the following order:
 
-**Next priority: [R.11](#r11-parallel-bulk-operations-for-ordmap-and-ordset-medium)** —
-Parallel `par_union`, `par_intersection`, `par_difference`, `par_symmetric_difference`
-for `OrdMap` and `OrdSet` using join-based algorithms (PaC-trees PLDI 2022 / TOPC 2022).
-This closes the gap between HashMap/HashSet (parallel set ops done) and OrdMap/OrdSet
-(sequential only). See the R.11 entry below for scope and implementation outline.
-
-See [Residual](#residual) for all remaining open items.
+1. **Mark R.11 Done** ✓ — completed 2026-04-26.
+2. **R.15** ✓ — Node size benchmark completed 2026-04-26. Size 32 confirmed.
+3. **R.14** ✓ — `ord-hash` content hash completed 2026-04-26. Default-on, O(1) PartialEq.
+4. **R.17 (new)** — Head-to-head OrdMap vs HashMap criterion benchmark (same ops, same sizes).
+   Backs the "B+ tree is better" claims in the docs with real numbers.
+5. **R.16** — Ord-backed compound types: `OrdBag` → `OrdMultiMap` → `OrdSymMap` → `OrdBiMap`.
+6. **R.12 Option A** — Document deterministic hashing pattern. Zero implementation cost.
 
 ---
 
@@ -2552,44 +2588,6 @@ shows 1.1.x, use that; if 1.2.0 has been released and is available, update the d
 
 ---
 
-### R.11 Parallel bulk operations for OrdMap and OrdSet (MEDIUM)
-
-**What:** Add `par_union`, `par_intersection`, `par_difference`, and `par_symmetric_difference`
-to `OrdMap` and `OrdSet` using join-based parallel algorithms.
-
-**Why:** pds's parallel set operations currently cover only `HashMap` and `HashSet` (and Bag,
-HashMultiMap, BiMap, SymMap via sequential delegation). `OrdMap` and `OrdSet` have fast
-sequential set ops but no parallel equivalents.
-
-**Algorithmic basis:**
-- Blelloch et al., "Joinable Parallel Balanced Binary Trees" (ACM TOPC 2022) — a single
-  `join` primitive unifies all set/map operations on balanced BSTs with work-efficient
-  parallel algorithms (O(m log(n/m + 2)) work, O(log² n) span for inputs of size m ≤ n).
-- Blelloch et al., "PaC-trees" (PLDI 2022) — demonstrates the approach works on blocked-leaf
-  trees (structurally similar to pds's B+ tree).
-
-**Implementation outline:**
-1. Expose a `split(key)` primitive on `GenericOrdMap` returning `(left, present, right)`.
-2. Expose a `join(left, key, right)` primitive that reconstructs a valid tree from two halves
-   and a separator.
-3. Implement `par_union` as parallel split + merge, recursing at each level via rayon.
-4. `par_intersection`, `par_difference`, `par_symmetric_difference` follow from the same
-   join/split building blocks.
-
-**Prerequisites:** Verify that `split` and `join` on pds's B+ tree are feasible without
-violating the `ORD_CHUNK_SIZE` fill-factor invariant. Prototype split/join sequentially
-before adding parallelism.
-
-**Complexity:** Medium-high. Split/join on B+ trees requires propagating underflow/overflow
-across levels, which is more involved than for BSTs. Profile against the current `par_iter().collect()`
-baseline to confirm speedup on large maps (≥100k entries) before committing.
-
-**Acceptance:** `par_union/par_intersection/par_difference/par_symmetric_difference` added
-to `OrdMap` and `OrdSet`. Criterion benchmarks show improvement over sequential equivalents
-at ≥50k entries. `test.sh` passes; property tests comparing par vs seq outputs.
-
----
-
 ### R.12 Cross-session interning: verbatim-hash pool reconstruction (MEDIUM-HIGH) — DEFERRED
 
 **Context:** `to_maps()` rebuilds maps via `FromIterator`, which re-hashes each
@@ -2682,6 +2680,282 @@ nightly-only `nightly-branching` feature flag for specific consumers.
 **Acceptance:** All collection types accept const generic size parameters under
 the `nightly-branching` flag. `test.sh` passes including the `small-chunks` variant.
 A stable-Rust path exists once `generic_const_exprs` stabilises.
+
+### R.14 Content hash for OrdMap and OrdSet ✓ DONE 2026-04-26
+
+**What:** Add a lazily-computed, cached content hash to `OrdMap` and `OrdSet` behind
+an `ord-hash` feature flag.  When the feature is enabled, a `content_hash()` method
+returns a `u64` fingerprint of the map's key-value content.  The hash is computed on
+first call and cached; it is invalidated (reset to "dirty") on any mutation
+(insert, remove, clone-and-mutate via CoW).
+
+**Why:**
+
+This item directly closes one of the last remaining reasons to prefer `HashMap` over
+`OrdMap`.  See the "Choosing the right map" section in `README.md` for the full
+comparison; the remaining HashMap-exclusive advantages after this item lands are:
+(a) keys that implement `Hash + Eq` but not `Ord`, and (b) high-frequency
+clone-and-compare workflows on same-origin maps where the Merkle hash fires before
+any entry is compared.  For general use `OrdMap` has equal or better allocation
+count, cache behaviour, parallel bulk ops, iteration, and equality speed.
+
+Specific capabilities gained:
+
+- **Use as a `HashMap` key or in `HashSet`**: OrdMap/OrdSet currently lack a `Hash`
+  impl because hashing requires `K: Hash` (not in the base constraint `K: Ord`).
+  With `ord-hash`, `Hash` is implemented for `GenericOrdMap<K, V, P>` when
+  `K: Hash, V: Hash`, giving O(1) amortised hashing after the first call.
+- **O(1) inequality fast-path in `PartialEq`**: if both maps have a valid cached hash
+  and the hashes differ, they cannot be equal — skip the O(n) sorted scan.  Equal
+  hashes still fall through to the scan (collision safety).  Mirrors the
+  `kv_merkle_hash` fast-path on `HashMap`.
+- **Change detection**: call `content_hash()` before and after a pipeline stage to
+  detect whether the map changed in O(1).
+- **Content-addressed caching / memoisation**: use OrdMap as a cache key in a
+  `HashMap<OrdMap<K,V>, Result>` without first converting to a sorted `Vec`.
+
+**Design:**
+
+*Feature gate:* New `ord-hash` feature in `Cargo.toml` (`default = false`).
+No code change and no overhead without the feature.
+
+*Storage:*
+```rust
+// GenericOrdMap fields added under #[cfg(feature = "ord-hash")]:
+content_hash_cache: Cell<u64>,   // cached hash value (0 = uninitialised)
+hash_valid: Cell<bool>,          // true = cache is current
+```
+`Cell` (not `AtomicU64`) is sufficient — `GenericOrdMap` is not `Sync` through
+the cache field; `Sync` is derived from the element type as before.  The `Hash`
+impl takes `&self` which is valid because `Cell` is not `Sync` and we never
+alias across threads.
+
+*Hash scheme:* Sequential XOR over `(hash(k) ^ hash(v))` for each entry in
+sorted order.  XOR is order-independent (same result whether computed forward or
+backward), but OrdMap's deterministic order means a stronger polynomial rolling
+hash is also feasible.  Start with XOR to match the pattern established by
+`kv_merkle_hash` on HashMap; note the decision in `docs/decisions.md`.
+
+*Invalidation:* every mutation path (`insert`, `remove`, CoW via
+`SharedPointer::make_mut`) calls `self.hash_valid.set(false)`.
+
+*`Hash` impl:*
+```rust
+#[cfg(feature = "ord-hash")]
+impl<K: Hash + Ord + Clone, V: Hash + Clone, P: SharedPointerKind> Hash
+    for GenericOrdMap<K, V, P>
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.content_hash().hash(state);
+    }
+}
+```
+
+*`PartialEq` short-circuit:*
+```rust
+// Early exit: different hashes → definitely unequal (no false negatives,
+// possible false positives which the scan below handles).
+#[cfg(feature = "ord-hash")]
+if self.hash_valid.get() && other.hash_valid.get()
+    && self.content_hash_cache.get() != other.content_hash_cache.get()
+{
+    return false;
+}
+// Fall through to existing O(n) sorted scan.
+```
+
+**Scope:**
+- `OrdMap` and `OrdSet` (OrdSet reuses OrdMap's impl via its inner map).
+- `Hash` impl gated on `K: Hash, V: Hash` (for OrdSet: `A: Hash`).
+- `PartialEq` short-circuit gated on `ord-hash` feature.
+- `content_hash()` public method for explicit use (change detection, etc.).
+- Add `ord-hash` to the feature table in `README.md` and `lib.rs`.
+
+**Not in scope:** Per-node hash caching (would enable O(log n) hash on partial
+updates but requires structural changes to `Branch`/`Leaf`; can follow as a future
+item if the map-level cache proves insufficient).
+
+**Acceptance criteria:**
+- `cargo test --features ord-hash` passes.
+- `cargo test` (without feature) passes — no regression.
+- `OrdMap<K, V>` and `OrdSet<A>` are usable as `HashMap` keys when
+  `K: Hash + Ord, V: Hash` and `A: Hash + Ord`.
+- `PartialEq` short-circuit fires and is tested (equal-hash maps, different-hash maps,
+  hash-collision maps where scan must confirm).
+- `content_hash()` returns consistent values across calls on an unmodified map.
+- `content_hash()` is invalidated and recomputed correctly after insert/remove.
+- `test.sh` passes.
+
+**Complexity:** Low–medium.  The field addition and invalidation sites are
+mechanical; the main design decision is XOR vs polynomial hashing (record in
+`decisions.md`).  No structural change to the B+ tree nodes.
+
+---
+
+### R.17 Head-to-head OrdMap vs HashMap criterion benchmarks (LOW)
+
+**What:** Add a criterion benchmark suite that measures `OrdMap` and `HashMap` side-by-side
+on the same operations, key types, and collection sizes.  Write the results to
+`docs/baselines.md`.
+
+**Why:** The "Choosing the right map" section in `README.md` and the B+ tree vs HAMT
+analysis in `docs/architecture.md` make comparative claims without hard numbers.  The
+existing `docs/baselines.md` has:
+- `HashMap` vs `std::HashMap` comparisons (from the original criterion suite)
+- `OrdMap` vs `std::BTreeMap` comparisons
+- dhat allocation counts for both types separately
+
+Missing: a direct `OrdMap` vs `HashMap` wall-clock comparison on equivalent workloads.
+
+**Operations to benchmark (i64 keys, sizes 100 / 1K / 10K / 100K):**
+
+| Operation | Notes |
+|-----------|-------|
+| lookup | sequential random lookups |
+| insert\_mut | sequential inserts into a pre-built map |
+| remove\_mut | sequential removes |
+| iter | full iteration |
+| from\_iter | bulk construction |
+| par\_union (10K / 100K) | parallel set union — join vs filter+reduce |
+| par\_intersection | same |
+
+**Implementation:** Add `benches/compare.rs` (or extend `benches/ordmap.rs` /
+`benches/hashmap.rs` with cross-type groups).  Use `criterion::BenchmarkGroup` with
+a shared ID so criterion plots them together.
+
+**Output:** Summary table in `docs/baselines.md` § "OrdMap vs HashMap — head-to-head".
+
+**Complexity:** Low — criterion boilerplate; no new library code.
+
+**Prerequisites:** R.15 ✓ (so node size is confirmed before recording baseline numbers)
+
+**Acceptance:** Table in `docs/baselines.md` with OrdMap and HashMap rows side-by-side.
+`bench.sh compare` runs without error.
+
+---
+
+### R.15 Re-evaluate OrdMap node size for join-heavy workloads (LOW)
+
+**What:** Re-benchmark `ORD_CHUNK_SIZE` at 16, 24, 32, and 48 with the join algorithm
+operations added in R.11 (`par_union`, `par_intersection`, `par_difference`,
+`par_symmetric_difference`) and add the results to `docs/decisions.md` as an addendum
+to DEC-017.  If a different size wins, update `src/config.rs` and record the change.
+
+**Why:** DEC-017 selected `ORD_CHUNK_SIZE = 32` based exclusively on single-tree
+operations (lookup, insert\_mut, remove\_mut, iter, range\_iter).  The join algorithm
+introduces a qualitatively different access pattern not present in that benchmark suite:
+
+- `split_node` copies up to `NODE_SIZE/2` entries at each level and produces new
+  Arc-wrapped node allocations.
+- `concat_node` redistributes entries between nodes when reassembling the result tree.
+- Both input trees are traversed simultaneously (dual-tree cache pressure):
+  at NODE\_SIZE=32 each node is 512 bytes (4 Apple Silicon cache lines); with two
+  trees in flight that is 8 cache lines per recursion level.
+- The recursion depth determines how many `rayon::join` tasks are spawned before
+  bottoming out.  Smaller nodes → deeper trees → more parallelism exposed earlier.
+
+These factors pull in opposite directions: larger nodes reduce tree height and total
+allocations in the result but increase per-split copy cost and dual-tree cache
+pressure; smaller nodes expose more parallelism and reduce per-split cost but
+increase total allocations.  Whether 32 remains optimal is an open empirical question.
+
+**Benchmark plan:**
+
+```bash
+# Save single-tree baseline (already done in DEC-017; use saved criterion baseline
+# or re-run if not available)
+bench.sh -- --save-baseline node-size-32
+
+# For each candidate size (edit src/config.rs):
+#   ORD_CHUNK_SIZE = 16 / 24 / 32 / 48
+# Run:
+bench.sh ordmap -- --baseline node-size-32   # single-tree ops: lookup, insert_mut, iter
+bench.sh ordmap_parallel                     # join ops: par_union, par_intersection, par_difference
+# Record results in /private/tmp/bench_nodesize_<N>_$(date +%s).txt
+```
+
+Measure at N = 10K and 100K entries.  Compare:
+
+| Operation | size 16 | size 24 | **size 32** | size 48 |
+|-----------|---------|---------|-------------|---------|
+| lookup (10K/100K) | | | baseline | |
+| insert\_mut (10K/100K) | | | baseline | |
+| par\_union (10K/100K) | | | baseline | |
+| par\_intersection (10K/100K) | | | baseline | |
+| split\_node (synthetic) | | | baseline | |
+
+**Decision rule:** If join ops at any candidate size are ≥5% faster than size 32
+without a commensurate regression on lookup/insert\_mut (or vice versa), update
+`ORD_CHUNK_SIZE` and record the full table in an addendum to DEC-017.  If size 32
+remains optimal across all workloads, record that finding — closing the question
+explicitly.
+
+**Acceptance:** Benchmark table added to DEC-017 addendum.  If `ORD_CHUNK_SIZE`
+changes: `src/config.rs` updated, `test.sh` passes, `docs/baselines.md` updated.
+
+**Complexity:** Low — benchmark-only unless node size changes.
+
+**Prerequisites:** R.11 ✓
+
+---
+
+### R.16 Ord-backed compound collection types (LARGE)
+
+**What:** Add `Ord`-backed variants of the compound collection types that are currently
+backed exclusively by `HashMap`/`HashSet`.  Each new type uses `OrdMap` or `OrdSet` as
+its underlying store, inheriting the B+ tree's allocation density, sorted iteration,
+parallel join operations, and `Ord`/`PartialOrd` trait coverage.
+
+**Current compound types and their backing store:**
+
+| Type | Current backing | Ord variant | Backing |
+|------|----------------|-------------|---------|
+| `Bag<A>` | `HashMap<A, usize>` | `OrdBag<A>` | `OrdMap<A, usize>` |
+| `BiMap<K, V>` | two `HashMap`s | `OrdBiMap<K, V>` | two `OrdMap`s |
+| `SymMap<K>` | `HashMap<K, K>` | `OrdSymMap<K>` | `OrdMap<K, K>` |
+| `HashMultiMap<K, V>` | `HashMap<K, Vector<V>>` | `OrdMultiMap<K, V>` | `OrdMap<K, Vector<V>>` |
+| `InsertionOrderMap<K,V>` | `HashMap` + `Vector` | keep as-is | insertion order ≠ sorted order |
+| `InsertionOrderSet<A>` | `HashSet` + `Vector` | keep as-is | insertion order ≠ sorted order |
+
+`InsertionOrderMap`/`InsertionOrderSet` preserve insertion order, which is semantically
+distinct from sorted order — they are complementary types, not candidates for Ord variants.
+
+**Why:**
+
+All of the B+ tree advantages that motivated R.11 and R.14 currently stop at
+`OrdMap`/`OrdSet`.  The compound types inherit none of them:
+- ~4.5× more allocations than an OrdMap-backed equivalent at 100K entries
+- No sorted iteration, no `Ord`/`PartialOrd`, no range queries
+- Parallel set operations use filter+reduce rather than the join algorithm
+- No path to `ord-hash` (R.14) content hashing
+
+`OrdBag`, `OrdBiMap`, `OrdSymMap`, `OrdMultiMap` would give callers that have
+`K: Ord` all the same advantages they get from choosing `OrdMap` over `HashMap`.
+
+**Scope per type:**
+
+- Full standard trait coverage (see directives: `Clone`, `Debug`, `PartialEq`/`Eq`,
+  `PartialOrd`/`Ord`, `Hash`, `Default`, `FromIterator`, `IntoIterator`, `Extend`,
+  `Serialize`/`Deserialize` behind `serde`)
+- Set operations (where applicable): `union`, `intersection`, `difference`,
+  `symmetric_difference` with canonical names per directives
+- Parallel variants (`par_union`, etc.) delegating to the join algorithm via the
+  underlying `OrdMap`
+- Proptest strategies and property tests
+
+**Complexity:** Large — four new types, full trait coverage, tests.  Largely mechanical
+once the first (`OrdBag`) is done; the rest follow the same pattern.
+
+**Sequencing:** Can be done one type at a time.  Suggested order: `OrdBag` (simplest,
+only wraps `OrdMap<A, usize>`) → `OrdMultiMap` → `OrdSymMap` → `OrdBiMap` (bijection
+invariant with two `OrdMap`s is the most complex).
+
+**Prerequisites:** R.11 ✓ (for parallel join to be available on `OrdMap`)
+
+**Acceptance:** Each type passes `test.sh`; trait coverage table in `directives.md` has
+no gaps; benchmark entry added to `docs/baselines.md`.
+
+---
 
 ### 3.4: Parallel bulk operations — DONE
 

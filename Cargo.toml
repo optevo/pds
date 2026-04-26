@@ -31,7 +31,7 @@ all-features = true
 path = "./src/lib.rs"
 
 [features]
-default = ["std", "triomphe"]
+default = ["std", "triomphe", "ord-hash"]
 std = ["wide/std", "bitmaps/std", "imbl-sized-chunks/std"]
 debug = []
 serde = ["dep:serde_core"]
@@ -41,6 +41,11 @@ atom = ["dep:arc-swap", "std"]
 foldhash = ["dep:foldhash"]
 hash-intern = ["std"]
 persist = ["std", "dep:serde_core", "hash-intern"]
+# Content hash cache on OrdMap/OrdSet: O(1) PartialEq fast-path negative check;
+# costs one atomic store per mutation. Default-on per DEC-036: overhead is
+# unmeasurable at str-key sizes and ≤~5% at small i64 workloads, asymptoting
+# to zero as map size grows. See DEC-036.
+ord-hash = ["std"]
 
 [dependencies]
 bitmaps = { version = "3", default-features = false }

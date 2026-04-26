@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Bencher, Criterion};
+use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, Criterion};
 use equivalent::Comparable;
 use pds::ordmap::OrdMap;
 use std::borrow::Borrow;
@@ -601,9 +601,96 @@ where
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Parallel bulk operation benchmarks (join algorithm)
+//
+// Measures par_union, par_intersection, par_difference,
+// par_symmetric_difference at 10K and 100K entries.
+//
+// Two map configurations:
+//   - half-overlap: a=[0..N], b=[N/2..3N/2] — 50% shared keys
+//   - disjoint:     a=[0..N], b=[N..2N]     — no shared keys (worst case for
+//                                              union, best case for difference)
+//
+// Used for R.15 (node size re-evaluation) and R.17 (head-to-head comparison).
+// ---------------------------------------------------------------------------
+
+fn make_half_overlap(n: usize) -> (OrdMap<i64, i64>, OrdMap<i64, i64>) {
+    let a: OrdMap<i64, i64> = (0..n as i64).map(|i| (i, i)).collect();
+    let b: OrdMap<i64, i64> = ((n / 2) as i64..(n + n / 2) as i64)
+        .map(|i| (i, i * 2))
+        .collect();
+    (a, b)
+}
+
+fn make_disjoint(n: usize) -> (OrdMap<i64, i64>, OrdMap<i64, i64>) {
+    let a: OrdMap<i64, i64> = (0..n as i64).map(|i| (i, i)).collect();
+    let b: OrdMap<i64, i64> = (n as i64..2 * n as i64).map(|i| (i, i * 2)).collect();
+    (a, b)
+}
+
+fn bench_parallel_group(
+    group: &mut BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    n: usize,
+) {
+    // par_union — half overlap
+    group.bench_function(format!("par_union_overlap_{n}"), |b| {
+        let (a, bmap) = make_half_overlap(n);
+        b.iter(|| {
+            let r = a.clone().par_union(bmap.clone());
+            black_box(r)
+        })
+    });
+
+    // par_union — disjoint
+    group.bench_function(format!("par_union_disjoint_{n}"), |b| {
+        let (a, bmap) = make_disjoint(n);
+        b.iter(|| {
+            let r = a.clone().par_union(bmap.clone());
+            black_box(r)
+        })
+    });
+
+    // par_intersection — half overlap
+    group.bench_function(format!("par_intersection_overlap_{n}"), |b| {
+        let (a, bmap) = make_half_overlap(n);
+        b.iter(|| {
+            let r = a.clone().par_intersection(bmap.clone());
+            black_box(r)
+        })
+    });
+
+    // par_difference — half overlap
+    group.bench_function(format!("par_difference_overlap_{n}"), |b| {
+        let (a, bmap) = make_half_overlap(n);
+        b.iter(|| {
+            let r = a.clone().par_difference(bmap.clone());
+            black_box(r)
+        })
+    });
+
+    // sequential union — baseline for comparison
+    group.bench_function(format!("seq_union_overlap_{n}"), |b| {
+        let (a, bmap) = make_half_overlap(n);
+        b.iter(|| {
+            let r = a.clone().union(bmap.clone());
+            black_box(r)
+        })
+    });
+}
+
+fn bench_parallel(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ordmap_parallel");
+    for n in &[10_000usize, 100_000] {
+        bench_parallel_group(&mut group, *n);
+    }
+    group.finish();
+}
+
 // Main benchmark entry point
 fn ordmap_benches(c: &mut Criterion) {
     bench_ordmap(c);
+    bench_parallel(c);
 
     if std::env::var("BENCH_STD").is_ok() {
         bench_btreemap(c);

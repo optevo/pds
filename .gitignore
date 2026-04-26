@@ -24,6 +24,10 @@ dhat-heap.json
 # Local rustdoc output
 rustdocs/
 
+# Benchmark output files — raw criterion output, not committed (summaries go in docs/baselines.md)
+docs/bench_*.txt
+docs/bench_latest.txt
+
 # Editor directories
 .vscode/
 .idea/

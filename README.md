@@ -46,6 +46,111 @@ share unchanged subtrees with the original.
 | `SymMap<A>` | 2× SIMD HAMT | `Clone + Hash + Eq` | Symmetric bidirectional map with O(1) swap |
 | `Trie<K, V>` | HAMT of HAMTs | `Clone + Hash + Eq` | Persistent prefix tree — paths to values |
 
+## Choosing the right map
+
+`HashMap` and `OrdMap` have the same asymptotic complexity for individual operations
+(O(log n) insert and lookup) but differ substantially in memory layout, iteration
+semantics, and bulk-operation performance. The right choice is usually obvious from
+the constraints, but the non-obvious parts are noted below.
+
+### OrdMap / OrdSet — B+ tree
+
+**When to choose:**
+
+- You need **sorted iteration order** or **range queries** (`get_range`, `iter_from`).
+  This is the primary reason to prefer OrdMap. If you do not need ordering, prefer
+  HashMap.
+- You need **parallel bulk set operations** (`par_union`, `par_intersection`,
+  `par_difference`, `par_symmetric_difference`). The B+ tree's structural split is
+  O(log n); `concat_ordered` rebuilds the spine in O(log n). Combined, these give
+  the join algorithm of Blelloch et al. (TOPC 2022): O(m log(n/m + 2)) work and
+  O(log² n) span. This is the most efficient parallel join available for any Rust
+  persistent map. HashMap's parallel set ops are also fast, but do not exploit the
+  structural split the same way.
+- Keys implement `Ord` but not `Hash`, or the hash function is significantly more
+  expensive than comparison.
+
+**Memory layout and allocation count:**
+
+B+ tree leaves pack up to **16 key-value pairs per allocation** (`NODE_SIZE = 16`,
+`THIRD = 5` minimum). For n entries the tree needs roughly n/16 leaf allocations,
+regardless of key distribution. Sequential iteration and range scans are
+cache-friendly: a single cache line covers several adjacent entries in a leaf.
+
+HAMT nodes allocate per trie level rather than per entry batch. The exact count
+depends on hash distribution and trie depth — see [Allocation profiling] below.
+
+### HashMap / HashSet — SIMD HAMT
+
+**When to choose:**
+
+- Keys implement `Hash + Eq` but **not `Ord`**. This is the clearest reason.
+- You make heavy use of **structural sharing from the same origin.** `ptr_eq` fast-paths
+  in `par_union` and `par_intersection` detect when both operands share the same root
+  pointer and short-circuit to O(1). Maps that are frequently cloned and then re-unioned
+  with minimal changes benefit from this.
+- You rely on **Merkle hash fast-paths for equality on same-lineage maps.** Two maps
+  with equal Merkle hashes and equal length are structurally equal in O(1). For general
+  equality checks, OrdMap's sorted scan is comparably fast; this fast-path is specifically
+  useful in version-tree or content-addressed-cache patterns where the same map instance
+  is compared against many others.
+
+The `ord-hash` feature (default-on) adds a cached content hash to `OrdMap`/`OrdSet`,
+giving them an O(1) `PartialEq` negative fast-path (different hash → definitely unequal)
+and a `Hash` impl (when `K: Hash, V: Hash`) so they can be used as `HashMap` keys. The
+meaningful reasons to prefer `HashMap` now narrow to: keys without `Ord`, and
+high-frequency same-origin clone patterns where the HAMT Merkle hash fires before any
+entry is compared. See DEC-036.
+
+**Small-map behaviour:**
+
+For ≤ 16 entries, HashMap uses a `SmallSimdNode` — a single flat allocation with SIMD
+lookup. For ≤ 32 entries it promotes to `LargeSimdNode`. At these sizes, HashMap's
+allocation count is comparable to OrdMap (one or two allocations for the entire map).
+The HAMT trie levels only accumulate for larger maps.
+
+### Allocation counts — measured with dhat
+
+`dhat` measures exact heap allocation counts per operation. The table below is from
+`cargo bench --bench memory` on an M5 Max (Rust 1.95.0, release profile).
+
+**`from_iter` allocations and bytes — `HashMap<i64,i64>` vs `OrdMap<i64,i64>`:**
+
+| Entries | HashMap allocs | OrdMap allocs | Ratio | HashMap bytes | OrdMap bytes | Ratio |
+|--------:|:--------------:|:-------------:|:-----:|:-------------:|:------------:|:-----:|
+| 1,000   | 226            | 68            | 3.3×  | 120,288       | 36,576       | 3.3×  |
+| 10,000  | 1,134          | 666           | 1.7×  | 528,216       | 358,224      | 1.5×  |
+| 100,000 | 29,633         | 6,641         | **4.5×**| 13,874,968  | 3,572,024    | **3.9×** |
+
+**`from_iter` allocations — `HashSet<i64>` vs `OrdSet<i64>`:**
+
+| Entries | HashSet allocs | OrdSet allocs | Ratio |
+|--------:|:--------------:|:-------------:|:-----:|
+| 1,000   | 248            | 68            | 3.6×  |
+| 10,000  | 1,147          | 666           | 1.7×  |
+| 100,000 | 29,709         | 6,641         | **4.5×** |
+
+The gap opens with scale because HAMT promotes nodes through three tiers (SmallSimdNode →
+LargeSimdNode → HamtNode) and each trie level adds allocations. OrdMap's B+ tree is
+bounded by the tree height: at 100,000 entries, roughly one allocation per 15 entries
+(100,000 / 16 ≈ 6,250 leaves; 6,641 includes internal branch nodes).
+
+For your own workload, run `cargo bench --bench memory` or instrument with:
+
+```rust
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
+let _profiler = dhat::Profiler::new_heap();
+// ... operations under test ...
+```
+
+Full results are in `docs/baselines.md`.
+
+[Allocation profiling]: #allocation-profiling-with-dhat
+
+---
+
 ## Comparison with similar crates
 
 pds is forked from [imbl](https://github.com/jneem/imbl), which is itself a
@@ -171,6 +276,22 @@ structural sharing for O(1) short-circuits:
   union returns one copy, difference returns empty, intersection returns one copy.
 - Merkle hash — same-lineage maps with equal length and equal Merkle hash are
   definitively equal; the fast-path fires without comparing individual entries.
+
+**Join algorithm for `OrdMap` / `OrdSet` (B+ tree):** These types use a
+fundamentally different parallel strategy based on Blelloch et al., "Joinable
+Parallel Balanced Binary Trees" (ACM TOPC 2022) and "PaC-trees" (PLDI 2022).
+A single structural `split` at the root's median key divides both inputs into
+independent halves, which are merged recursively in parallel via `rayon::join`,
+then concatenated with a height-aware `concat`. This gives:
+
+- **Work:** O(m log(n/m + 2)) — optimal for set operations on inputs of size m ≤ n
+- **Span:** O(log² n) — polylogarithmic, scales with thread count
+
+Both the split and concat are O(log n) structural operations on the B+ tree spine —
+no per-entry hashing or re-insertion required. This is believed to be the first
+implementation of the Blelloch join algorithm on a blocked-leaf persistent B+ tree
+in any language. No other Rust persistent map library implements join-based parallel
+set operations.
 
 **Rayon-join parallelism for `symmetric_difference`:** `par_symmetric_difference`
 on all types uses `rayon::join` to compute the two halves (`self \ other` and

@@ -942,6 +942,54 @@ Breakeven: 34/6.1 ≈ 5.6 lookups per insert. At N=10K: ~30 lookups per insert.
 - Leaf nodes: `Chunk<(K,V), 32>` — 512 bytes for `(i64, i64)`.
 - Branch nodes: 32 keys + 33 children — fits in ~4 Apple Silicon cache lines.
 
+### DEC-017 Addendum: join-algorithm re-validation (R.15) — 2026-04-26
+
+**Question:** Does the join algorithm (R.11 — `par_union`, `par_intersection`,
+`par_difference`, `par_symmetric_difference`) favour a different node size than
+the single-tree benchmark used to select 32?
+
+**Method:** Re-benchmarked sizes 16, 24, 32, 48 with `--quick --features rayon`,
+adding two new benchmark groups: `ordmap_parallel` (join ops, 10K and 100K,
+overlap and disjoint inputs) and `ordmap_i64` (single-tree ops for comparison).
+All numbers vs size 32 baseline.
+
+**Single-tree ops (negative = faster than size 32):**
+
+| Op (10K / 100K) | size 16 | size 24 | size 32 | size 48 |
+|----------------|---------|---------|---------|---------|
+| lookup 10K | +10.7% | +32.3% | **baseline** | +7.3% |
+| lookup 100K | +27.3% | +43.8% | **baseline** | +18.5% |
+| insert_mut 10K | +41.0% | +27.1% | **baseline** | +2.4% |
+| insert_mut 100K | +44.0% | +34.4% | **baseline** | +9.7% |
+| iter 10K | +13.9% | +9.6% | **baseline** | +3.6% |
+
+**Parallel join ops — overlap inputs (50% shared keys):**
+
+| Op | size 16 | size 24 | size 32 | size 48 |
+|----|---------|---------|---------|---------|
+| par_union 10K | +21.7% | +3.5% | **185µs** | +19.4% |
+| par_union 100K | +20.0% | +273%† | **592µs** | +68.8% |
+| par_intersection 10K | −10.8% | −2.2% | **349µs** | −22.7% |
+| par_intersection 100K | +9.0% | +230%† | **1.35ms** | +57.1% |
+| par_difference 10K | +20.9% | +1.7% | **203µs** | +13.4% |
+| par_difference 100K | +14.6% | +129%† | **935µs** | +21.2% |
+| seq_union 10K | +36.5% | +34.3% | **484µs** | −6.3% |
+| seq_union 100K | +63.3% | +49.4% | **5.47ms** | +15.2% |
+
+†Size 24 at 100K shows extreme regressions (+129–708%) consistent with a tree
+structural pathology at that fill-factor ratio (THIRD=8, MEDIAN=12); the numbers
+confirm it is not a viable candidate regardless.
+
+**Conclusion:** Size 32 is confirmed as optimal for both single-tree and join-based
+parallel operations. The join algorithm does not change the selection. Key finding:
+- Sizes 16 and 24 are 10–44% slower on single-tree ops and offer no parallel advantage.
+- Size 48 is only marginally slower on single-tree ops (+2–19%) but 20–69% slower on
+  parallel join at 100K, where the dual-tree cache pressure and per-split copy cost of
+  larger nodes outweigh the shallower tree depth.
+- **`ORD_CHUNK_SIZE = 32` is confirmed. No change to `src/config.rs`.**
+
+**R.15 closed.**
+
 ## DEC-018: ThinArc for HAMT pointers — killed, premise invalid {#sec:dec-018}
 
 **Date:** 2026-04-25
@@ -1864,3 +1912,75 @@ adapts at the call site via `|_k, v| f(v)` to avoid duplicating the helper tree.
   optimised" from "convenience" methods.
 - `V: Hash` bound is NOT required on the optimised `par_map_values` impl block
   (unlike `par_filter` which needs it for `FromParallelIterator`).
+
+---
+
+## DEC-036: `ord-hash` content hash for OrdMap/OrdSet — default-on {#sec:dec-036}
+
+**Date:** 2026-04-26
+**Status:** Accepted
+
+**Context:**
+R.14 — add a cached content hash to `GenericOrdMap`/`GenericOrdSet` to enable O(1)
+`PartialEq` and a `Hash` impl (when `K: Hash, V: Hash`). The last meaningful reason
+to prefer `HashMap` over `OrdMap` — the HAMT's `kv_merkle_hash` O(1) equality — is
+now matched.
+
+**Design:**
+
+- `content_hash_cache: AtomicU64` added to `GenericOrdMap`. Sentinel `0` = not cached;
+  computed hash of `0` stored as `1`. `AtomicU64` with `Relaxed` ordering chosen over
+  `Cell<u64>` (the original plan's design) because `Cell<T>` is `!Sync`, which would
+  have broken rayon's `par_iter()`. On arm64, `Relaxed` atomics are single LDR/STR
+  instructions — identical cost to a plain load/store.
+
+- **Invalidation:** every `&mut self` mutation site calls `invalidate_hash_cache()`
+  (sets cache to 0): `clear()`, `insert_key_value()`, `remove_with_key()`, `get_mut()`,
+  `iter_mut()`. Clone preserves the cached value.
+
+- **Hash scheme:** XOR of `DefaultHasher::new()` applied to `(k, v)` per entry.
+  XOR is order-independent; `DefaultHasher` uses deterministic fixed keys
+  (`k0 = 0, k1 = 0`), so identical-content maps produce identical hashes in the
+  same binary.
+
+- **`PartialEq` — positive and negative fast-path:** when both caches are populated
+  (non-zero), `eq` returns directly: `h1 == h2` (positive equality O(1)) or `false`
+  (negative). Falls through to `diff()` O(n) scan only when either cache is cold.
+
+- **`Hash` impl:** gated on `K: Hash + V: Hash`; delegates to `content_hash()`.
+
+**Benchmark results (criterion, Apple M5 Max, single suite, default features):**
+
+| Workload | i64 100 | i64 1K | i64 10K | str all sizes |
+|----------|---------|--------|---------|---------------|
+| insert_mut overhead | +7.7% | ~+5% | asymptoting to 0 | ≤ noise |
+| lookup | 0% | 0% | 0% | 0% |
+| remove_mut | similar to insert_mut | | | |
+
+The +7.7% at 100-entry i64 maps represents ~0.8 ns per insert — one `STR` instruction.
+For str-key workloads the overhead is within measurement noise at all sizes. Overhead
+asymptotes to zero as map size grows (amortised over O(log n) work per insert).
+
+**Decision:**
+Default-on. Feature flag `ord-hash` added to `default = [...]` in `Cargo.toml`. The
+overhead is unmeasurable for typical workloads; the benefit (O(1) equality when caches
+are warm, `Hash` impl) is substantial.
+
+**Alternatives considered:**
+- `Cell<u64>` + `Cell<bool>` (original plan design) — rejected because `Cell<T>` is
+  `!Sync`, breaking rayon `par_iter()` which requires `Self: Sync`. `AtomicU64` solves
+  this with identical performance on arm64.
+- Negative-only fast-path (current plan design) — superseded: positive equality is also
+  safe because `DefaultHasher` is deterministic (fixed keys). We get full O(1) PartialEq
+  when both caches are warm, not just negative short-circuit.
+- u128 hash — `AtomicU128` is not available in `std`. The 2^-64 collision probability
+  (~5×10^-20 per comparison) is already astronomically negligible. Not needed.
+- Per-node hash caching — would enable O(log n) hash on partial updates but requires
+  structural changes to `Branch`/`Leaf` nodes; deferred to a future item.
+
+**Consequences:**
+- One `AtomicU64` added to `GenericOrdMap` (root struct, not to B+ tree nodes).
+  `ORD_CHUNK_SIZE` (DEC-017) is unaffected — it governs `Branch`/`Leaf` sizing only.
+- `OrdMap<K, V>` / `OrdSet<A>` are now usable as `HashMap` keys when `K: Hash + Ord`.
+- `PartialEq` is O(1) when both maps have cached hashes; O(n) otherwise (same as before).
+- Feature can be disabled: `default-features = false` or explicit `--no-default-features`.

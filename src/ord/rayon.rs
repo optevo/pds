@@ -13,6 +13,8 @@ use ::rayon::iter::{
 };
 
 use archery::{SharedPointer, SharedPointerKind};
+#[cfg(feature = "ord-hash")]
+use core::sync::atomic::AtomicU64;
 use imbl_sized_chunks::Chunk;
 
 use crate::nodes::btree::{Branch, Children, Leaf, Node};
@@ -205,8 +207,22 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// OrdMap — parallel bulk operations
+// OrdMap — parallel bulk operations (join-based)
+//
+// All four operations use the same recursive split/join skeleton:
+//   1. Pick a pivot key from `self`'s root in O(1).
+//   2. Split both maps at the pivot in O(log n) each.
+//   3. Recurse on left/right halves in parallel via rayon::join.
+//   4. Combine the two results with concat_ordered in O(log n).
+//
+// This gives O(m log(n/m + 2)) total work and O(log² n) span — comparable to
+// Blelloch et al. "Joinable Parallel Balanced Binary Trees" (ACM TOPC 2022).
+// For inputs of size ≤ PAR_UNION_THRESHOLD, fall back to the sequential
+// implementation to avoid fork overhead.
 // ---------------------------------------------------------------------------
+
+/// Below this combined size, fall back to sequential set operations.
+const PAR_UNION_THRESHOLD: usize = 512;
 
 impl<K, V, P> GenericOrdMap<K, V, P>
 where
@@ -214,13 +230,30 @@ where
     V: Clone + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {
-    /// Construct the union of two maps in parallel.
+    /// Return a pivot key for splitting: the median separator key of the root
+    /// Branch, or the median entry key of a root Leaf. O(1).
+    fn root_pivot_key(&self) -> Option<K> {
+        use crate::nodes::btree::Node;
+        match &self.root {
+            None => None,
+            Some(Node::Leaf(leaf)) => {
+                let keys = &leaf.keys;
+                keys.get(keys.len() / 2).map(|(k, _)| k.clone())
+            }
+            Some(Node::Branch(branch)) => {
+                let keys = &branch.keys;
+                keys.get(keys.len() / 2).cloned()
+            }
+        }
+    }
+
+    /// Construct the union of two maps in parallel using a join-based algorithm.
     ///
     /// Values from `self` take precedence for keys present in both maps.
     ///
     /// This is the parallel equivalent of [`union`][GenericOrdMap::union].
     ///
-    /// Time: O(n log n / p)
+    /// Time: O(m log(n/m + 2)) work, O(log² n) span, where m ≤ n are the input sizes.
     #[must_use]
     pub fn par_union(self, other: Self) -> Self {
         if other.is_empty() {
@@ -229,57 +262,62 @@ where
         if self.is_empty() {
             return other;
         }
-        let to_add: Self = other
-            .par_iter()
-            .filter_map(|(k, v)| {
-                if self.contains_key(k) {
-                    None
-                } else {
-                    Some((k.clone(), v.clone()))
-                }
-            })
-            .fold(Self::default, |mut acc, (k, v)| {
-                acc.insert(k, v);
-                acc
-            })
-            .reduce(Self::default, |a, b| a.union(b));
-        self.union(to_add)
+        if self.len() + other.len() <= PAR_UNION_THRESHOLD {
+            return self.union(other);
+        }
+        let pivot = match self.root_pivot_key() {
+            Some(k) => k,
+            // A 0-key root (single-child Branch from structural split) has no separator to use
+            // as a pivot. Fall back to sequential union rather than silently dropping entries.
+            None => return self.union(other),
+        };
+        // self wins for the pivot key if it has one; take it before the split.
+        let self_pivot_val = self.get(&pivot).cloned();
+        let (self_l, _, self_r) = self.split_at_key_consuming(&pivot);
+        let (other_l, other_pivot_val, other_r) = other.split_at_key_consuming(&pivot);
+        let pivot_val = self_pivot_val.or(other_pivot_val);
+        let (result_l, result_r) =
+            ::rayon::join(|| self_l.par_union(other_l), || self_r.par_union(other_r));
+        let mut result = result_l.concat_ordered(result_r);
+        if let Some(v) = pivot_val {
+            result.insert(pivot, v);
+        }
+        result
     }
 
     /// Construct the intersection of two maps in parallel, keeping values from `self`.
     ///
     /// This is the parallel equivalent of [`intersection`][GenericOrdMap::intersection].
     ///
-    /// Time: O(min(n, m) log max(n, m) / p)
+    /// Time: O(m log(n/m + 2)) work, O(log² n) span.
     #[must_use]
     pub fn par_intersection(self, other: Self) -> Self {
         if self.is_empty() || other.is_empty() {
             return Self::default();
         }
-        if self.len() <= other.len() {
-            self.par_iter()
-                .filter_map(|(k, v)| {
-                    if other.contains_key(k) {
-                        Some((k.clone(), v.clone()))
-                    } else {
-                        None
-                    }
-                })
-                .fold(Self::default, |mut acc, (k, v)| {
-                    acc.insert(k, v);
-                    acc
-                })
-                .reduce(Self::default, |a, b| a.union(b))
-        } else {
-            other
-                .par_iter()
-                .filter_map(|(k, _)| self.get(k).map(|v| (k.clone(), v.clone())))
-                .fold(Self::default, |mut acc, (k, v)| {
-                    acc.insert(k, v);
-                    acc
-                })
-                .reduce(Self::default, |a, b| a.union(b))
+        if self.len() + other.len() <= PAR_UNION_THRESHOLD {
+            return self.intersection(other);
         }
+        let pivot = match self.root_pivot_key() {
+            Some(k) => k,
+            // 0-key root (single-child Branch from structural split): no separator to pivot on.
+            None => return self.intersection(other),
+        };
+        let self_pivot_val = self.get(&pivot).cloned();
+        let (self_l, _, self_r) = self.split_at_key_consuming(&pivot);
+        let (other_l, other_pivot_val, other_r) = other.split_at_key_consuming(&pivot);
+        let (result_l, result_r) = ::rayon::join(
+            || self_l.par_intersection(other_l),
+            || self_r.par_intersection(other_r),
+        );
+        let mut result = result_l.concat_ordered(result_r);
+        // Only include pivot if other also had it; keep self's value.
+        if other_pivot_val.is_some() {
+            if let Some(v) = self_pivot_val {
+                result.insert(pivot, v);
+            }
+        }
+        result
     }
 
     /// Construct the relative complement (self − other) in parallel:
@@ -287,25 +325,35 @@ where
     ///
     /// This is the parallel equivalent of [`difference`][GenericOrdMap::difference].
     ///
-    /// Time: O(n log m / p)
+    /// Time: O(m log(n/m + 2)) work, O(log² n) span.
     #[must_use]
     pub fn par_difference(self, other: Self) -> Self {
         if self.is_empty() || other.is_empty() {
             return self;
         }
-        self.par_iter()
-            .filter_map(|(k, v)| {
-                if other.contains_key(k) {
-                    None
-                } else {
-                    Some((k.clone(), v.clone()))
-                }
-            })
-            .fold(Self::default, |mut acc, (k, v)| {
-                acc.insert(k, v);
-                acc
-            })
-            .reduce(Self::default, |a, b| a.union(b))
+        if self.len() + other.len() <= PAR_UNION_THRESHOLD {
+            return self.difference(other);
+        }
+        let pivot = match self.root_pivot_key() {
+            Some(k) => k,
+            // 0-key root (single-child Branch from structural split): no separator to pivot on.
+            None => return self.difference(other),
+        };
+        let self_pivot_val = self.get(&pivot).cloned();
+        let (self_l, _, self_r) = self.split_at_key_consuming(&pivot);
+        let (other_l, other_pivot_val, other_r) = other.split_at_key_consuming(&pivot);
+        let (result_l, result_r) = ::rayon::join(
+            || self_l.par_difference(other_l),
+            || self_r.par_difference(other_r),
+        );
+        let mut result = result_l.concat_ordered(result_r);
+        // Include pivot only if other did NOT have it.
+        if other_pivot_val.is_none() {
+            if let Some(v) = self_pivot_val {
+                result.insert(pivot, v);
+            }
+        }
+        result
     }
 
     /// Construct the symmetric difference of two maps in parallel:
@@ -314,7 +362,7 @@ where
     /// This is the parallel equivalent of
     /// [`symmetric_difference`][GenericOrdMap::symmetric_difference].
     ///
-    /// Time: O((n + m) log max(n, m) / p)
+    /// Time: O(m log(n/m + 2)) work, O(log² n) span.
     #[must_use]
     pub fn par_symmetric_difference(self, other: Self) -> Self {
         if self.is_empty() {
@@ -323,42 +371,39 @@ where
         if other.is_empty() {
             return self;
         }
-        let (left, right) = ::rayon::join(
-            || {
-                self.par_iter()
-                    .filter_map(|(k, v)| {
-                        if other.contains_key(k) {
-                            None
-                        } else {
-                            Some((k.clone(), v.clone()))
-                        }
-                    })
-                    .fold(Self::default, |mut acc, (k, v)| {
-                        acc.insert(k, v);
-                        acc
-                    })
-                    .reduce(Self::default, |a, b| a.union(b))
-            },
-            || {
-                other
-                    .par_iter()
-                    .filter_map(|(k, v)| {
-                        if self.contains_key(k) {
-                            None
-                        } else {
-                            Some((k.clone(), v.clone()))
-                        }
-                    })
-                    .fold(Self::default, |mut acc, (k, v)| {
-                        acc.insert(k, v);
-                        acc
-                    })
-                    .reduce(Self::default, |a, b| a.union(b))
-            },
+        if self.len() + other.len() <= PAR_UNION_THRESHOLD {
+            return self.symmetric_difference(other);
+        }
+        let pivot = match self.root_pivot_key() {
+            Some(k) => k,
+            // 0-key root (single-child Branch from structural split): no separator to pivot on.
+            None => return self.symmetric_difference(other),
+        };
+        let self_pivot_val = self.get(&pivot).cloned();
+        let (self_l, _, self_r) = self.split_at_key_consuming(&pivot);
+        let (other_l, other_pivot_val, other_r) = other.split_at_key_consuming(&pivot);
+        let (result_l, result_r) = ::rayon::join(
+            || self_l.par_symmetric_difference(other_l),
+            || self_r.par_symmetric_difference(other_r),
         );
-        left.union(right)
+        let mut result = result_l.concat_ordered(result_r);
+        // Include pivot if exactly one of self/other had it.
+        match (self_pivot_val, other_pivot_val) {
+            (Some(v), None) | (None, Some(v)) => {
+                result.insert(pivot, v);
+            }
+            _ => {} // both had it or neither had it
+        }
+        result
     }
+}
 
+impl<K, V, P> GenericOrdMap<K, V, P>
+where
+    K: Ord + Clone + Send + Sync,
+    V: Clone + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+{
     /// Return a new map keeping only entries that satisfy the predicate.
     ///
     /// Evaluates `f(&key, &value)` for every entry in parallel; returns a new
@@ -412,6 +457,8 @@ where
         GenericOrdMap {
             root: new_root,
             size: self.size,
+            #[cfg(feature = "ord-hash")]
+            content_hash_cache: AtomicU64::new(0),
         }
     }
 
@@ -444,6 +491,8 @@ where
         GenericOrdMap {
             root: new_root,
             size: self.size,
+            #[cfg(feature = "ord-hash")]
+            content_hash_cache: AtomicU64::new(0),
         }
     }
 }
@@ -563,7 +612,9 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// OrdSet — parallel bulk operations
+// OrdSet — parallel bulk operations (join-based)
+//
+// Delegates to the OrdMap join-based implementation via the inner `map` field.
 // ---------------------------------------------------------------------------
 
 impl<A, P> GenericOrdSet<A, P>
@@ -571,11 +622,26 @@ where
     A: Ord + Clone + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {
-    /// Construct the union of two sets in parallel.
+    fn set_root_pivot_key(&self) -> Option<A> {
+        use crate::nodes::btree::Node;
+        match &self.map.root {
+            None => None,
+            Some(Node::Leaf(leaf)) => {
+                let keys = &leaf.keys;
+                keys.get(keys.len() / 2).map(|(k, _)| k.clone())
+            }
+            Some(Node::Branch(branch)) => {
+                let keys = &branch.keys;
+                keys.get(keys.len() / 2).cloned()
+            }
+        }
+    }
+
+    /// Construct the union of two sets in parallel using a join-based algorithm.
     ///
     /// This is the parallel equivalent of [`union`][GenericOrdSet::union].
     ///
-    /// Time: O(n log n / p)
+    /// Time: O(m log(n/m + 2)) work, O(log² n) span.
     #[must_use]
     pub fn par_union(self, other: Self) -> Self {
         if other.is_empty() {
@@ -584,87 +650,93 @@ where
         if self.is_empty() {
             return other;
         }
-        let to_add: Self = other
-            .par_iter()
-            .filter_map(|a| {
-                if self.contains(a) {
-                    None
-                } else {
-                    Some(a.clone())
-                }
-            })
-            .fold(Self::default, |mut acc, a| {
-                acc.insert(a);
-                acc
-            })
-            .reduce(Self::default, |a, b| a.union(b));
-        self.union(to_add)
+        if self.len() + other.len() <= PAR_UNION_THRESHOLD {
+            return self.union(other);
+        }
+        let pivot = match self.set_root_pivot_key() {
+            Some(k) => k,
+            // 0-key root (single-child Branch from structural split): no separator to pivot on.
+            None => return self.union(other),
+        };
+        let (self_l, _, self_r) = self.split_at_key_consuming(&pivot);
+        let (other_l, other_had_pivot, other_r) = other.split_at_key_consuming(&pivot);
+        let (result_l, result_r) =
+            ::rayon::join(|| self_l.par_union(other_l), || self_r.par_union(other_r));
+        let mut result = result_l.concat_ordered(result_r);
+        // pivot is always included (came from self)
+        let _ = other_had_pivot;
+        result.insert(pivot);
+        result
     }
 
     /// Construct the intersection of two sets in parallel.
     ///
     /// This is the parallel equivalent of [`intersection`][GenericOrdSet::intersection].
     ///
-    /// Time: O(min(n, m) log max(n, m) / p)
+    /// Time: O(m log(n/m + 2)) work, O(log² n) span.
     #[must_use]
     pub fn par_intersection(self, other: Self) -> Self {
         if self.is_empty() || other.is_empty() {
             return Self::default();
         }
-        let (smaller, larger) = if self.len() <= other.len() {
-            (self, other)
-        } else {
-            (other, self)
+        if self.len() + other.len() <= PAR_UNION_THRESHOLD {
+            return self.intersection(other);
+        }
+        let pivot = match self.set_root_pivot_key() {
+            Some(k) => k,
+            // 0-key root (single-child Branch from structural split): no separator to pivot on.
+            None => return self.intersection(other),
         };
-        smaller
-            .par_iter()
-            .filter_map(|a| {
-                if larger.contains(a) {
-                    Some(a.clone())
-                } else {
-                    None
-                }
-            })
-            .fold(Self::default, |mut acc, a| {
-                acc.insert(a);
-                acc
-            })
-            .reduce(Self::default, |a, b| a.union(b))
+        let (self_l, _, self_r) = self.split_at_key_consuming(&pivot);
+        let (other_l, other_had_pivot, other_r) = other.split_at_key_consuming(&pivot);
+        let (result_l, result_r) = ::rayon::join(
+            || self_l.par_intersection(other_l),
+            || self_r.par_intersection(other_r),
+        );
+        let mut result = result_l.concat_ordered(result_r);
+        if other_had_pivot {
+            result.insert(pivot);
+        }
+        result
     }
 
-    /// Construct the relative complement (self − other) in parallel:
-    /// elements in `self` not in `other`.
+    /// Construct the relative complement (self − other) in parallel.
     ///
     /// This is the parallel equivalent of [`difference`][GenericOrdSet::difference].
     ///
-    /// Time: O(n log m / p)
+    /// Time: O(m log(n/m + 2)) work, O(log² n) span.
     #[must_use]
     pub fn par_difference(self, other: Self) -> Self {
         if self.is_empty() || other.is_empty() {
             return self;
         }
-        self.par_iter()
-            .filter_map(|a| {
-                if other.contains(a) {
-                    None
-                } else {
-                    Some(a.clone())
-                }
-            })
-            .fold(Self::default, |mut acc, a| {
-                acc.insert(a);
-                acc
-            })
-            .reduce(Self::default, |a, b| a.union(b))
+        if self.len() + other.len() <= PAR_UNION_THRESHOLD {
+            return self.difference(other);
+        }
+        let pivot = match self.set_root_pivot_key() {
+            Some(k) => k,
+            // 0-key root (single-child Branch from structural split): no separator to pivot on.
+            None => return self.difference(other),
+        };
+        let (self_l, _, self_r) = self.split_at_key_consuming(&pivot);
+        let (other_l, other_had_pivot, other_r) = other.split_at_key_consuming(&pivot);
+        let (result_l, result_r) = ::rayon::join(
+            || self_l.par_difference(other_l),
+            || self_r.par_difference(other_r),
+        );
+        let mut result = result_l.concat_ordered(result_r);
+        if !other_had_pivot {
+            result.insert(pivot);
+        }
+        result
     }
 
-    /// Construct the symmetric difference of two sets in parallel:
-    /// elements in exactly one of the two sets.
+    /// Construct the symmetric difference of two sets in parallel.
     ///
     /// This is the parallel equivalent of
     /// [`symmetric_difference`][GenericOrdSet::symmetric_difference].
     ///
-    /// Time: O((n + m) log max(n, m) / p)
+    /// Time: O(m log(n/m + 2)) work, O(log² n) span.
     #[must_use]
     pub fn par_symmetric_difference(self, other: Self) -> Self {
         if self.is_empty() {
@@ -673,40 +745,26 @@ where
         if other.is_empty() {
             return self;
         }
-        let (left, right) = ::rayon::join(
-            || {
-                self.par_iter()
-                    .filter_map(|a| {
-                        if other.contains(a) {
-                            None
-                        } else {
-                            Some(a.clone())
-                        }
-                    })
-                    .fold(Self::default, |mut acc, a| {
-                        acc.insert(a);
-                        acc
-                    })
-                    .reduce(Self::default, |a, b| a.union(b))
-            },
-            || {
-                other
-                    .par_iter()
-                    .filter_map(|a| {
-                        if self.contains(a) {
-                            None
-                        } else {
-                            Some(a.clone())
-                        }
-                    })
-                    .fold(Self::default, |mut acc, a| {
-                        acc.insert(a);
-                        acc
-                    })
-                    .reduce(Self::default, |a, b| a.union(b))
-            },
+        if self.len() + other.len() <= PAR_UNION_THRESHOLD {
+            return self.symmetric_difference(other);
+        }
+        let pivot = match self.set_root_pivot_key() {
+            Some(k) => k,
+            // 0-key root (single-child Branch from structural split): no separator to pivot on.
+            None => return self.symmetric_difference(other),
+        };
+        let self_had_pivot = self.contains(&pivot);
+        let (self_l, _, self_r) = self.split_at_key_consuming(&pivot);
+        let (other_l, other_had_pivot, other_r) = other.split_at_key_consuming(&pivot);
+        let (result_l, result_r) = ::rayon::join(
+            || self_l.par_symmetric_difference(other_l),
+            || self_r.par_symmetric_difference(other_r),
         );
-        left.union(right)
+        let mut result = result_l.concat_ordered(result_r);
+        if self_had_pivot != other_had_pivot {
+            result.insert(pivot);
+        }
+        result
     }
 
     /// Return a new set keeping only elements that satisfy the predicate.
@@ -900,6 +958,121 @@ mod test {
     }
 
     // --- Parallel bulk operations ---
+
+    #[test]
+    fn ordmap_split_concat_roundtrip() {
+        // Verify that split_at_key_consuming is lossless: splitting and concat-ing
+        // back produces the original map.
+        let map: OrdMap<i32, i32> = (0..2_000).map(|i| (i, i)).collect();
+        let pivot = 1000i32;
+        let (l, v, r) = map.clone().split_at_key_consuming(&pivot);
+        assert_eq!(
+            l.len() + r.len() + v.is_some() as usize,
+            map.len(),
+            "sizes must sum"
+        );
+        // Reconstruct via concat + insert.
+        let mut reconstructed = l.concat_ordered(r);
+        if let Some(val) = v {
+            reconstructed.insert(pivot, val);
+        }
+        assert_eq!(reconstructed, map, "round-trip failed");
+        // Also check size tracking.
+        assert_eq!(reconstructed.len(), map.len());
+    }
+
+    #[test]
+    fn ordmap_split_concat_various_pivots() {
+        let map: OrdMap<i32, i32> = (0..2_000).map(|i| (i, i)).collect();
+        for pivot in [0, 1, 999, 1000, 1001, 1999, 2000, 2001] {
+            let (l, v, r) = map.clone().split_at_key_consuming(&pivot);
+            assert_eq!(
+                l.len() + r.len() + v.is_some() as usize,
+                map.len(),
+                "pivot={pivot}: sizes must sum"
+            );
+            let mut reconstructed = l.concat_ordered(r);
+            if let Some(val) = v {
+                reconstructed.insert(pivot, val);
+            }
+            assert_eq!(reconstructed, map, "pivot={pivot}: round-trip failed");
+        }
+    }
+
+    #[test]
+    fn ordmap_split_all_pivots() {
+        // Test split_at_key_consuming for every key in a 600-element map.
+        let map: OrdMap<i32, i32> = (0..600).map(|i| (i, i)).collect();
+        for pivot in 0..600i32 {
+            let (l, v, r) = map.clone().split_at_key_consuming(&pivot);
+            let l_entries: Vec<i32> = l.keys().copied().collect();
+            let r_entries: Vec<i32> = r.keys().copied().collect();
+            assert!(
+                l_entries.iter().all(|&k| k < pivot),
+                "pivot={pivot}: left has key >= pivot"
+            );
+            assert!(
+                r_entries.iter().all(|&k| k > pivot),
+                "pivot={pivot}: right has key <= pivot"
+            );
+            assert_eq!(v, Some(pivot), "pivot={pivot}: missing pivot value");
+            assert_eq!(
+                l.len() + r.len() + 1,
+                map.len(),
+                "pivot={pivot}: total size mismatch (l={}, r={})",
+                l.len(),
+                r.len()
+            );
+        }
+    }
+
+    #[test]
+    fn ordmap_concat_all_splits() {
+        // Test concat_ordered for every split point in a 600-element map.
+        let map: OrdMap<i32, i32> = (0..600).map(|i| (i, i)).collect();
+        for split_at in 0..600i32 {
+            let (l, v, r) = map.clone().split_at_key_consuming(&split_at);
+            let mut reconstructed = l.concat_ordered(r);
+            if let Some(val) = v {
+                reconstructed.insert(split_at, val);
+            }
+            if reconstructed != map {
+                let par_keys: std::collections::BTreeSet<_> =
+                    reconstructed.keys().copied().collect();
+                let seq_keys: std::collections::BTreeSet<_> = map.keys().copied().collect();
+                let missing: Vec<_> = seq_keys.difference(&par_keys).take(10).copied().collect();
+                let extra: Vec<_> = par_keys.difference(&seq_keys).take(10).copied().collect();
+                panic!(
+                    "split_at={split_at}: reconstructed_size={}, original_size={}, missing={missing:?}, extra={extra:?}",
+                    reconstructed.len(), map.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ordmap_par_union_correctness_at_scale() {
+        // Check at increasing sizes to find the breakpoint.
+        for n in [600usize, 800, 1000, 2000, 5000] {
+            let map1: OrdMap<i32, i32> = (0..n as i32).map(|i| (i, i)).collect();
+            let map2: OrdMap<i32, i32> = ((n / 2) as i32..(n + n / 2) as i32)
+                .map(|i| (i, i * 10))
+                .collect();
+            let seq = map1.clone().union(map2.clone());
+            let par = map1.par_union(map2);
+            if par != seq {
+                let par_keys: std::collections::BTreeSet<_> = par.keys().collect();
+                let seq_keys: std::collections::BTreeSet<_> = seq.keys().collect();
+                let missing: Vec<_> = seq_keys.difference(&par_keys).take(5).collect();
+                let extra: Vec<_> = par_keys.difference(&seq_keys).take(5).collect();
+                panic!(
+                    "n={n}: par_size={}, seq_size={}, missing={missing:?}, extra={extra:?}",
+                    par.len(),
+                    seq.len()
+                );
+            }
+        }
+    }
 
     #[cfg_attr(miri, ignore)]
     #[test]

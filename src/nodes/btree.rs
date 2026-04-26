@@ -1475,6 +1475,408 @@ where
 {
 }
 
+// --- Split / concat primitives (rayon-gated) ---
+//
+// These two functions implement O(log n) structural split and O(log n) height-aware
+// join for the B+ tree used by OrdMap and OrdSet. They are the building blocks for
+// the join-based parallel set operations (par_union, par_intersection, etc.) in
+// `ord/rayon.rs`.
+//
+// The output of `split_node` may contain underfull nodes on the split spine — this
+// is intentional. `concat_node` accepts such trees and produces a valid tree.
+
+/// Count the number of key-value entries in an optional tree node.
+///
+/// Used by [`split_at_key_consuming`][crate::ord::map::GenericOrdMap::split_at_key_consuming]
+/// to recompute the `size` field after a structural split. O(n).
+#[cfg(any(test, feature = "rayon"))]
+pub(crate) fn count_entries<K, V, P: SharedPointerKind>(node: &Option<Node<K, V, P>>) -> usize {
+    match node {
+        None => 0,
+        Some(Node::Leaf(leaf)) => leaf.keys.len(),
+        Some(Node::Branch(branch)) => count_branch_entries(&**branch),
+    }
+}
+
+#[cfg(any(test, feature = "rayon"))]
+fn count_branch_entries<K, V, P: SharedPointerKind>(branch: &Branch<K, V, P>) -> usize {
+    match &branch.children {
+        Children::Leaves { leaves } => leaves.iter().map(|l| l.keys.len()).sum(),
+        Children::Branches { branches, .. } => {
+            branches.iter().map(|b| count_branch_entries(&**b)).sum()
+        }
+    }
+}
+
+/// Split `node` at `key`: returns `(left, exact_value, right)` where every key in
+/// `left` is strictly less than `key`, every key in `right` is strictly greater, and
+/// `exact_value` is `Some(v)` if `key` was present in the tree.
+///
+/// Runs in O(depth × NODE_SIZE) ≈ O(log n). The returned trees may have underfull
+/// nodes on their right / left spine respectively; pass them to [`concat_node`] to
+/// combine back into a valid tree.
+#[cfg(any(test, feature = "rayon"))]
+pub(crate) fn split_node<K, V, P, Q>(
+    node: Node<K, V, P>,
+    key: &Q,
+) -> (Option<Node<K, V, P>>, Option<V>, Option<Node<K, V, P>>)
+where
+    K: Ord + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+    Q: Comparable<K> + ?Sized,
+{
+    match node {
+        Node::Leaf(leaf) => {
+            let leaf = SharedPointer::try_unwrap(leaf).unwrap_or_else(|p| (*p).clone());
+            let pos = slice_ext::binary_search_by(&leaf.keys, |(k, _)| key.compare(k).reverse());
+            let (found, split_at) = match pos {
+                Ok(i) => (true, i),
+                Err(i) => (false, i),
+            };
+            let value = if found {
+                Some(leaf.keys[split_at].1.clone())
+            } else {
+                None
+            };
+            let right_start = split_at + found as usize;
+            // Clone the original keys once and split it.
+            let mut left_keys = leaf.keys;
+            let right_keys = left_keys.split_off(split_at);
+            // `right_keys` now starts at `split_at`; if found, drop the exact entry at [0].
+            let right_keys = if found {
+                let mut rk = right_keys;
+                rk.pop_front(); // remove the matched key
+                rk
+            } else {
+                right_keys
+            };
+            let _ = right_start; // computed above, used implicitly via split
+            let left = if left_keys.is_empty() {
+                None
+            } else {
+                Some(Node::Leaf(SharedPointer::new(Leaf { keys: left_keys })))
+            };
+            let right = if right_keys.is_empty() {
+                None
+            } else {
+                Some(Node::Leaf(SharedPointer::new(Leaf { keys: right_keys })))
+            };
+            (left, value, right)
+        }
+        Node::Branch(branch) => {
+            let branch = SharedPointer::try_unwrap(branch).unwrap_or_else(|p| (*p).clone());
+            // Find which child to recurse into. `i` is the child index such that
+            // children[i] is the subtree that could contain `key`.
+            let i = slice_ext::binary_search_by(&branch.keys, |k| key.compare(k).reverse())
+                .map(|x| x + 1)
+                .unwrap_or_else(|x| x);
+            // Extract child i as a Node, then recurse.
+            let child = branch_child_node(&branch, i);
+            // Split the branch keys and children arrays around index i.
+            // Keys:    branch.keys[0..i]   go left, branch.keys[i..] go right.
+            // Children: branch.children[0..i] go left (plus sub_left),
+            //           branch.children[i+1..] go right (plus sub_right).
+            let mut left_keys = branch.keys;
+            let mut right_keys = left_keys.split_off(i); // left_keys=[0..i], right_keys=[i..]
+            let mut left_children = branch.children;
+            let right_children = left_children.split_off(i + 1); // left=[0..i+1], right=[i+1..]
+                                                                 // Drop the last entry from left_children (it's child i which we recursed into).
+            let _ = left_children.pop_last_node();
+            // Recurse.
+            let (sub_left, value, sub_right) = split_node(child, key);
+            // If sub_left is None, the recursed child contributed nothing to the left side.
+            // The rightmost key in left_keys (K[i-1]) was the separator between children[i-1]
+            // and children[i]; with children[i]'s left part gone, that separator must be dropped.
+            if sub_left.is_none() && !left_keys.is_empty() {
+                left_keys.pop_back();
+            }
+            // If sub_right is None, similarly drop the leftmost key of right_keys (K[i]),
+            // which was the separator between children[i] and children[i+1].
+            if sub_right.is_none() && !right_keys.is_empty() {
+                right_keys.pop_front();
+            }
+            // Build left tree: children[0..i] + sub_left, keys[0..i] (adjusted above).
+            let left = build_branch_from_children(left_children, left_keys, sub_left, true);
+            // Build right tree: sub_right + children[i+1..], keys[i..] (adjusted above).
+            let right = build_branch_from_children(right_children, right_keys, sub_right, false);
+            (left, value, right)
+        }
+    }
+}
+
+/// Extract child `i` from a Branch as a `Node`, cloning through the shared pointer.
+#[cfg(any(test, feature = "rayon"))]
+fn branch_child_node<K, V, P>(branch: &Branch<K, V, P>, i: usize) -> Node<K, V, P>
+where
+    K: Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    match &branch.children {
+        Children::Leaves { leaves } => Node::Leaf(leaves[i].clone()),
+        Children::Branches { branches, .. } => Node::Branch(branches[i].clone()),
+    }
+}
+
+impl<K, V, P: SharedPointerKind> Children<K, V, P> {
+    /// Remove and return the last child as a `Node`.
+    #[cfg(any(test, feature = "rayon"))]
+    fn pop_last_node(&mut self) -> Node<K, V, P> {
+        match self {
+            Children::Leaves { leaves } => Node::Leaf(leaves.pop_back()),
+            Children::Branches { branches, .. } => Node::Branch(branches.pop_back()),
+        }
+    }
+}
+
+/// Assemble a partial branch after a split.
+///
+/// `children` and `keys` form the existing side (already split off from the full
+/// branch). `extra` is the sub-tree returned by the recursive split call. If
+/// `extra_is_right_of_children` is false, `extra` is prepended (it came from the
+/// left side); if true, it is appended (right side).
+///
+/// Returns `None` if the result would be empty; returns `Some(Leaf)` if the
+/// branch would have exactly one child (collapse); otherwise returns a `Branch`.
+#[cfg(any(test, feature = "rayon"))]
+fn build_branch_from_children<K, V, P>(
+    mut children: Children<K, V, P>,
+    keys: Chunk<K, NODE_SIZE>,
+    extra: Option<Node<K, V, P>>,
+    extra_appended: bool, // true = extra goes after children; false = before
+) -> Option<Node<K, V, P>>
+where
+    K: Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    if let Some(node) = extra {
+        let n = children.len();
+        if extra_appended {
+            children.insert(n, node);
+        } else {
+            children.insert(0, node);
+        }
+    }
+    // Return None for empty, otherwise always a Branch (even single-child).
+    // Collapsing a single-child Branch to its child would break the type invariant
+    // when the parent has Children::Branches and the sole child is a Leaf — concat_node
+    // handles underfull spine nodes without needing pre-collapse.
+    if children.len() == 0 {
+        None
+    } else {
+        Some(Node::Branch(SharedPointer::new(Branch { keys, children })))
+    }
+}
+
+/// Height-aware O(log n) join of two trees where every key in `left` is strictly
+/// less than every key in `right`.
+///
+/// Produces a single valid B+ tree (may increase height by at most 1). Both inputs
+/// may contain underfull spine nodes (as produced by [`split_node`]).
+#[cfg(any(test, feature = "rayon"))]
+pub(crate) fn concat_node<K, V, P>(left: Node<K, V, P>, right: Node<K, V, P>) -> Node<K, V, P>
+where
+    K: Ord + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    let h_left = left.level();
+    let h_right = right.level();
+
+    if h_left == h_right {
+        // Equal heights: `new_from_split` creates a Branch one level above both.
+        let sep = right.min().unwrap().0.clone();
+        Node::new_from_split(left, sep, right)
+    } else if h_left > h_right {
+        // Left is taller: walk left's right spine and insert right at the correct depth.
+        let sep = right.min().unwrap().0.clone();
+        let mut left_branch = match left {
+            Node::Branch(b) => SharedPointer::try_unwrap(b).unwrap_or_else(|p| (*p).clone()),
+            Node::Leaf(_) => unreachable!("non-zero level must be a Branch"),
+        };
+        match concat_insert_right_spine(&mut left_branch, right, sep) {
+            None => Node::Branch(SharedPointer::new(left_branch)),
+            Some((overflow_sep, overflow_right)) => Node::new_from_split(
+                Node::Branch(SharedPointer::new(left_branch)),
+                overflow_sep,
+                overflow_right,
+            ),
+        }
+    } else {
+        // Right is taller: walk right's left spine and insert left at the correct depth.
+        let sep = right.min().unwrap().0.clone();
+        let mut right_branch = match right {
+            Node::Branch(b) => SharedPointer::try_unwrap(b).unwrap_or_else(|p| (*p).clone()),
+            Node::Leaf(_) => unreachable!("non-zero level must be a Branch"),
+        };
+        match concat_insert_left_spine(&mut right_branch, left, sep) {
+            None => Node::Branch(SharedPointer::new(right_branch)),
+            Some((overflow_sep, overflow_left)) => Node::new_from_split(
+                overflow_left,
+                overflow_sep,
+                Node::Branch(SharedPointer::new(right_branch)),
+            ),
+        }
+    }
+}
+
+/// Insert `right` (which has level `branch.level() - 1` or less) at the rightmost
+/// position of `branch`. Returns `Some((separator, overflow_node))` on overflow.
+#[cfg(any(test, feature = "rayon"))]
+fn concat_insert_right_spine<K, V, P>(
+    branch: &mut Branch<K, V, P>,
+    right: Node<K, V, P>,
+    sep: K,
+) -> Option<(K, Node<K, V, P>)>
+where
+    K: Ord + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    if branch.level() == right.level() + 1 {
+        // right is exactly one level below branch — insert directly.
+        concat_append_child_right(branch, sep, right)
+    } else {
+        // Recurse into the rightmost child (must be a Branch at this point).
+        let overflow = match &mut branch.children {
+            Children::Branches { branches, .. } => {
+                let last = branches.last_mut().expect("branch must have children");
+                let child_branch = SharedPointer::make_mut(last);
+                concat_insert_right_spine(child_branch, right, sep)
+            }
+            Children::Leaves { .. } => {
+                unreachable!("leaf-level branch reached before target depth")
+            }
+        };
+        match overflow {
+            None => None,
+            Some((overflow_sep, overflow_node)) => {
+                concat_append_child_right(branch, overflow_sep, overflow_node)
+            }
+        }
+    }
+}
+
+/// Append `sep` + `child` as the new rightmost child of `branch`. Splits on overflow.
+#[cfg(any(test, feature = "rayon"))]
+fn concat_append_child_right<K, V, P>(
+    branch: &mut Branch<K, V, P>,
+    sep: K,
+    child: Node<K, V, P>,
+) -> Option<(K, Node<K, V, P>)>
+where
+    K: Ord + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    let n = branch.children.len();
+    if n < NUM_CHILDREN {
+        branch.keys.push_back(sep);
+        branch.children.insert(n, child);
+        None
+    } else {
+        // Full branch: split at MEDIAN to make room. The new child goes on the right half.
+        // left:  keys[0..MEDIAN],    children[0..MEDIAN+1]
+        // sep_key: keys[MEDIAN]
+        // right: keys[MEDIAN+1..] ++ [sep],  children[MEDIAN+1..] ++ [child]
+        let mut right_keys = branch.keys.split_off(MEDIAN + 1); // branch.keys = [0..MEDIAN+1]
+        let split_sep = branch.keys.pop_back(); // branch.keys = [0..MEDIAN]
+        right_keys.push_back(sep);
+        let mut right_children = branch.children.split_off(MEDIAN + 1);
+        let m = right_children.len();
+        right_children.insert(m, child);
+        let right_branch = Node::Branch(SharedPointer::new(Branch {
+            keys: right_keys,
+            children: right_children,
+        }));
+        Some((split_sep, right_branch))
+    }
+}
+
+/// Insert `left` (which has level `branch.level() - 1` or less) at the leftmost
+/// position of `branch`. Returns `Some((separator, overflow_node))` on overflow.
+#[cfg(any(test, feature = "rayon"))]
+fn concat_insert_left_spine<K, V, P>(
+    branch: &mut Branch<K, V, P>,
+    left: Node<K, V, P>,
+    sep: K, // min_key(branch.children[0]) = separator between `left` and the old first child
+) -> Option<(K, Node<K, V, P>)>
+where
+    K: Ord + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    if branch.level() == left.level() + 1 {
+        concat_prepend_child_left(branch, left, sep)
+    } else {
+        let overflow = match &mut branch.children {
+            Children::Branches { branches, .. } => {
+                let first = &mut branches[0];
+                let child_branch = SharedPointer::make_mut(first);
+                concat_insert_left_spine(child_branch, left, sep)
+            }
+            Children::Leaves { .. } => {
+                unreachable!("leaf-level branch reached before target depth")
+            }
+        };
+        match overflow {
+            None => None,
+            Some((overflow_sep, overflow_left)) => {
+                concat_prepend_child_left(branch, overflow_left, overflow_sep)
+            }
+        }
+    }
+}
+
+/// Prepend `child` + `sep` as the new leftmost child of `branch`. Splits on overflow.
+/// `sep` is the separator between `child` and the current first child (i.e. the min key
+/// of the current first child).
+#[cfg(any(test, feature = "rayon"))]
+fn concat_prepend_child_left<K, V, P>(
+    branch: &mut Branch<K, V, P>,
+    child: Node<K, V, P>,
+    sep: K,
+) -> Option<(K, Node<K, V, P>)>
+where
+    K: Ord + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    let n = branch.children.len();
+    if n < NUM_CHILDREN {
+        branch.keys.push_front(sep);
+        branch.children.insert(0, child);
+        None
+    } else {
+        // Full branch: split. The new child goes on the left half.
+        // After conceptual prepend: new_keys = [sep, K0..K{N-1}] (N+1 total, where N=NODE_SIZE),
+        //   new_children = [child, C0..C{N}] (N+2 total, where N+1=NUM_CHILDREN).
+        // Split at index MEDIAN so that left and right each get MEDIAN keys and MEDIAN+1 children:
+        //   left_keys     = new_keys[0..MEDIAN]       = [sep, K0..K{MEDIAN-2}]
+        //   split_sep     = new_keys[MEDIAN]           = original K{MEDIAN-1}
+        //   right_keys    = new_keys[MEDIAN+1..]       = original K{MEDIAN}..
+        //   left_children = new_children[0..MEDIAN+1]  = [child, C0..C{MEDIAN-1}]
+        //   right_children = new_children[MEDIAN+1..]  = C{MEDIAN}..
+        let right_keys = branch.keys.split_off(MEDIAN); // branch.keys=[K0..K{MEDIAN-1}], right_keys=[K{MEDIAN}..]
+        let split_sep = branch.keys.pop_back(); // remove K{MEDIAN-1}; branch.keys=[K0..K{MEDIAN-2}]
+        let old_left_keys = mem::replace(&mut branch.keys, right_keys);
+        // branch.keys = right_keys (K{MEDIAN}..); old_left_keys = K0..K{MEDIAN-2} (MEDIAN-1 elements)
+        let mut left_keys: Chunk<K, NODE_SIZE> = Chunk::unit(sep);
+        left_keys.extend(old_left_keys.iter().cloned()); // [sep, K0..K{MEDIAN-2}] = MEDIAN elements
+        let right_children = branch.children.split_off(MEDIAN); // branch.children=[C0..C{MEDIAN-1}], right_children=[C{MEDIAN}..]
+        branch.children.insert(0, child); // branch.children = [child, C0..C{MEDIAN-1}] = MEDIAN+1 elements
+        let left_children = mem::replace(&mut branch.children, right_children);
+        let left_branch = Node::Branch(SharedPointer::new(Branch {
+            keys: left_keys,         // MEDIAN elements
+            children: left_children, // MEDIAN+1 elements → invariant: MEDIAN + 1 == MEDIAN+1 ✓
+        }));
+        // right (stays as branch): keys=right_keys=MEDIAN elements, children=right_children=MEDIAN+1 ✓
+        Some((split_sep, left_branch))
+    }
+}
+
 mod slice_ext {
     #[inline]
     #[allow(unsafe_code)] // Uses ptr::read to avoid branching in the binary search hot path; same technique as std's implementation.

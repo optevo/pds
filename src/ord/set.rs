@@ -888,6 +888,36 @@ where
         (left, present, right)
     }
 
+    /// Split a set at `key` in O(log n), consuming it.
+    ///
+    /// Returns `(left, present, right)` where every element in `left` is strictly
+    /// less than `key`, every element in `right` is strictly greater, and `present`
+    /// is `true` if `key` was in the set.
+    #[cfg(any(test, feature = "rayon"))]
+    #[must_use]
+    pub fn split_at_key_consuming<Q>(self, key: &Q) -> (Self, bool, Self)
+    where
+        Q: Comparable<A> + ?Sized,
+    {
+        let (l, v, r) = self.map.split_at_key_consuming(key);
+        (
+            GenericOrdSet { map: l },
+            v.is_some(),
+            GenericOrdSet { map: r },
+        )
+    }
+
+    /// Join two sets where every element in `self` is strictly less than every
+    /// element in `other`, in O(log n). Same precondition as `concat_ordered` on
+    /// [`GenericOrdMap`][crate::GenericOrdMap].
+    #[cfg(any(test, feature = "rayon"))]
+    #[must_use]
+    pub fn concat_ordered(self, other: Self) -> Self {
+        GenericOrdSet {
+            map: self.map.concat_ordered(other.map),
+        }
+    }
+
     /// Construct a set with only the `n` smallest values from a given
     /// set.
     ///

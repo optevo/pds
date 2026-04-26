@@ -15,13 +15,20 @@ pub(crate) const VECTOR_CHUNK_SIZE: usize = 64;
 #[cfg(feature = "small-chunks")]
 pub(crate) const ORD_CHUNK_SIZE: usize = 6;
 // Value of 32 chosen based on Apple Silicon (M5 Max, 128-byte cache lines) benchmarks across
-// sizes 16/24/32/48 — see DEC-017 in docs/decisions.md for full data.
+// sizes 16/24/32/48. See DEC-017 in docs/decisions.md for the full data and decision rationale.
 //
-// vs size 16: lookup 8-21% faster (larger collections benefit more from fewer tree levels),
-// mutable ops 10-37% faster, iteration 10-12% faster. Persistent single-insert/remove is
-// 15-25% slower (more bytes copied per path-copy), but the breakeven is only ~6-30 lookups
-// per insert depending on collection size — easily exceeded in most real workloads.
-// Size 48 shows diminishing lookup returns with accelerating persistent-op regression.
+// Confirmed twice:
+//  1. DEC-017 (2026-04-24): single-tree ops (lookup, insert_mut, iter, remove_mut).
+//     vs size 16: lookup 8-21% faster, mutable ops 10-37% faster, iteration 10-12% faster.
+//     Persistent single-insert/remove is 15-25% slower, but breakeven is ~6-30 lookups per
+//     insert — easily exceeded in real workloads. Size 48 shows diminishing returns.
+//  2. DEC-017 addendum (2026-04-26, R.15): join-algorithm parallel ops added to benchmark
+//     suite (par_union, par_intersection, par_difference at 10K/100K). Size 32 remains
+//     optimal; size 48 is 20-69% slower on parallel join at 100K.
+//
+// R.14 (ord-hash) added an `AtomicU64` to `GenericOrdMap` (the root wrapper struct),
+// not to `Branch` or `Leaf` nodes. Node chunk size optimisation (DEC-017) is unaffected
+// — `ORD_CHUNK_SIZE` controls `Branch`/`Leaf` sizing only. No re-run needed.
 #[cfg(not(feature = "small-chunks"))]
 pub(crate) const ORD_CHUNK_SIZE: usize = 32;
 

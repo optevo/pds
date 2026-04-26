@@ -15,6 +15,7 @@ regressions or improvements. Compare against these numbers.
 - [Build speed](#build-speed)
 - [Test speed](#test-speed)
 - [Benchmark summary](#benchmark-summary)
+- [Memory profiling (dhat)](#memory-profiling-dhat)
 - [How to re-run](#how-to-re-run)
 
 ---
@@ -186,34 +187,34 @@ significant changes that may have affected the numbers.
 
 ## Memory profiling (dhat) {#sec:memory-profiling}
 
-**Date:** 2026-04-25
-**Run:** `cargo bench --bench memory`
+**Date:** 2026-04-26
+**Run:** `cargo bench --bench memory` (bench profile: release + debuginfo)
 
 Allocation counts and bytes per operation. Measures heap pressure, not
-peak RSS. Lower is better.
+peak RSS. Lower is better. Re-run with `cargo bench --bench memory` to update.
 
 ### HashMap<i64, i64>
 
 | Operation | Allocs | Bytes |
 |-----------|--------|-------|
-| from_iter(1K) | 246 | 131 KB |
-| from_iter(10K) | 1,139 | 532 KB |
-| from_iter(100K) | 29,652 | 13.9 MB |
+| from_iter(1K) | 226 | 120 KB |
+| from_iter(10K) | 1,134 | 528 KB |
+| from_iter(100K) | 29,633 | 13.9 MB |
 | single insert (10K base) | 3 | 2.5 KB |
 | clone + modify (10K base) | 3 | 2.5 KB |
 | clone (10K) | 0 | 0 |
 
-~0.3 allocs/element at scale — inherent to HAMT structure (one
-Arc::new per node). Clone is O(1) / zero allocs. Single insert
-touches O(log n) nodes.
+~0.3 allocs/element at scale — inherent to HAMT trie structure (one
+Arc per node, plus promotions through SmallSimd → LargeSimd → Hamt tiers).
+Clone is O(1) / zero allocs. Single insert touches O(log n) nodes.
 
 ### HashSet<i64>
 
 | Operation | Allocs | Bytes |
 |-----------|--------|-------|
-| from_iter(1K) | 293 | 110 KB |
-| from_iter(10K) | 1,150 | 382 KB |
-| from_iter(100K) | 29,692 | 9.8 MB |
+| from_iter(1K) | 248 | 92 KB |
+| from_iter(10K) | 1,147 | 381 KB |
+| from_iter(100K) | 29,709 | 9.8 MB |
 
 Smaller per-entry footprint than HashMap (no value stored).
 
@@ -221,14 +222,15 @@ Smaller per-entry footprint than HashMap (no value stored).
 
 | Operation | Allocs | Bytes |
 |-----------|--------|-------|
-| from_iter(1K) | 68 | 37 KB |
+| from_iter(1K) | 68 | 36 KB |
 | from_iter(10K) | 666 | 358 KB |
 | from_iter(100K) | 6,641 | 3.6 MB |
 | single insert (10K base) | 5 | 2.8 KB |
 | clone + modify (10K base) | 4 | 2.2 KB |
 
-B+ tree with chunk_size=32 → far fewer node allocations than HAMT.
-~0.07 allocs/element at scale.
+B+ tree with NODE_SIZE=16 — up to 16 key-value pairs per leaf allocation.
+~0.07 allocs/element at scale (approximately n/16 leaves + branch nodes).
+**4.5× fewer allocations and 3.9× fewer bytes than HashMap at 100K entries.**
 
 ### OrdSet<i64>
 
@@ -237,6 +239,20 @@ B+ tree with chunk_size=32 → far fewer node allocations than HAMT.
 | from_iter(1K) | 68 | 20 KB |
 | from_iter(10K) | 666 | 198 KB |
 | from_iter(100K) | 6,641 | 2.0 MB |
+
+**4.5× fewer allocations than HashSet at 100K entries.**
+
+### HashMap vs OrdMap — summary
+
+| Entries | HashMap allocs | OrdMap allocs | Ratio |
+|--------:|:--------------:|:-------------:|:-----:|
+| 1,000   | 226            | 68            | 3.3×  |
+| 10,000  | 1,134          | 666           | 1.7×  |
+| 100,000 | 29,633         | 6,641         | 4.5×  |
+
+The ratio grows with scale because HAMT trie depth increases with n
+(hash bit exhaustion forces more levels), while B+ tree height grows as
+log₁₆(n) with 16 entries per leaf.
 
 ### Vector<i64>
 
@@ -255,17 +271,17 @@ Clone + single push_back = 1 allocation (new leaf chunk).
 
 | Operation | Allocs | Bytes |
 |-----------|--------|-------|
-| from_iter(1K) | 273 | 144 KB |
-| from_iter(10K) | 1,146 | 539 KB |
-| from_iter(100K) | 29,653 | 13.9 MB |
+| from_iter(1K) | 266 | 141 KB |
+| from_iter(10K) | 1,142 | 535 KB |
+| from_iter(100K) | 29,639 | 13.9 MB |
 
-Backed by HashMap — similar allocation profile.
+Backed by HashMap — same allocation profile.
 
 ### BiMap<i64, i64> / SymMap<i64>
 
 | Operation | Allocs | Bytes |
 |-----------|--------|-------|
-| BiMap from_iter(10K) | 2,297 | 1.1 MB |
-| SymMap from_iter(10K) | 2,284 | 1.1 MB |
+| BiMap from_iter(10K) | 2,300 | 1.1 MB |
+| SymMap from_iter(10K) | 2,283 | 1.1 MB |
 
-~2× HashMap allocations as expected (two internal maps).
+~2× HashMap allocations — each type maintains two internal maps.
