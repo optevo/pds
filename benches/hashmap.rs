@@ -17,7 +17,7 @@ use utils::*;
 trait BenchMap<K, V>: Clone + FromIterator<(K, V)>
 where
     K: Clone + Hash + Eq,
-    V: Clone,
+    V: Clone + Hash,
 {
     const IMMUTABLE: bool = true;
     type Iter<'a>: Iterator<Item = (&'a K, &'a V)>
@@ -42,7 +42,7 @@ where
 impl<K, V> BenchMap<K, V> for HashMap<K, V>
 where
     K: Clone + Hash + Eq,
-    V: Clone,
+    V: Clone + Hash,
 {
     type Iter<'a>
         = pds::hashmap::Iter<'a, K, V, pds::shared_ptr::DefaultSharedPtr>
@@ -87,7 +87,7 @@ where
 impl<K, V> BenchMap<K, V> for StdHashMap<K, V>
 where
     K: Clone + Hash + Eq,
-    V: Clone,
+    V: Clone + Hash,
 {
     const IMMUTABLE: bool = false;
     type Iter<'a>
@@ -137,7 +137,7 @@ where
 impl<K, V> BenchMap<K, V> for HashTrieMapSync<K, V>
 where
     K: Clone + Hash + Eq,
-    V: Clone,
+    V: Clone + Hash,
 {
     type Iter<'a>
         = rpds::map::hash_trie_map::Iter<'a, K, V, ArcTK>
