@@ -27,6 +27,7 @@
 //! * [`SymMap<A>`][crate::SymMap] / [`OrdSymMap<A>`][crate::OrdSymMap] — symmetric bidirectional map
 //! * [`Trie<K, V>`][crate::Trie] / [`OrdTrie<K, V>`][crate::OrdTrie] — persistent prefix tree
 //! * [`OrdInsertionOrderMap<K, V>`][crate::OrdInsertionOrderMap] / [`OrdInsertionOrderSet<A>`][crate::OrdInsertionOrderSet] — `Ord`-only insertion-ordered collections
+//! * [`UniqueVector<A>`][crate::UniqueVector] — persistent sequence with element uniqueness guarantee
 //!
 //! ## Why Would I Want This?
 //!
@@ -276,6 +277,7 @@
 //! | [`BiMap<K, V>`][crate::BiMap] | Bidirectional map — bijection between two types | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`SymMap<A>`][crate::SymMap] | Symmetric bidirectional map with O(1) swap | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //! | [`Trie<K, V>`][crate::Trie] | Persistent prefix tree (trie) — paths to values | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
+//! | [`UniqueVector<A>`][crate::UniqueVector] | Persistent sequence with uniqueness — dedup queue/stack with index access | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] |
 //!
 //! ### Ord-backed variants
 //!
@@ -593,6 +595,7 @@ pub mod insertion_order_map;
 pub mod insertion_order_set;
 pub mod symmap;
 pub mod trie;
+pub mod unique_vector;
 
 #[cfg(any(test, feature = "rayon"))]
 mod rayon;
@@ -633,6 +636,9 @@ pub use crate::symmap::{Direction, SymMap};
 pub use crate::trie::GenericTrie;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::trie::Trie;
+pub use crate::unique_vector::GenericUniqueVector;
+#[cfg(any(feature = "std", feature = "foldhash"))]
+pub use crate::unique_vector::UniqueVector;
 #[doc(inline)]
 pub use crate::vector::{GenericVector, Vector};
 

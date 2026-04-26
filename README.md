@@ -52,6 +52,7 @@ share unchanged subtrees with the original.
 | `BiMap<K, V>` | 2× SIMD HAMT | `Clone + Hash + Eq` | Bidirectional map — bijection between two types |
 | `SymMap<A>` | 2× SIMD HAMT | `Clone + Hash + Eq` | Symmetric bidirectional map with O(1) swap |
 | `Trie<K, V>` | HAMT of HAMTs | `Clone + Hash + Eq` | Persistent prefix tree — paths to values |
+| `UniqueVector<A>` | RRB tree + SIMD HAMT | `Clone + Hash + Eq` | Persistent sequence with uniqueness — dedup queue/stack with O(log n) index access |
 
 ## Choosing the right map
 
@@ -191,6 +192,7 @@ a different collection set and design philosophy.
 | **OrdSymMap** | yes | — | — | — |
 | **Trie** | yes | — | — | — |
 | **OrdTrie** | yes | — | — | — |
+| **UniqueVector** | yes | — | — | — |
 | **List / Stack / Queue** | — | — | — | yes |
 | **Merkle hashing** | O(1) equality | — | — | — |
 | **SIMD node ops** | yes | yes | — | — |
@@ -205,7 +207,7 @@ a different collection set and design philosophy.
 
 **Key differences from imbl:**
 - Merkle hashing on all collections for O(1) structural equality checks
-- Fourteen additional collection types: Bag, OrdBag, HashMultiMap, OrdMultiMap, InsertionOrderMap, InsertionOrderSet, OrdInsertionOrderMap, OrdInsertionOrderSet, BiMap, OrdBiMap, SymMap, OrdSymMap, Trie, OrdTrie
+- Fifteen additional collection types: Bag, OrdBag, HashMultiMap, OrdMultiMap, InsertionOrderMap, InsertionOrderSet, OrdInsertionOrderMap, OrdInsertionOrderSet, BiMap, OrdBiMap, SymMap, OrdSymMap, Trie, OrdTrie, UniqueVector
 - Hash consing via `InternPool` — deduplicates identical HAMT subtrees across collections
 - Structural-sharing-preserving serialisation via `HashMapPool` — serialises/deserialises trees with node deduplication and cross-session interning
 - `no_std` support via the `foldhash` feature flag

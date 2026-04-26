@@ -5,10 +5,11 @@ Rust). Forked from [imbl](https://github.com/jneem/imbl) with different
 design priorities: performance over compatibility, Merkle hashing, SIMD
 HAMT nodes, and no_std support.
 
-**Current state (Apr 2026):** v1.0.0, ~12K lines of Rust, 19 collection
+**Current state (Apr 2026):** v1.0.0, ~12K lines of Rust, 20 collection
 types (Vector, HashMap, HashSet, OrdMap, OrdSet, Bag, OrdBag, HashMultiMap,
 OrdMultiMap, InsertionOrderMap, OrdInsertionOrderMap, InsertionOrderSet,
-OrdInsertionOrderSet, BiMap, OrdBiMap, SymMap, OrdSymMap, Trie, OrdTrie).
+OrdInsertionOrderSet, BiMap, OrdBiMap, SymMap, OrdSymMap, Trie, OrdTrie,
+UniqueVector).
 SIMD HAMT, Merkle hashing, and no_std support implemented.
 
 ---
@@ -57,6 +58,17 @@ single v2.0.0 release in Phase 5.
 ## Done {#done}
 
 *Newest first.*
+
+- **[2026-04-26] UniqueVector — persistent sequence with uniqueness guarantee.**
+  New collection type `UniqueVector<A>` backed by `GenericVector<A, P>` +
+  `GenericHashSet<A, S, P, H>`. Provides push_back/push_front (dedup), pop_front/
+  pop_back (FIFO/LIFO), get(i) indexed access, remove(i), remove_by_value, contains,
+  front/back, and full set operations (union, difference, intersection,
+  symmetric_difference). Hash-sensitive `PartialEq`/`Ord`/`Hash` — order counts.
+  All standard trait impls: Clone, Debug, Default, FromIterator, Extend,
+  IntoIterator (owned + &), Index<usize>, From<Vec/&Vec/[A;N]/&[A]>.
+  28 tests. Type alias `UniqueVector<A>` (std/foldhash feature gate).
+  lib.rs, README.md, impl-plan.md updated.
 
 - **[2026-04-26] Queue/deque ops on InsertionOrderSet and OrdInsertionOrderSet.**
   Added `front()`, `back()`, `pop_front()`, `pop_back()` to
