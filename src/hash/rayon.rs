@@ -15,9 +15,11 @@ use ::rayon::iter::{
 };
 
 use archery::{SharedPointer, SharedPointerKind};
+use bitmaps::BitsImpl;
 
 use crate::config::HASH_LEVEL_SIZE as HASH_SHIFT;
-use crate::nodes::hamt::{Entry, Node};
+use crate::hash_width::HashWidth;
+use crate::nodes::hamt::{CollisionNode, Entry, GenericSimdNode, HamtNode, Node};
 
 const HASH_WIDTH: usize = 2_usize.pow(HASH_SHIFT as u32);
 const SMALL_NODE_WIDTH: usize = HASH_WIDTH / 2;
@@ -26,7 +28,7 @@ const SMALL_NODE_WIDTH: usize = HASH_WIDTH / 2;
 // HashMap
 // ---------------------------------------------------------------------------
 
-use super::map::GenericHashMap;
+use super::map::{next_hasher_id, GenericHashMap};
 
 impl<'a, K, V, S, P> IntoParallelRefIterator<'a> for GenericHashMap<K, V, S, P>
 where
@@ -430,14 +432,32 @@ where
     /// Construct the union of two maps in parallel.
     ///
     /// Values from `self` take precedence for keys present in both maps.
-    /// Parallel speedup comes from filtering the smaller map's elements
-    /// against the larger map concurrently.
+    /// Parallel speedup comes from filtering `other`'s elements against
+    /// `self` concurrently.  For maps that share structure (one derived
+    /// from the other via insert/remove), `ptr_eq` and Merkle-hash checks
+    /// short-circuit in O(1) before any iteration begins.
     ///
     /// This is the parallel equivalent of [`union`][GenericHashMap::union].
     ///
-    /// Time: O(n log n / p) where p is the thread pool size
+    /// Time: O(n log n / p) where p is the thread pool size; O(1) when
+    /// the maps are structurally identical.
     #[must_use]
     pub fn par_union(self, other: Self) -> Self {
+        if other.is_empty() || self.ptr_eq(&other) {
+            return self;
+        }
+        if self.is_empty() {
+            return other;
+        }
+        // Same-lineage Merkle fast-path: equal len + equal kv_merkle → maps equal.
+        if self.hasher_id == other.hasher_id
+            && self.size == other.size
+            && self.kv_merkle_valid
+            && other.kv_merkle_valid
+            && self.kv_merkle_hash == other.kv_merkle_hash
+        {
+            return self;
+        }
         let only_in_other: Self = other
             .par_iter()
             .filter_map(|(k, v)| {
@@ -458,12 +478,29 @@ where
     /// Construct the intersection of two maps in parallel, keeping
     /// values from `self`.
     ///
+    /// `ptr_eq` and Merkle-hash fast-paths short-circuit in O(1) for
+    /// structurally identical maps.
+    ///
     /// This is the parallel equivalent of
     /// [`intersection`][GenericHashMap::intersection].
     ///
-    /// Time: O(min(n, m) log max(n, m) / p)
+    /// Time: O(min(n, m) log max(n, m) / p); O(1) when maps are identical.
     #[must_use]
     pub fn par_intersection(self, other: Self) -> Self {
+        if self.is_empty() || other.is_empty() {
+            return Self::default();
+        }
+        if self.ptr_eq(&other) {
+            return self;
+        }
+        if self.hasher_id == other.hasher_id
+            && self.size == other.size
+            && self.kv_merkle_valid
+            && other.kv_merkle_valid
+            && self.kv_merkle_hash == other.kv_merkle_hash
+        {
+            return self;
+        }
         if self.len() <= other.len() {
             self.par_iter()
                 .filter_map(|(k, v)| {
@@ -493,12 +530,29 @@ where
     /// Construct the relative complement (self − other) in parallel:
     /// elements in `self` whose keys are not in `other`.
     ///
+    /// `ptr_eq` and Merkle-hash fast-paths short-circuit in O(1) for
+    /// identical maps (empty result) or an empty `other` (self returned).
+    ///
     /// This is the parallel equivalent of
     /// [`difference`][GenericHashMap::difference].
     ///
-    /// Time: O(n log m / p)
+    /// Time: O(n log m / p); O(1) for identical maps.
     #[must_use]
     pub fn par_difference(self, other: Self) -> Self {
+        if self.is_empty() || other.is_empty() {
+            return self;
+        }
+        if self.ptr_eq(&other) {
+            return Self::default();
+        }
+        if self.hasher_id == other.hasher_id
+            && self.size == other.size
+            && self.kv_merkle_valid
+            && other.kv_merkle_valid
+            && self.kv_merkle_hash == other.kv_merkle_hash
+        {
+            return Self::default();
+        }
         self.par_iter()
             .filter_map(|(k, v)| {
                 if other.contains_key(k) {
@@ -517,12 +571,33 @@ where
     /// Construct the symmetric difference of two maps in parallel:
     /// elements present in exactly one of the two maps.
     ///
+    /// Uses `rayon::join` to compute both halves (self \ other and
+    /// other \ self) concurrently.  `ptr_eq` and Merkle-hash fast-paths
+    /// short-circuit in O(1) for identical maps (empty result).
+    ///
     /// This is the parallel equivalent of
     /// [`symmetric_difference`][GenericHashMap::symmetric_difference].
     ///
-    /// Time: O((n + m) log max(n, m) / p)
+    /// Time: O((n + m) log max(n, m) / p); O(1) for identical maps.
     #[must_use]
     pub fn par_symmetric_difference(self, other: Self) -> Self {
+        if self.is_empty() {
+            return other;
+        }
+        if other.is_empty() {
+            return self;
+        }
+        if self.ptr_eq(&other) {
+            return Self::default();
+        }
+        if self.hasher_id == other.hasher_id
+            && self.size == other.size
+            && self.kv_merkle_valid
+            && other.kv_merkle_valid
+            && self.kv_merkle_hash == other.kv_merkle_hash
+        {
+            return Self::default();
+        }
         let (left, right) = ::rayon::join(
             || {
                 self.par_iter()
@@ -557,6 +632,312 @@ where
             },
         );
         left.union(right)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HashMap — tree-native par_map_values helpers
+//
+// `par_map_values` is implemented by walking the HAMT tree structure directly
+// rather than going through `par_iter().map().collect()`.
+//
+// Why this is faster than the iterator-based approach:
+// - The `collect()` path calls `HashMap::insert` for each entry, which
+//   recomputes hashes and re-walks the tree: O(n log n) total.
+// - The tree-native path visits each entry exactly once and reconstructs
+//   nodes by copying their structure (same bitmap/positions, only values
+//   change): O(n) total, O(n/p) with rayon parallelism at the root level.
+// - Merkle hashes on intermediate nodes are preserved unchanged because
+//   they depend only on key hashes, not on values.
+//
+// `par_filter` does NOT benefit from this optimisation — removing keys changes
+// tree topology, so reconstruction via insert is required.
+// ---------------------------------------------------------------------------
+
+/// Transform the values in a HAMT collision node. Keys and hash are preserved.
+/// `f` receives `(&K, &V)` and returns `V2`.
+fn map_values_collision<K, V, V2, H, F>(
+    coll: &CollisionNode<(K, V), H>,
+    f: &F,
+) -> CollisionNode<(K, V2), H>
+where
+    K: Clone,
+    V2: Clone,
+    H: HashWidth,
+    F: Fn(&K, &V) -> V2,
+{
+    CollisionNode {
+        hash: coll.hash,
+        data: coll
+            .data
+            .iter()
+            .map(|(k, v)| (k.clone(), f(k, v)))
+            .collect(),
+    }
+}
+
+/// Transform the values in a SIMD leaf node. Control bytes and merkle_hash
+/// are copied directly — they depend only on key hashes, not values.
+fn map_values_simd<K, V, V2, H, F, const W: usize, const G: usize>(
+    node: &GenericSimdNode<(K, V), H, W, G>,
+    f: &F,
+) -> GenericSimdNode<(K, V2), H, W, G>
+where
+    BitsImpl<W>: bitmaps::Bits,
+    K: Clone,
+    V2: Clone,
+    H: HashWidth,
+    F: Fn(&K, &V) -> V2,
+{
+    // map_values copies control bytes and merkle_hash from the source node.
+    node.map_values(|(k, v)| (k.clone(), f(k, v)))
+}
+
+/// Transform the values in a single HAMT `Entry`, returning a new entry of
+/// the output type. The entry's position in its parent node is unchanged.
+fn map_values_entry<K, V, V2, P, H, F>(entry: &Entry<(K, V), P, H>, f: &F) -> Entry<(K, V2), P, H>
+where
+    K: Clone + Send + Sync,
+    V: Clone + Send + Sync,
+    V2: Clone + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+    H: HashWidth + Send + Sync,
+    F: Fn(&K, &V) -> V2 + Send + Sync,
+{
+    match entry {
+        Entry::Value((k, v), h) => Entry::Value((k.clone(), f(k, v)), *h),
+        Entry::SmallSimdNode(node) => Entry::SmallSimdNode(SharedPointer::new(map_values_simd::<
+            _,
+            _,
+            _,
+            _,
+            _,
+            SMALL_NODE_WIDTH,
+            1,
+        >(node, f))),
+        Entry::LargeSimdNode(node) => Entry::LargeSimdNode(SharedPointer::new(map_values_simd::<
+            _,
+            _,
+            _,
+            _,
+            _,
+            HASH_WIDTH,
+            2,
+        >(node, f))),
+        Entry::HamtNode(node) => {
+            // Recurse sequentially for interior nodes — the root-level rayon
+            // fork already distributes work across threads.
+            Entry::HamtNode(SharedPointer::new(map_values_hamt_node_seq(node, f)))
+        }
+        Entry::Collision(coll) => {
+            Entry::Collision(SharedPointer::new(map_values_collision(coll, f)))
+        }
+    }
+}
+
+/// Sequentially transform all values in a `HamtNode`. Used for child nodes
+/// below the root (root-level parallelism is sufficient for most maps).
+fn map_values_hamt_node_seq<K, V, V2, P, H, F>(
+    node: &HamtNode<(K, V), P, H>,
+    f: &F,
+) -> HamtNode<(K, V2), P, H>
+where
+    K: Clone + Send + Sync,
+    V: Clone + Send + Sync,
+    V2: Clone + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+    H: HashWidth + Send + Sync,
+    F: Fn(&K, &V) -> V2 + Send + Sync,
+{
+    let mut new_node: HamtNode<(K, V2), P, H> = HamtNode::default();
+    for (idx, entry) in node.data.entries() {
+        new_node.data.insert(idx, map_values_entry(entry, f));
+    }
+    // Key-hash Merkle is preserved — only values changed.
+    new_node.merkle_hash = node.merkle_hash;
+    new_node
+}
+
+/// Parallel transform of a root `HamtNode`. Forks a rayon task per top-level
+/// entry so that child subtrees are processed concurrently.
+fn map_values_hamt_node_par<K, V, V2, P, H, F>(
+    node: &HamtNode<(K, V), P, H>,
+    f: &F,
+) -> HamtNode<(K, V2), P, H>
+where
+    K: Clone + Send + Sync,
+    V: Clone + Send + Sync,
+    V2: Clone + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+    H: HashWidth + Send + Sync,
+    F: Fn(&K, &V) -> V2 + Send + Sync,
+{
+    // At most HASH_WIDTH (32) entries at the root level.
+    let pairs: Vec<(usize, &Entry<(K, V), P, H>)> = node.data.entries().collect();
+    // Each entry is an independent subtree — process in parallel.
+    let new_entries: Vec<(usize, Entry<(K, V2), P, H>)> = pairs
+        .into_par_iter()
+        .map(|(idx, entry)| (idx, map_values_entry(entry, f)))
+        .collect();
+    // Reassemble at the correct sparse positions.
+    let mut new_node: HamtNode<(K, V2), P, H> = HamtNode::default();
+    for (idx, entry) in new_entries {
+        new_node.data.insert(idx, entry);
+    }
+    new_node.merkle_hash = node.merkle_hash;
+    new_node
+}
+
+// ---------------------------------------------------------------------------
+// HashMap — parallel transform operations
+// ---------------------------------------------------------------------------
+
+impl<K, V, S, P> GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone + Send + Sync,
+    V: Hash + Clone + Send + Sync,
+    S: BuildHasher + Clone + Default + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+{
+    /// Return a new map keeping only entries that satisfy the predicate.
+    ///
+    /// Evaluates `f(&key, &value)` for every entry in parallel; returns a new
+    /// map containing only those where `f` returns `true`. The original map
+    /// is unchanged.
+    ///
+    /// Because removing keys changes tree topology, this method uses
+    /// `par_iter().filter().collect()` rather than direct tree manipulation.
+    ///
+    /// This is the immutable, parallel equivalent of [`retain`][Self::retain].
+    ///
+    /// Time: O(n / p) to scan + O(k log k) to rebuild (k = surviving entries).
+    #[must_use]
+    pub fn par_filter<F>(&self, f: F) -> Self
+    where
+        F: Fn(&K, &V) -> bool + Sync + Send,
+    {
+        if self.is_empty() {
+            return Self::default();
+        }
+        self.par_iter()
+            .filter(|(k, v)| f(*k, *v))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+}
+
+impl<K, V, S, P> GenericHashMap<K, V, S, P>
+where
+    K: Hash + Eq + Clone + Send + Sync,
+    V: Clone + Send + Sync,
+    S: BuildHasher + Clone + Default + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+{
+    /// Return a new map with values transformed by `f`, applied in parallel.
+    ///
+    /// Keys are unchanged; each value is replaced by `f(&value)`. This method
+    /// walks the HAMT tree directly rather than using `par_iter().collect()`:
+    /// since keys (and therefore tree topology and key-hash Merkle values) are
+    /// preserved, nodes are reconstructed at their original positions without
+    /// re-hashing or re-walking the tree. This is O(n/p) end-to-end vs the
+    /// O(n/p scan + n log n rebuild) of a collect-based approach.
+    ///
+    /// Equivalent to the sequential [`map_values`][Self::map_values] but
+    /// evaluated in parallel.
+    ///
+    /// Time: O(n / p) — tree walk + value transform, no O(n log n) rebuild.
+    #[must_use]
+    pub fn par_map_values<V2, F>(&self, f: F) -> GenericHashMap<K, V2, S, P>
+    where
+        V2: Clone + Send + Sync,
+        F: Fn(&V) -> V2 + Sync + Send,
+    {
+        if self.is_empty() {
+            return GenericHashMap::default();
+        }
+        // Adapt Fn(&V) -> V2 to the Fn(&K, &V) -> V2 signature used by helpers.
+        let g = |_k: &K, v: &V| f(v);
+        let new_root = self
+            .root
+            .as_ref()
+            .map(|root_ptr| SharedPointer::new(map_values_hamt_node_par(root_ptr, &g)));
+        GenericHashMap {
+            size: self.size,
+            root: new_root,
+            hasher: self.hasher.clone(),
+            hasher_id: next_hasher_id(),
+            kv_merkle_hash: 0,
+            // V2 may hash differently from V, so KV Merkle is no longer valid.
+            kv_merkle_valid: false,
+        }
+    }
+
+    /// Return a new map with values transformed by `f(key, value)`, applied in
+    /// parallel.
+    ///
+    /// Each entry's value is replaced by `f(&key, &value)`. Uses the same
+    /// tree-native approach as [`par_map_values`][Self::par_map_values] — no
+    /// re-hashing or re-walking.
+    ///
+    /// Equivalent to the sequential
+    /// [`map_values_with_key`][Self::map_values_with_key].
+    ///
+    /// Time: O(n / p) — tree walk + value transform, no O(n log n) rebuild.
+    #[must_use]
+    pub fn par_map_values_with_key<V2, F>(&self, f: F) -> GenericHashMap<K, V2, S, P>
+    where
+        V2: Clone + Send + Sync,
+        F: Fn(&K, &V) -> V2 + Sync + Send,
+    {
+        if self.is_empty() {
+            return GenericHashMap::default();
+        }
+        let new_root = self
+            .root
+            .as_ref()
+            .map(|root_ptr| SharedPointer::new(map_values_hamt_node_par(root_ptr, &f)));
+        GenericHashMap {
+            size: self.size,
+            root: new_root,
+            hasher: self.hasher.clone(),
+            hasher_id: next_hasher_id(),
+            kv_merkle_hash: 0,
+            kv_merkle_valid: false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HashSet — parallel transform operations
+// ---------------------------------------------------------------------------
+
+impl<A, S, P> GenericHashSet<A, S, P>
+where
+    A: Hash + Eq + Clone + Send + Sync,
+    S: BuildHasher + Clone + Default + Send + Sync,
+    P: SharedPointerKind + Send + Sync,
+{
+    /// Return a new set keeping only elements that satisfy the predicate.
+    ///
+    /// Evaluates `f(&element)` for every element in parallel; returns a new
+    /// set containing only those where `f` returns `true`. The original set
+    /// is unchanged.
+    ///
+    /// This is the immutable, parallel equivalent of [`retain`][Self::retain].
+    ///
+    /// Time: O(n / p) to scan + O(k log k) to rebuild (k = surviving elements).
+    #[must_use]
+    pub fn par_filter<F>(&self, f: F) -> Self
+    where
+        F: Fn(&A) -> bool + Sync + Send,
+    {
+        if self.is_empty() {
+            return Self::default();
+        }
+        self.par_iter()
+            .filter(|a| f(*a))
+            .map(|a| a.clone())
+            .collect()
     }
 }
 
@@ -764,11 +1145,20 @@ where
 {
     /// Construct the union of two sets in parallel.
     ///
+    /// `ptr_eq` fast-path short-circuits in O(1) for structurally
+    /// identical sets.
+    ///
     /// This is the parallel equivalent of [`union`][GenericHashSet::union].
     ///
-    /// Time: O(n log n / p)
+    /// Time: O(n log n / p); O(1) for identical sets.
     #[must_use]
     pub fn par_union(self, other: Self) -> Self {
+        if other.is_empty() || self.ptr_eq(&other) {
+            return self;
+        }
+        if self.is_empty() {
+            return other;
+        }
         let only_in_other: Self = other
             .par_iter()
             .filter_map(|a| {
@@ -788,12 +1178,21 @@ where
 
     /// Construct the intersection of two sets in parallel.
     ///
+    /// `ptr_eq` fast-path short-circuits in O(1) for structurally
+    /// identical sets.
+    ///
     /// This is the parallel equivalent of
     /// [`intersection`][GenericHashSet::intersection].
     ///
-    /// Time: O(min(n, m) log max(n, m) / p)
+    /// Time: O(min(n, m) log max(n, m) / p); O(1) for identical sets.
     #[must_use]
     pub fn par_intersection(self, other: Self) -> Self {
+        if self.is_empty() || other.is_empty() {
+            return Self::default();
+        }
+        if self.ptr_eq(&other) {
+            return self;
+        }
         let (smaller, larger) = if self.len() <= other.len() {
             (&self, &other)
         } else {
@@ -818,12 +1217,20 @@ where
     /// Construct the relative complement (self − other) in parallel:
     /// elements in `self` not in `other`.
     ///
+    /// `ptr_eq` fast-path returns empty in O(1) for identical sets.
+    ///
     /// This is the parallel equivalent of
     /// [`difference`][GenericHashSet::difference].
     ///
-    /// Time: O(n log m / p)
+    /// Time: O(n log m / p); O(1) for identical sets.
     #[must_use]
     pub fn par_difference(self, other: Self) -> Self {
+        if self.is_empty() || other.is_empty() {
+            return self;
+        }
+        if self.ptr_eq(&other) {
+            return Self::default();
+        }
         self.par_iter()
             .filter_map(|a| {
                 if other.contains(a) {
@@ -842,12 +1249,24 @@ where
     /// Construct the symmetric difference of two sets in parallel:
     /// elements in exactly one of the two sets.
     ///
+    /// Uses `rayon::join` to compute both halves concurrently.
+    /// `ptr_eq` fast-path returns empty in O(1) for identical sets.
+    ///
     /// This is the parallel equivalent of
     /// [`symmetric_difference`][GenericHashSet::symmetric_difference].
     ///
-    /// Time: O((n + m) log max(n, m) / p)
+    /// Time: O((n + m) log max(n, m) / p); O(1) for identical sets.
     #[must_use]
     pub fn par_symmetric_difference(self, other: Self) -> Self {
+        if self.is_empty() {
+            return other;
+        }
+        if other.is_empty() {
+            return self;
+        }
+        if self.ptr_eq(&other) {
+            return Self::default();
+        }
         let (left, right) = ::rayon::join(
             || {
                 self.par_iter()
@@ -1246,5 +1665,182 @@ mod test {
         let set1: HashSet<i32> = (0..1_000).collect();
         let set2: HashSet<i32> = (1_000..2_000).collect();
         assert!(set1.par_intersection(set2).is_empty());
+    }
+
+    // --- ptr_eq / Merkle fast-path tests ---
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_union_ptr_eq_fast_path() {
+        // When both maps are the same (ptr_eq), par_union returns self unchanged.
+        let map: HashMap<i32, i32> = (0..1_000).map(|i| (i, i)).collect();
+        let same = map.clone(); // O(1) clone: same root pointer
+        assert!(map.ptr_eq(&same));
+        let result = map.par_union(same.clone());
+        assert_eq!(result.len(), 1_000);
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_difference_ptr_eq_fast_path() {
+        // When both maps share the same root, difference is empty.
+        let map: HashMap<i32, i32> = (0..1_000).map(|i| (i, i)).collect();
+        let same = map.clone();
+        assert!(map.ptr_eq(&same));
+        assert!(map.par_difference(same).is_empty());
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashmap_par_symmetric_difference_ptr_eq_fast_path() {
+        let map: HashMap<i32, i32> = (0..1_000).map(|i| (i, i)).collect();
+        let same = map.clone();
+        assert!(map.ptr_eq(&same));
+        assert!(map.par_symmetric_difference(same).is_empty());
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn hashset_par_difference_ptr_eq_fast_path() {
+        let set: HashSet<i32> = (0..1_000).collect();
+        let same = set.clone();
+        assert!(set.ptr_eq(&same));
+        assert!(set.par_difference(same).is_empty());
+    }
+
+    #[test]
+    fn hashmap_par_filter_keeps_matching() {
+        let map: HashMap<i32, i32> = (0..100).map(|i| (i, i * 2)).collect();
+        let evens = map.par_filter(|k, _| k % 2 == 0);
+        assert_eq!(evens.len(), 50);
+        assert!(evens.keys().all(|k| k % 2 == 0));
+    }
+
+    #[test]
+    fn hashmap_par_filter_empty_input() {
+        let map: HashMap<i32, i32> = HashMap::new();
+        assert!(map.par_filter(|_, _| true).is_empty());
+    }
+
+    #[test]
+    fn hashmap_par_filter_none_match() {
+        let map: HashMap<i32, i32> = (0..50).map(|i| (i, i)).collect();
+        assert!(map.par_filter(|_, _| false).is_empty());
+    }
+
+    #[test]
+    fn hashmap_par_filter_all_match() {
+        let map: HashMap<i32, i32> = (0..50).map(|i| (i, i)).collect();
+        let result = map.par_filter(|_, _| true);
+        assert_eq!(result, map);
+    }
+
+    #[test]
+    fn hashmap_par_map_values_doubles() {
+        let map: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+        let doubled = map.par_map_values(|v| v * 2);
+        for i in 0..100 {
+            assert_eq!(doubled.get(&i), Some(&(i * 2)));
+        }
+    }
+
+    #[test]
+    fn hashmap_par_map_values_empty() {
+        let map: HashMap<i32, i32> = HashMap::new();
+        assert!(map.par_map_values(|v| v * 2).is_empty());
+    }
+
+    #[test]
+    fn hashmap_par_map_values_type_change() {
+        let map: HashMap<i32, i32> = (0..50).map(|i| (i, i)).collect();
+        let stringified: HashMap<i32, String> = map.par_map_values(|v| v.to_string());
+        assert_eq!(stringified.get(&0), Some(&"0".to_string()));
+        assert_eq!(stringified.get(&42), Some(&"42".to_string()));
+    }
+
+    #[test]
+    fn hashmap_par_map_values_with_key() {
+        let map: HashMap<i32, i32> = (0..100).map(|i| (i, i)).collect();
+        let result = map.par_map_values_with_key(|k, v| k + v);
+        for i in 0..100_i32 {
+            assert_eq!(result.get(&i), Some(&(i + i)));
+        }
+    }
+
+    #[test]
+    fn hashmap_par_map_values_with_key_empty() {
+        let map: HashMap<i32, i32> = HashMap::new();
+        assert!(map.par_map_values_with_key(|k, v| k + v).is_empty());
+    }
+
+    #[test]
+    fn hashset_par_filter_keeps_matching() {
+        let set: HashSet<i32> = (0..100).collect();
+        let evens = set.par_filter(|x| x % 2 == 0);
+        assert_eq!(evens.len(), 50);
+        assert!(evens.iter().all(|x| x % 2 == 0));
+    }
+
+    #[test]
+    fn hashset_par_filter_empty_input() {
+        let set: HashSet<i32> = HashSet::new();
+        assert!(set.par_filter(|_| true).is_empty());
+    }
+
+    #[test]
+    fn hashset_par_filter_none_match() {
+        let set: HashSet<i32> = (0..50).collect();
+        assert!(set.par_filter(|_| false).is_empty());
+    }
+
+    #[test]
+    fn hashset_par_filter_all_match() {
+        let set: HashSet<i32> = (0..50).collect();
+        let result = set.par_filter(|_| true);
+        assert_eq!(result, set);
+    }
+
+    // --- tree-native par_map_values correctness vs sequential map_values ---
+
+    #[test]
+    fn hashmap_par_map_values_matches_seq() {
+        let map: HashMap<i32, i32> = (0..5_000).map(|i| (i, i)).collect();
+        let seq = map.map_values(|v| v * 3 + 1);
+        let par = map.par_map_values(|v| v * 3 + 1);
+        assert_eq!(par, seq);
+    }
+
+    #[test]
+    fn hashmap_par_map_values_type_change_matches_seq() {
+        let map: HashMap<i32, i32> = (0..5_000).map(|i| (i, i)).collect();
+        let seq: HashMap<i32, String> = map.map_values(|v| v.to_string());
+        let par: HashMap<i32, String> = map.par_map_values(|v| v.to_string());
+        assert_eq!(par, seq);
+    }
+
+    #[test]
+    fn hashmap_par_map_values_with_key_matches_seq() {
+        let map: HashMap<i32, i32> = (0..5_000).map(|i| (i, i * 2)).collect();
+        let seq = map.map_values_with_key(|k, v| k + v);
+        let par = map.par_map_values_with_key(|k, v| k + v);
+        assert_eq!(par, seq);
+    }
+
+    #[test]
+    fn hashmap_par_map_values_empty_tree_native() {
+        let map: HashMap<i32, i32> = HashMap::new();
+        let par: HashMap<i32, String> = map.par_map_values(|v| v.to_string());
+        assert!(par.is_empty());
+    }
+
+    #[test]
+    fn hashmap_par_map_values_preserves_size() {
+        let n = 10_000;
+        let map: HashMap<i32, i32> = (0..n).map(|i| (i, i)).collect();
+        let par = map.par_map_values(|v| v + 1);
+        assert_eq!(par.len(), n as usize);
+        for i in 0..n {
+            assert_eq!(par.get(&i), Some(&(i + 1)));
+        }
     }
 }

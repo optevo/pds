@@ -217,6 +217,25 @@ where
         self.data.len()
     }
 
+    /// Build a new SIMD node of a different value type by transforming each
+    /// entry with `f`. The control bytes (key-hash suffixes) and `merkle_hash`
+    /// are copied verbatim — both depend only on keys, not values.
+    ///
+    /// Used by the tree-native `par_map_values` implementation.
+    #[cfg(any(test, feature = "rayon"))]
+    pub(crate) fn map_values<B, F>(&self, f: F) -> GenericSimdNode<B, H, WIDTH, GROUPS>
+    where
+        F: Fn(&A) -> B,
+    {
+        let mut out = GenericSimdNode::new();
+        out.control = self.control;
+        out.merkle_hash = self.merkle_hash;
+        for (idx, (val, h)) in self.data.entries() {
+            out.data.insert(idx, (f(val), *h));
+        }
+        out
+    }
+
     #[inline]
     fn pop_value<P: SharedPointerKind>(&mut self) -> Entry<A, P, H> {
         let (val, hash) = self.data.pop().unwrap();

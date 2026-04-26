@@ -1749,3 +1749,118 @@ InsertionOrderSet. Several non-obvious design choices were required.
 **Consequences:**
 - Users who construct `GenericBiMap<K, V, S, P, MyHashWidth>` with a non-default H
   will not get `par_iter`. Acceptable given the target audience uses type aliases.
+
+---
+
+## DEC-034: Parallel transform operations (par_filter, par_map_values) use iterator interface, not direct tree manipulation {#sec:dec-034}
+
+**Date:** 2026-04-26
+**Status:** Partially superseded by DEC-035 — `par_map_values` / `par_map_values_with_key` on `HashMap` and `OrdMap` have been upgraded to tree-native implementations. `par_filter` remains collect-based (topology changes).
+
+**Context:**
+R.2 added `par_filter`, `par_map_values`, and `par_map_values_with_key` to
+`HashMap`, `OrdMap`, `HashSet`, and `OrdSet`. These are convenience wrappers
+around `par_iter().filter/map().collect()`.
+
+**Decision:**
+Implement via the iterator interface rather than direct tree manipulation.
+
+The current implementations are essentially:
+
+```rust
+// par_filter on HashMap
+self.par_iter().filter(|(k,v)| f(*k,*v)).map(|(k,v)| (k.clone(),v.clone())).collect()
+// par_map_values on HashMap
+self.par_iter().map(|(k,v)| (k.clone(), f(v))).collect()
+```
+
+This is identical to what a user could write themselves. The methods provide
+convenience and an optimization seam for future improvement.
+
+**Why not tree-aware parallel reconstruction now?**
+A tree-aware version of `par_map_values` could split the HAMT root into N
+subtrees, rebuild each subtree in parallel (trivial for values-only changes
+since tree topology is preserved), then reassemble. This would be O(n/p) end-
+to-end vs the current O(n/p + n log n) (parallel scan + sequential
+FromParallelIterator rebuild, which inserts one key at a time).
+
+This optimization is deferred because:
+1. The collect-based rebuild (`FromParallelIterator`) requires touching
+   all n entries regardless — the bottleneck is allocation, not compute
+2. Implementing a parallel HAMT walker that produces new nodes without going
+   through the insert path is non-trivial and requires HAMT internals exposure
+3. The methods can be transparently optimized later without API changes
+
+**Alternatives considered:**
+- HAMT-native parallel map: valid future optimization, especially for
+  `par_map_values` where tree shape is preserved. Filed as a future item
+  in `docs/impl-plan.md`.
+- Omit the methods entirely: rejected — the API is useful and the seam
+  allows optimization later.
+
+**Consequences:**
+- `par_filter` and `par_map_values` offer no algorithmic advantage over
+  `par_iter().filter().collect()` for advanced users. Documented in the
+  method doc comments.
+- The consistent naming across all collection types is itself valuable
+  for discoverability.
+
+---
+
+## DEC-035: Tree-native par_map_values on HashMap and OrdMap {#sec:dec-035}
+
+**Date:** 2026-04-26
+**Status:** Accepted
+
+**Context:**
+R.10 identified that `par_map_values` / `par_map_values_with_key` on `HashMap`
+and `OrdMap` could be significantly faster by walking the internal tree directly
+rather than going through `par_iter().map().collect()`. The collect path inserts
+each entry one by one — O(n log n) total — even though key order and tree shape
+are completely unchanged by a value-only transformation.
+
+**Decision:**
+Implement tree-native `par_map_values` and `par_map_values_with_key` for both
+`HashMap` (HAMT) and `OrdMap` (B+ tree) that walk and reconstruct the tree without
+going through the insert path.
+
+For **HashMap / HAMT**:
+- Added `map_values_hamt_node_par`, `map_values_hamt_node_seq`, `map_values_entry`,
+  `map_values_simd`, and `map_values_collision` helpers in `src/hash/rayon.rs`.
+- The root HAMT node's `SparseChunk` entries are processed in parallel via rayon,
+  with each entry's position (`SparseChunk::entries()`) preserved verbatim.
+- Key-hash Merkle values (`merkle_hash` in `GenericSimdNode`) are copied unchanged —
+  they depend only on key hashes, not values.
+- The KV Merkle (`kv_merkle_valid`) is marked stale since value hashes may differ.
+- Required adding `GenericSimdNode::map_values()` (gated by `cfg(any(test, feature="rayon"))`)
+  to access the private `control` field internally.
+- Output `GenericHashMap` is constructed directly (bypassing insert machinery), with
+  `hasher_id` refreshed via `next_hasher_id()` to invalidate any cached derivations.
+
+For **OrdMap / B+ tree**:
+- Added `par_map_values_ord_node` helper in `src/ord/rayon.rs`.
+- Branch separator keys are cloned unchanged; leaf `(K, V)` pairs at each
+  `Children::Leaves` or `Children::Branches` level are processed in parallel.
+- Rayon forks at the top-level children only; deeper recursion is sequential
+  (tree depth is typically 2–4, so the fork overhead outweighs the gain at depth).
+- Required adding `Branch::map_values`, `Leaf::map_values`, and `Node::map_values`
+  (all gated by `cfg(any(test, feature="rayon"))`) in `src/nodes/btree.rs`.
+- Output `GenericOrdMap` is constructed directly (`{ root, size }`).
+
+**Unification:** All helpers use `F: Fn(&K, &V) -> V2` uniformly. `par_map_values`
+adapts at the call site via `|_k, v| f(v)` to avoid duplicating the helper tree.
+
+**Alternatives considered:**
+- Keep collect-based approach (DEC-034): O(n/p + n log n). Rejected — O(n log n)
+  rebuild is unnecessary overhead for value-only transforms on large maps.
+- Gate the new helpers behind a cfg flag: rejected — the `any(test, feature="rayon")`
+  gate already ensures they're absent in non-rayon, non-test builds.
+
+**Consequences:**
+- `par_map_values` and `par_map_values_with_key` are now **O(n/p)** on `HashMap`
+  and `OrdMap` rather than O(n/p + n log n).
+- `par_filter` remains collect-based (topology changes require re-insertion).
+- The lib.rs `## Parallel operations` section now distinguishes "implementation-
+  optimised" from "convenience" methods.
+- `V: Hash` bound is NOT required on the optimised `par_map_values` impl block
+  (unlike `par_filter` which needs it for `FromParallelIterator`).

@@ -57,6 +57,15 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-26] R.9, R.10 — Parallel transform operations + tree-native optimisation.**
+  `par_filter`, `par_map_values`, `par_map_values_with_key` added to `HashMap`, `OrdMap`,
+  `HashSet`, `OrdSet` (R.9). `par_map_values`/`par_map_values_with_key` subsequently
+  upgraded to tree-native O(n/p) implementations for both HAMT and B+ tree (R.10 / DEC-035):
+  HAMT walks entries via `SparseChunk::entries()` preserving node positions; B+ tree forks
+  at the top-level branch children via rayon. `par_filter` remains collect-based.
+  `src/lib.rs` `## Parallel operations` section updated to distinguish implementation-
+  optimised vs convenience methods. All 905 tests green; zero warnings.
+
 - **[2026-04-26] R.1, R.3, R.5, R.6, R.7 — Residual consistency fixes.**
   R.1: Added all missing set operations — `symmetric_difference` to Bag, HashMultiMap,
   InsertionOrderMap, Trie; `difference`, `intersection`, `symmetric_difference` to BiMap and SymMap.
@@ -2473,6 +2482,52 @@ element strategies; quickcheck: generate random elements and insert).
 
 **Acceptance:** All three features compile and test against all 11 collection types.
 Descriptions in lib.rs and README updated to "all collection types".
+
+---
+
+### R.9 Parallel transform operations — par_filter, par_map_values (LOW) — DONE [2026-04-26]
+
+**What:** Add parallel higher-order transform methods to map and set types:
+
+- `par_filter(f: Fn(&K, &V) -> bool)` on `HashMap`, `OrdMap`
+- `par_filter(f: Fn(&A) -> bool)` on `HashSet`, `OrdSet`
+- `par_map_values(f: Fn(&V) -> V2)` on `HashMap`, `OrdMap`
+- `par_map_values_with_key(f: Fn(&K, &V) -> V2)` on `HashMap`, `OrdMap`
+
+Initially all implemented via `par_iter().filter/map().collect()` (see DEC-034).
+`par_map_values` and `par_map_values_with_key` were subsequently upgraded to
+tree-native O(n/p) implementations (see R.10 / DEC-035).
+
+Module-level `## Parallel operations` section added to `src/lib.rs` with full
+coverage tables for iteration, set ops, and transform ops. Section distinguishes
+"implementation-optimised" (tree-native) from "convenience" (collect-based) methods.
+
+**Acceptance:** `test.sh` passes; `cargo test --features rayon` passes (48+ tests
+in `hash::rayon`, 35+ in `ord::rayon`); zero compiler warnings.
+
+---
+
+### R.10 Tree-native par_map_values for HashMap and OrdMap (MEDIUM) — DONE [2026-04-26]
+
+**What:** Replaced the `par_iter().map().collect()` implementation of `par_map_values`
+and `par_map_values_with_key` on both `HashMap` (HAMT) and `OrdMap` (B+ tree) with
+tree-native parallel implementations (see DEC-035).
+
+**HashMap / HAMT:** Added `map_values_hamt_node_par` and helpers in `src/hash/rayon.rs`.
+Root HAMT entries are processed in parallel via rayon, preserving node positions from
+`SparseChunk::entries()`. Key-hash Merkle values copied verbatim; KV Merkle invalidated.
+`GenericSimdNode::map_values()` added (cfg-gated) to handle the private `control` field.
+
+**OrdMap / B+ tree:** Added `par_map_values_ord_node` in `src/ord/rayon.rs`. Branch
+separator keys cloned unchanged; leaf children processed in parallel at the top level.
+`Branch::map_values`, `Leaf::map_values`, `Node::map_values` added (cfg-gated) to
+`src/nodes/btree.rs`.
+
+**Result:** Both `par_map_values` and `par_map_values_with_key` are now O(n/p) on
+`HashMap` and `OrdMap`. `par_filter` remains collect-based — tree topology changes
+require re-insertion.
+
+**Acceptance:** `test.sh` passes; all 905 tests green with `--all-features`; zero warnings.
 
 ---
 

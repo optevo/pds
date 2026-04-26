@@ -343,7 +343,7 @@
 //! | [`triomphe`](https://crates.io/crates/triomphe/) | Yes | Use [`triomphe::Arc`](https://docs.rs/triomphe/latest/triomphe/struct.Arc.html) as the default shared pointer — faster than `std::sync::Arc` (no weak reference count). |
 //! | [`proptest`](https://crates.io/crates/proptest) | No | Proptest strategies for `Vector`, `OrdMap`, `OrdSet`, `HashMap`, and `HashSet` under a `proptest` namespace, e.g. `pds::vector::proptest::vector()`. Newer collection types (Bag, HashMultiMap, etc.) are not yet covered. |
 //! | [`quickcheck`](https://crates.io/crates/quickcheck) | No | [`quickcheck::Arbitrary`](https://docs.rs/quickcheck/latest/quickcheck/trait.Arbitrary.html) implementations for `Vector`, `OrdMap`, `OrdSet`, `HashMap`, and `HashSet`. Newer collection types are not yet covered. |
-//! | [`rayon`](https://crates.io/crates/rayon) | No | Parallel iterators for all collection types. `InsertionOrderMap` and `InsertionOrderSet` support read-only `par_iter` only — `FromParallelIterator` and `ParallelExtend` are omitted because parallel collection would lose insertion order. `Trie` is excluded. `Bag` additionally provides `par_elements()` to iterate each element once per occurrence. |
+//! | [`rayon`](https://crates.io/crates/rayon) | No | Parallel iterators, parallel set operations (`par_union`, `par_intersection`, `par_difference`, `par_symmetric_difference`), and parallel transform operations (`par_filter`, `par_map_values`, `par_map_values_with_key`) for all eligible collection types. See [Parallel operations](#parallel-operations) below. |
 //! | [`serde`](https://crates.io/crates/serde) | No | [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html) and [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html) implementations for all `pds` datatypes |
 //! | [`arbitrary`](https://crates.io/crates/arbitrary/) | No | [`arbitrary::Arbitrary`](https://docs.rs/arbitrary/latest/arbitrary/trait.Arbitrary.html) implementations for `Vector`, `OrdMap`, `OrdSet`, `HashMap`, and `HashSet`. Newer collection types are not yet covered. |
 //! | [`foldhash`](https://crates.io/crates/foldhash/) | No | Enables `HashMap`, `HashSet`, etc. type aliases in `no_std` environments using `foldhash::fast::RandomState` as the default hasher. |
@@ -352,6 +352,96 @@
 //! | `persist` | No | Structural-sharing-preserving serialisation via `HashMapPool`. Serialises HAMT node trees with deduplication and reconstructs with hash consing on deserialisation. Requires `std` and `hash-intern`. |
 //! | `small-chunks` | No | Reduces internal chunk sizes so tree structures can be exercised with small collections. For testing only — not intended for production use. |
 //! | `debug` | No | Enables internal invariant-checking methods on `Vector` (RRB tree validation). For testing and debugging only. |
+//!
+//! ## Parallel operations
+//!
+//! Enable the `rayon` feature to unlock parallel capabilities on all collection types.
+//!
+//! ### Parallel iteration
+//!
+//! Every collection with a sequential iterator also has a `par_iter()` method that returns
+//! a Rayon `ParallelIterator`. Collections that support unordered collection also implement
+//! `FromParallelIterator` and `ParallelExtend`.
+//!
+//! | Collection | `par_iter` | `FromParallelIterator` | `ParallelExtend` |
+//! |------------|:----------:|:---------------------:|:----------------:|
+//! | `HashMap` | ✓ | ✓ | ✓ |
+//! | `HashSet` | ✓ | ✓ | ✓ |
+//! | `OrdMap` | ✓ | ✓ | ✓ |
+//! | `OrdSet` | ✓ | ✓ | ✓ |
+//! | `Vector` | ✓ | ✓ | ✓ |
+//! | `Bag` | ✓ | ✓ | ✓ |
+//! | `HashMultiMap` | ✓ | ✓ | ✓ |
+//! | `BiMap` | ✓ | ✓ | ✓ |
+//! | `SymMap` | ✓ | ✓ | ✓ |
+//! | `InsertionOrderMap` | ✓ | — | — |
+//! | `InsertionOrderSet` | ✓ | — | — |
+//! | `Trie` | — | — | — |
+//!
+//! ### Parallel set operations
+//!
+//! Collections with set semantics gain `par_union`, `par_intersection`, `par_difference`,
+//! and `par_symmetric_difference`. These use Rayon's work-stealing thread pool and apply
+//! the same O(1) structural fast-paths (pointer equality, Merkle hash) as the sequential
+//! versions where applicable.
+//!
+//! | Collection | `par_union` | `par_intersection` | `par_difference` | `par_symmetric_difference` |
+//! |------------|:-----------:|:-----------------:|:----------------:|:---------------------------:|
+//! | `HashMap` | ✓ | ✓ | ✓ | ✓ |
+//! | `HashSet` | ✓ | ✓ | ✓ | ✓ |
+//! | `OrdMap` | ✓ | ✓ | ✓ | ✓ |
+//! | `OrdSet` | ✓ | ✓ | ✓ | ✓ |
+//! | `Bag` | ✓ | ✓ | ✓ | ✓ |
+//! | `HashMultiMap` | ✓† | ✓ | ✓ | ✓ |
+//! | `BiMap` | ✓† | ✓ | ✓ | ✓ |
+//! | `SymMap` | ✓† | ✓ | ✓ | ✓ |
+//!
+//! † `par_union` delegates to the sequential implementation for these types because their
+//! invariants (bijection, symmetry, value-set merging) require sequential conflict resolution.
+//!
+//! ### Parallel transform operations
+//!
+//! Map and set types additionally expose parallel higher-order transforms. These fall into
+//! two categories depending on whether the implementation can exploit the internal data
+//! structure directly.
+//!
+//! #### Implementation-optimised methods
+//!
+//! These methods walk the internal tree natively rather than going through a
+//! `par_iter().collect()` round-trip. Because keys are not modified, the tree topology
+//! (separator keys, hash positions, node layout) is preserved without re-insertion or
+//! re-sorting, giving **O(n/p)** work instead of **O(n/p + n log n)**:
+//!
+//! | Method | Available on | Complexity | Notes |
+//! |--------|-------------|-----------|-------|
+//! | `par_map_values(f)` | `HashMap`, `OrdMap` | O(n/p) | Values replaced by `f(&value)`; tree structure preserved |
+//! | `par_map_values_with_key(f)` | `HashMap`, `OrdMap` | O(n/p) | Values replaced by `f(&key, &value)`; tree structure preserved |
+//!
+//! For `HashMap` the HAMT node graph is walked directly: leaf entries are transformed
+//! in-place and the key-hash Merkle values (which depend only on keys) are copied verbatim.
+//! For `OrdMap` the B+ tree leaf children are processed in parallel via Rayon and the
+//! separator keys are cloned unchanged.
+//!
+//! #### Convenience methods (collect-based)
+//!
+//! These methods change the tree topology (filtering removes entries, which can
+//! trigger rebalancing), so they must reconstruct the collection via insertion.
+//! They parallelise the scan/predicate evaluation but the rebuild step is sequential:
+//!
+//! | Method | Available on | Complexity | Notes |
+//! |--------|-------------|-----------|-------|
+//! | `par_filter(f)` | `HashMap`, `HashSet`, `OrdMap`, `OrdSet` | O(n/p) scan + O(k log k) rebuild | Surviving entries re-inserted (k = count kept) |
+//!
+//! All transform methods are immutable — the original collection is unchanged.
+//!
+//! ### Vector parallel operations
+//!
+//! [`Vector`] additionally provides:
+//!
+//! | Method | Description |
+//! |--------|-------------|
+//! | `par_sort()` | Sort in parallel (natural order) |
+//! | `par_sort_by(f)` | Sort in parallel with a comparator |
 //!
 //! [rrb-tree]: https://infoscience.epfl.ch/record/213452/files/rrbvector.pdf
 //! [hamt]: https://en.wikipedia.org/wiki/Hash_array_mapped_trie

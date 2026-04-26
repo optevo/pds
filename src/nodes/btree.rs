@@ -96,6 +96,23 @@ impl<K, V, P: SharedPointerKind> Node<K, V, P> {
             _ => false,
         }
     }
+
+    /// Return a new tree node with all values transformed by `f(key, value)`.
+    ///
+    /// Keys are unchanged, so tree topology (key comparisons, ordering) is
+    /// preserved exactly. Used by `par_map_values` in `ord/rayon.rs`.
+    #[cfg(any(test, feature = "rayon"))]
+    pub(crate) fn map_values<V2, F>(&self, f: &F) -> Node<K, V2, P>
+    where
+        K: Clone,
+        V2: Clone,
+        F: Fn(&K, &V) -> V2,
+    {
+        match self {
+            Node::Branch(branch) => Node::Branch(SharedPointer::new(branch.map_values(f))),
+            Node::Leaf(leaf) => Node::Leaf(SharedPointer::new(leaf.map_values(f))),
+        }
+    }
 }
 
 /// A branch node in a `B+Tree`.
@@ -259,6 +276,59 @@ impl<K, V, P: SharedPointerKind> Branch<K, V, P> {
 #[derive(Debug)]
 pub(crate) struct Leaf<K, V> {
     pub(crate) keys: Chunk<(K, V), NODE_SIZE>,
+}
+
+impl<K: Clone, V, P: SharedPointerKind> Branch<K, V, P> {
+    /// Return a new branch with the same separator keys and all values
+    /// transformed by `f`. Tree structure and key ordering are preserved.
+    #[cfg(any(test, feature = "rayon"))]
+    pub(crate) fn map_values<V2, F>(&self, f: &F) -> Branch<K, V2, P>
+    where
+        V2: Clone,
+        F: Fn(&K, &V) -> V2,
+    {
+        let new_children = match &self.children {
+            Children::Leaves { leaves } => {
+                let mut new_leaves: Chunk<SharedPointer<Leaf<K, V2>, P>, NUM_CHILDREN> =
+                    Chunk::new();
+                for leaf_ptr in leaves.as_slice() {
+                    new_leaves.push_back(SharedPointer::new(leaf_ptr.map_values(f)));
+                }
+                Children::Leaves { leaves: new_leaves }
+            }
+            Children::Branches { branches, level } => {
+                let mut new_branches: Chunk<SharedPointer<Branch<K, V2, P>, P>, NUM_CHILDREN> =
+                    Chunk::new();
+                for branch_ptr in branches.as_slice() {
+                    new_branches.push_back(SharedPointer::new(branch_ptr.map_values(f)));
+                }
+                Children::Branches {
+                    branches: new_branches,
+                    level: *level,
+                }
+            }
+        };
+        Branch {
+            keys: self.keys.clone(),
+            children: new_children,
+        }
+    }
+}
+
+impl<K: Clone, V> Leaf<K, V> {
+    /// Return a new leaf with the same keys and all values transformed by `f`.
+    #[cfg(any(test, feature = "rayon"))]
+    pub(crate) fn map_values<V2, F>(&self, f: &F) -> Leaf<K, V2>
+    where
+        V2: Clone,
+        F: Fn(&K, &V) -> V2,
+    {
+        let mut new_keys: Chunk<(K, V2), NODE_SIZE> = Chunk::new();
+        for (k, v) in self.keys.as_slice() {
+            new_keys.push_back((k.clone(), f(k, v)));
+        }
+        Leaf { keys: new_keys }
+    }
 }
 
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Node<K, V, P> {
