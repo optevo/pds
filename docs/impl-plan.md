@@ -77,6 +77,11 @@ single v2.0.0 release in Phase 5.
   `GenericOrdMap::from_sorted_iter` — a new O(n) bottom-up B+ tree constructor
   (`build_sorted` in `src/nodes/btree.rs`). All `test.sh` checks pass (fmt, cargo test
   × 3 feature variants, clippy -D warnings, cargo doc, cargo audit).
+  Benchmarked (1) and (2) in `benches/trie.rs` head-to-head against the old implementations.
+  OrdTrie merge-walk: 4–18× faster for overlapping tries, 44–443× for disjoint, thousands-fold
+  for identical (ptr_eq). Trie ptr_eq check: zero measurable overhead in the non-matching case,
+  thousands-fold speedup when it fires. Full results in `docs/baselines.md` § OrdTrie/Trie set ops
+  and `docs/decisions.md` DEC-038 Investigation C.
 
 - **[2026-04-27] Documentation and coverage pass.**
   Completed `# Examples` doc blocks across all 14 derived collection types. Audited
