@@ -491,7 +491,7 @@ where
     /// assert_eq!(odds_v, vec![1, 3, 5]);
     /// ```
     ///
-    /// Time: O(n log n)
+    /// Time: O(n)
     #[must_use]
     pub fn partition<F>(&self, mut f: F) -> (Self, Self)
     where
@@ -1132,5 +1132,69 @@ mod test {
     fn macro_trailing_comma() {
         let s = insertion_order_set!["x", "y", "z",];
         assert_eq!(s.len(), 3);
+    }
+
+    #[test]
+    fn partition_basic() {
+        let s: InsertionOrderSet<i32> = [1, 2, 3, 4, 5].into();
+        let (evens, odds) = s.partition(|x| x % 2 == 0);
+        let evens_v: Vec<_> = evens.iter().copied().collect();
+        let odds_v: Vec<_> = odds.iter().copied().collect();
+        assert_eq!(evens_v, vec![2, 4]);
+        assert_eq!(odds_v, vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn partition_preserves_insertion_order() {
+        let mut s = InsertionOrderSet::new();
+        s.insert(3);
+        s.insert(1);
+        s.insert(4);
+        s.insert(2);
+        let (evens, odds) = s.partition(|x| x % 2 == 0);
+        let even_v: Vec<_> = evens.iter().copied().collect();
+        let odd_v: Vec<_> = odds.iter().copied().collect();
+        // Insertion order: 3,1,4,2 → evens: 4,2; odds: 3,1
+        assert_eq!(even_v, vec![4, 2]);
+        assert_eq!(odd_v, vec![3, 1]);
+    }
+
+    #[test]
+    fn partition_empty() {
+        let s: InsertionOrderSet<i32> = InsertionOrderSet::new();
+        let (left, right) = s.partition(|_| true);
+        assert!(left.is_empty());
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn partition_all_match() {
+        let s: InsertionOrderSet<i32> = [1, 2, 3].into();
+        let (left, right) = s.partition(|_| true);
+        assert_eq!(left.len(), 3);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn partition_none_match() {
+        let s: InsertionOrderSet<i32> = [1, 2, 3].into();
+        let (left, right) = s.partition(|_| false);
+        assert!(left.is_empty());
+        assert_eq!(right.len(), 3);
+    }
+
+    #[test]
+    fn partition_covers_original() {
+        // partition splits into two disjoint halves that together contain every
+        // element of the original. union is not used here because InsertionOrderSet
+        // union appends right-only elements after left, not interleaved.
+        let s: InsertionOrderSet<i32> = [1, 2, 3, 4, 5].into();
+        let (evens, odds) = s.clone().partition(|x| x % 2 == 0);
+        // Every element is in exactly one partition.
+        for x in s.iter() {
+            assert!(evens.contains(x) ^ odds.contains(x));
+        }
+        // Sizes add up.
+        assert_eq!(evens.len() + odds.len(), s.len());
     }
 }

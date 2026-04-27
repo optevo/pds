@@ -867,7 +867,7 @@ where
     /// assert_eq!(small.get("a"), Some(&1));
     /// ```
     ///
-    /// Time: O(n log n)
+    /// Time: O(n)
     #[must_use]
     pub fn partition<F>(&self, mut f: F) -> (Self, Self)
     where
@@ -909,7 +909,7 @@ where
     /// assert_eq!(neg.get("b"), Some(&2u32));
     /// ```
     ///
-    /// Time: O(n log n)
+    /// Time: O(n)
     #[must_use]
     pub fn partition_map<V1, V2, F>(
         &self,
@@ -971,7 +971,7 @@ where
     /// assert_eq!(merged.get("z"), Some(&30));
     /// ```
     ///
-    /// Time: O((n + m) log(n + m))
+    /// Time: O(n + m)
     #[must_use]
     pub fn merge_with<V2, V3, FL, FB, FR>(
         &self,
@@ -1548,5 +1548,161 @@ mod test {
         assert_eq!(m.len(), 2);
         let keys: Vec<_> = m.keys().collect();
         assert_eq!(keys, vec![&"x", &"y"]);
+    }
+
+    #[test]
+    fn partition_basic() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("a", 1);
+        m.insert("b", 2);
+        m.insert("c", 3);
+        let (big, small) = m.partition(|_, v| *v > 1);
+        assert_eq!(big.len(), 2);
+        assert_eq!(big.get("b"), Some(&2));
+        assert_eq!(big.get("c"), Some(&3));
+        assert_eq!(small.len(), 1);
+        assert_eq!(small.get("a"), Some(&1));
+    }
+
+    #[test]
+    fn partition_preserves_insertion_order() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("c", 3);
+        m.insert("a", 1);
+        m.insert("b", 2);
+        let (evens, odds) = m.partition(|_, v| v % 2 == 0);
+        let even_keys: Vec<_> = evens.keys().copied().collect();
+        let odd_keys: Vec<_> = odds.keys().copied().collect();
+        // Even: "b" (inserted last among evens)
+        assert_eq!(even_keys, vec!["b"]);
+        // Odds: "c" before "a" (original insertion order)
+        assert_eq!(odd_keys, vec!["c", "a"]);
+    }
+
+    #[test]
+    fn partition_empty() {
+        let m: InsertionOrderMap<&str, i32> = InsertionOrderMap::new();
+        let (left, right) = m.partition(|_, _| true);
+        assert!(left.is_empty());
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn partition_all_match() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("a", 1);
+        m.insert("b", 2);
+        let (left, right) = m.partition(|_, _| true);
+        assert_eq!(left.len(), 2);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn partition_none_match() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("a", 1);
+        m.insert("b", 2);
+        let (left, right) = m.partition(|_, _| false);
+        assert!(left.is_empty());
+        assert_eq!(right.len(), 2);
+    }
+
+    #[test]
+    fn partition_map_basic() {
+        let mut m = InsertionOrderMap::new();
+        m.insert("a", 1i32);
+        m.insert("b", -2i32);
+        m.insert("c", 3i32);
+        let (pos, neg): (InsertionOrderMap<&str, u32>, InsertionOrderMap<&str, u32>) = m
+            .partition_map(|_, v| {
+                if *v >= 0 {
+                    Ok(*v as u32)
+                } else {
+                    Err(v.unsigned_abs())
+                }
+            });
+        assert_eq!(pos.get("a"), Some(&1u32));
+        assert_eq!(pos.get("c"), Some(&3u32));
+        assert_eq!(neg.get("b"), Some(&2u32));
+        assert!(!pos.contains_key("b"));
+        assert!(!neg.contains_key("a"));
+    }
+
+    #[test]
+    fn partition_map_empty() {
+        let m: InsertionOrderMap<&str, i32> = InsertionOrderMap::new();
+        let (left, right): (InsertionOrderMap<&str, i32>, InsertionOrderMap<&str, i32>) =
+            m.partition_map(|_, v| Ok(*v));
+        assert!(left.is_empty());
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn merge_with_basic() {
+        let mut a = InsertionOrderMap::new();
+        a.insert("x", 1);
+        a.insert("y", 2);
+        let mut b = InsertionOrderMap::new();
+        b.insert("y", 20);
+        b.insert("z", 30);
+
+        let merged = a.merge_with(
+            &b,
+            |_, v| Some(*v * 10),
+            |_, va, vb| Some(va + vb),
+            |_, v| Some(*v),
+        );
+        assert_eq!(merged.get("x"), Some(&10));
+        assert_eq!(merged.get("y"), Some(&22));
+        assert_eq!(merged.get("z"), Some(&30));
+        assert_eq!(merged.len(), 3);
+    }
+
+    #[test]
+    fn merge_with_filtering() {
+        let mut a = InsertionOrderMap::new();
+        a.insert("x", 1);
+        a.insert("y", 2);
+        let mut b = InsertionOrderMap::new();
+        b.insert("y", 20);
+        b.insert("z", 30);
+
+        // Return None to exclude entries from each partition.
+        let merged = a.merge_with(&b, |_, _| None, |_, va, vb| Some(va + vb), |_, _| None);
+        assert_eq!(merged.get("y"), Some(&22));
+        assert!(!merged.contains_key("x"));
+        assert!(!merged.contains_key("z"));
+    }
+
+    #[test]
+    fn merge_with_empty_left() {
+        let a: InsertionOrderMap<&str, i32> = InsertionOrderMap::new();
+        let mut b = InsertionOrderMap::new();
+        b.insert("x", 1);
+        let merged = a.merge_with(&b, |_, v| Some(*v), |_, va, _| Some(*va), |_, v| Some(*v));
+        assert_eq!(merged.get("x"), Some(&1));
+    }
+
+    #[test]
+    fn merge_with_empty_right() {
+        let mut a = InsertionOrderMap::new();
+        a.insert("x", 1);
+        let b: InsertionOrderMap<&str, i32> = InsertionOrderMap::new();
+        let merged = a.merge_with(&b, |_, v| Some(*v), |_, va, _| Some(*va), |_, v| Some(*v));
+        assert_eq!(merged.get("x"), Some(&1));
+    }
+
+    #[test]
+    fn merge_with_as_union() {
+        let mut a = InsertionOrderMap::new();
+        a.insert("x", 1);
+        a.insert("y", 2);
+        let mut b = InsertionOrderMap::new();
+        b.insert("y", 99);
+        b.insert("z", 3);
+        let merged = a.merge_with(&b, |_, v| Some(*v), |_, va, _| Some(*va), |_, v| Some(*v));
+        assert_eq!(merged.get("x"), Some(&1));
+        assert_eq!(merged.get("y"), Some(&2)); // self wins on conflict
+        assert_eq!(merged.get("z"), Some(&3));
     }
 }

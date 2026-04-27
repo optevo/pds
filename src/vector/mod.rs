@@ -1489,6 +1489,16 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// contains all elements for which `f` returned `false`. Both
     /// output vectors preserve the relative order of elements.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate pds;
+    /// let v = vector![1, 2, 3, 4, 5];
+    /// let (evens, odds) = v.partition(|x| x % 2 == 0);
+    /// assert_eq!(evens, vector![2, 4]);
+    /// assert_eq!(odds, vector![1, 3, 5]);
+    /// ```
+    ///
     /// Time: O(n)
     #[must_use]
     pub fn partition<F>(&self, mut f: F) -> (Self, Self)
@@ -4837,5 +4847,59 @@ mod test {
         // Shorter vector is less than longer with same prefix.
         let d: Vector<i32> = vector![1, 2];
         assert!(d < a);
+    }
+
+    #[test]
+    fn zip_basic() {
+        let a = vector![1, 2, 3];
+        let b = vector!["x", "y", "z"];
+        let zipped = a.zip(b);
+        assert_eq!(zipped, vector![(1, "x"), (2, "y"), (3, "z")]);
+    }
+
+    #[test]
+    fn zip_stops_at_shorter() {
+        let a = vector![1, 2, 3];
+        let b = vector!["x", "y"];
+        assert_eq!(a.zip(b), vector![(1, "x"), (2, "y")]);
+    }
+
+    #[test]
+    fn zip_left_empty() {
+        let a: Vector<i32> = Vector::new();
+        let b = vector!["x", "y"];
+        assert!(a.zip(b).is_empty());
+    }
+
+    #[test]
+    fn zip_right_empty() {
+        let a = vector![1, 2];
+        let b: Vector<&str> = Vector::new();
+        assert!(a.zip(b).is_empty());
+    }
+
+    #[test]
+    fn unzip_basic() {
+        let v = vector![(1i32, "a"), (2, "b"), (3, "c")];
+        let (nums, strs): (Vector<i32>, Vector<&str>) = v.unzip();
+        assert_eq!(nums, vector![1, 2, 3]);
+        assert_eq!(strs, vector!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn unzip_empty() {
+        let v: Vector<(i32, &str)> = Vector::new();
+        let (left, right): (Vector<i32>, Vector<&str>) = v.unzip();
+        assert!(left.is_empty());
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn zip_unzip_roundtrip() {
+        let a = vector![1i32, 2, 3];
+        let b = vector!["x", "y", "z"];
+        let (ra, rb): (Vector<i32>, Vector<&str>) = a.clone().zip(b.clone()).unzip();
+        assert_eq!(ra, a);
+        assert_eq!(rb, b);
     }
 }

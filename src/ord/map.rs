@@ -695,9 +695,7 @@ where
     /// Each closure returns `Option<V3>` — returning `None` excludes
     /// the key from the result. This subsumes `union_with`,
     /// `intersection_with`, and `symmetric_difference_with` as special
-    /// cases.
-    ///
-    /// Uses a sorted merge of both maps' iterators — O(n + m) time.
+    /// cases. Uses a sorted merge-join of both maps' iterators.
     ///
     /// # Examples
     ///
@@ -719,6 +717,8 @@ where
     ///     4 => "30".to_string()
     /// });
     /// ```
+    ///
+    /// Time: O(n + m)
     #[must_use]
     pub fn merge_with<V2, V3, FL, FB, FR>(
         &self,
@@ -4950,5 +4950,68 @@ mod test {
         assert_eq!(map.len(), 3);
         assert_eq!(smaller.len(), 2);
         assert!(!smaller.contains_key(&2));
+    }
+
+    #[test]
+    fn zip_shared_keys() {
+        let a = ordmap! {1 => "x", 2 => "y", 3 => "z"};
+        let b = ordmap! {2 => 20, 3 => 30, 4 => 40};
+        let zipped = a.zip(b);
+        assert_eq!(zipped.len(), 2);
+        assert_eq!(zipped.get(&2), Some(&("y", 20)));
+        assert_eq!(zipped.get(&3), Some(&("z", 30)));
+        assert!(!zipped.contains_key(&1));
+        assert!(!zipped.contains_key(&4));
+    }
+
+    #[test]
+    fn zip_disjoint_is_empty() {
+        let a = ordmap! {1 => "a", 2 => "b"};
+        let b = ordmap! {3 => 3, 4 => 4};
+        let zipped = a.zip(b);
+        assert!(zipped.is_empty());
+    }
+
+    #[test]
+    fn zip_identical_keys() {
+        let a = ordmap! {1 => "a", 2 => "b"};
+        let b = ordmap! {1 => 10, 2 => 20};
+        let zipped = a.zip(b);
+        assert_eq!(zipped.len(), 2);
+        assert_eq!(zipped.get(&1), Some(&("a", 10)));
+        assert_eq!(zipped.get(&2), Some(&("b", 20)));
+    }
+
+    #[test]
+    fn zip_empty() {
+        let a: OrdMap<i32, &str> = OrdMap::new();
+        let b: OrdMap<i32, i32> = OrdMap::new();
+        assert!(a.zip(b).is_empty());
+    }
+
+    #[test]
+    fn unzip_roundtrip() {
+        let a = ordmap! {1 => "x", 2 => "y"};
+        let b = ordmap! {1 => 10, 2 => 20};
+        let zipped = a.clone().zip(b.clone());
+        let (left, right): (OrdMap<i32, &str>, OrdMap<i32, i32>) = zipped.unzip();
+        assert_eq!(left, a);
+        assert_eq!(right, b);
+    }
+
+    #[test]
+    fn unzip_empty() {
+        let m: OrdMap<i32, (&str, i32)> = OrdMap::new();
+        let (left, right): (OrdMap<i32, &str>, OrdMap<i32, i32>) = m.unzip();
+        assert!(left.is_empty());
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn unzip_single() {
+        let m = ordmap! {42 => ("hello", 99i32)};
+        let (left, right): (OrdMap<i32, &str>, OrdMap<i32, i32>) = m.unzip();
+        assert_eq!(left.get(&42), Some(&"hello"));
+        assert_eq!(right.get(&42), Some(&99));
     }
 }

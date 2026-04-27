@@ -1291,4 +1291,97 @@ mod test {
         let s = format!("{:?}", trie);
         assert!(s.contains("OrdTrie"));
     }
+
+    #[test]
+    fn subtrie_cloned_present() {
+        let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+        trie.insert(&["usr", "bin"], 1);
+        trie.insert(&["usr", "lib"], 2);
+        trie.insert(&["etc"], 3);
+
+        let sub = trie.subtrie_cloned(&["usr"]).unwrap();
+        assert_eq!(sub.get(&["bin"]), Some(&1));
+        assert_eq!(sub.get(&["lib"]), Some(&2));
+        assert_eq!(sub.len(), 2);
+    }
+
+    #[test]
+    fn subtrie_cloned_absent() {
+        let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+        trie.insert(&["a"], 1);
+        assert!(trie.subtrie_cloned(&["missing"]).is_none());
+    }
+
+    #[test]
+    fn subtrie_cloned_empty_path_returns_self() {
+        let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+        trie.insert(&["a"], 1);
+        let clone = trie.subtrie_cloned::<&str>(&[]).unwrap();
+        assert_eq!(clone.len(), trie.len());
+        assert_eq!(clone.get(&["a"]), Some(&1));
+    }
+
+    #[test]
+    fn subtrie_cloned_independent_of_original() {
+        let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+        trie.insert(&["x", "y"], 1);
+        let mut sub = trie.subtrie_cloned(&["x"]).unwrap();
+        sub.insert(&["y"], 99);
+        assert_eq!(trie.get(&["x", "y"]), Some(&1));
+        assert_eq!(sub.get(&["y"]), Some(&99));
+    }
+
+    #[test]
+    fn partition_basic() {
+        let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+        trie.insert(&["a", "x"], 1);
+        trie.insert(&["a", "y"], 2);
+        trie.insert(&["b"], 3);
+
+        let (big, small) = trie.partition(|_path, v| *v > 1);
+        assert_eq!(big.len(), 2);
+        assert!(big.contains_path(&["a", "y"]));
+        assert!(big.contains_path(&["b"]));
+        assert_eq!(small.len(), 1);
+        assert!(small.contains_path(&["a", "x"]));
+    }
+
+    #[test]
+    fn partition_empty() {
+        let trie: OrdTrie<&str, i32> = OrdTrie::new();
+        let (left, right) = trie.partition(|_, _| true);
+        assert!(left.is_empty());
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn partition_all_match() {
+        let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+        trie.insert(&["a"], 1);
+        trie.insert(&["b"], 2);
+        let (left, right) = trie.partition(|_, _| true);
+        assert_eq!(left.len(), 2);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn partition_none_match() {
+        let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+        trie.insert(&["a"], 1);
+        trie.insert(&["b"], 2);
+        let (left, right) = trie.partition(|_, _| false);
+        assert!(left.is_empty());
+        assert_eq!(right.len(), 2);
+    }
+
+    #[test]
+    fn partition_union_equals_original() {
+        let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+        trie.insert(&["a", "x"], 1);
+        trie.insert(&["a", "y"], 2);
+        trie.insert(&["b"], 3);
+        let original = trie.clone();
+        let (left, right) = trie.partition(|_, v| *v % 2 == 0);
+        assert_eq!(left.union(right), original);
+    }
 }
