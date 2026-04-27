@@ -571,13 +571,11 @@ where
     P: SharedPointerKind,
 {
     fn from_iter<I: IntoIterator<Item = A>>(iter: I) -> Self {
-        let mut set = GenericInsertionOrderSet {
-            map: GenericInsertionOrderMap::default(),
-        };
-        for a in iter {
-            set.insert(a);
+        // Delegate to InsertionOrderMap::from_iter, which uses O(n avg) two-pass
+        // bulk load rather than n individual O(log n) inserts.
+        GenericInsertionOrderSet {
+            map: iter.into_iter().map(|a| (a, ())).collect(),
         }
-        set
     }
 }
 
