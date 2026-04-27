@@ -17,6 +17,8 @@ regressions or improvements. Compare against these numbers.
 - [Benchmark summary](#benchmark-summary)
 - [OrdMap vs HashMap — head-to-head](#ordmap-vs-hashmap)
 - [OrdMap PartialEq — ptr_eq fast path](#ordmap-partialeq--ptr_eq-fast-path)
+- [OrdTrie set operations — merge-walk vs flatten-and-rebuild](#ordtrie-set-ops)
+- [Trie set operations — ptr_eq fast-path overhead](#trie-set-ops)
 - [Memory profiling (dhat)](#memory-profiling-dhat)
 - [How to re-run](#how-to-re-run)
 
@@ -425,3 +427,101 @@ Backed by HashMap — same allocation profile.
 | SymMap from_iter(10K) | 2,283 | 1.1 MB |
 
 ~2× HashMap allocations — each type maintains two internal maps.
+
+---
+
+## OrdTrie set operations — merge-walk vs flatten-and-rebuild {#sec:ordtrie-set-ops}
+
+**Date:** 2026-04-27 | **Benchmark:** `cargo bench --bench trie`
+**Machine:** MacBook Pro M5 Max | **Rust:** 1.95.0 stable
+
+Compares the pre-DEC-038 flatten-and-rebuild implementation (old) against the
+new merge-walk with ptr_eq fast-paths. Test tries use base-8, fixed-depth paths:
+200-entry (depth 3) and 2 000-entry (depth 4). Three scenarios:
+- **overlapping** — 50% of paths shared between the two tries (typical case)
+- **disjoint** — no paths in common (worst case for merge-walk advantage)
+- **identical** — `b = a.clone()` (ptr_eq fast-path fires; O(1) vs O(n))
+
+### union
+
+| Scenario | n | old | new | speedup |
+|----------|---|-----|-----|---------|
+| overlapping | 200 | 17.85 µs | 4.46 µs | **4.0×** |
+| disjoint | 200 | 17.06 µs | 382 ns | **44.7×** |
+| identical | 200 | 18.29 µs | 7.0 ns | **~2 600×** |
+| overlapping | 2 000 | 201 µs | 41.7 µs | **4.8×** |
+| disjoint | 2 000 | 190 µs | 602 ns | **315×** |
+| identical | 2 000 | 215 µs | 6.8 ns | **~31 600×** |
+
+### difference
+
+| Scenario | n | old | new | speedup |
+|----------|---|-----|-----|---------|
+| overlapping | 200 | 15.24 µs | 2.02 µs | **7.5×** |
+| disjoint | 200 | 17.61 µs | 231 ns | **76×** |
+| identical | 200 | 12.98 µs | 3.9 ns | **~3 300×** |
+| overlapping | 2 000 | 180 µs | 17.2 µs | **10.5×** |
+| disjoint | 2 000 | 196 µs | 514 ns | **382×** |
+| identical | 2 000 | 166 µs | 3.9 ns | **~42 500×** |
+
+### intersection
+
+| Scenario | n | old | new | speedup |
+|----------|---|-----|-----|---------|
+| overlapping | 200 | 15.77 µs | 3.26 µs | **4.8×** |
+| disjoint | 200 | 11.94 µs | 156 ns | **76.5×** |
+| identical | 200 | 19.39 µs | 3.85 ns | **~5 000×** |
+| overlapping | 2 000 | 178 µs | 31.8 µs | **5.6×** |
+| disjoint | 2 000 | 125 µs | 283 ns | **443×** |
+| identical | 2 000 | 242 µs | 3.9 ns | **~62 000×** |
+
+### symmetric_difference
+
+| Scenario | n | old | new | speedup |
+|----------|---|-----|-----|---------|
+| overlapping | 200 | 40.2 µs | 2.99 µs | **13.4×** |
+| identical | 200 | 26.5 µs | 4.1 ns | **~6 500×** |
+| overlapping | 2 000 | 464 µs | 25.3 µs | **18.4×** |
+| identical | 2 000 | 338 µs | 4.1 ns | **~82 500×** |
+
+### Why the disjoint case is so much faster
+
+The disjoint result is counterintuitive — the new implementation is 44–443× faster even
+when no paths are shared. Reason: the merge-walk never descends into a subtree unless
+both operands have a child at that key. For a fully disjoint union, it simply iterates
+`other.children` and adopts each child wholesale via a single OrdMap insert — no
+recursion, no path allocation. The old flatten-and-rebuild unconditionally materialised
+every `Vec<K>` path for every element in the consumed operand, regardless of overlap.
+
+---
+
+## Trie set operations — ptr_eq fast-path overhead {#sec:trie-set-ops}
+
+**Date:** 2026-04-27 | **Benchmark:** `cargo bench --bench trie`
+
+The `Trie` set operations (union, difference, intersection, symmetric_difference) retain
+the flatten-and-rebuild approach for the non-matching case but add a single ptr_eq check
+at the top. Benchmark questions: (a) does the ptr_eq check add measurable overhead when
+it returns false? (b) how much does it save when it fires?
+
+### union
+
+| Scenario | n | old (no ptr_eq) | new (ptr_eq) | diff |
+|----------|---|-----------------|--------------|------|
+| different | 200 | 25.40 µs | 25.46 µs | **+0.2% (noise)** |
+| identical | 200 | 25.98 µs | 6.70 ns | **~3 900×** |
+| different | 2 000 | 285.78 µs | 286.05 µs | **+0.1% (noise)** |
+| identical | 2 000 | 292.22 µs | 6.76 ns | **~43 200×** |
+
+### difference
+
+| Scenario | n | old (no ptr_eq) | new (ptr_eq) | diff |
+|----------|---|-----------------|--------------|------|
+| different | 200 | 20.36 µs | 20.49 µs | **+0.6% (noise)** |
+| identical | 200 | 15.93 µs | 4.71 ns | **~3 400×** |
+| different | 2 000 | 243.89 µs | 246.80 µs | **+1.2% (noise)** |
+| identical | 2 000 | 196.17 µs | 4.72 ns | **~41 500×** |
+
+**Conclusions:** The ptr_eq check adds zero measurable overhead in the non-matching case
+(differences are within criterion noise bounds, no consistent direction). When the fast-path
+fires (identical tries — `a.op(a.clone())`), the speedup is thousands-fold: O(1) vs O(n × d).

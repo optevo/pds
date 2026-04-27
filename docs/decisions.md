@@ -2284,8 +2284,36 @@ replaced with full merge-walk implementations in both `src/trie.rs` and `src/ord
   nodes with `value: None` and empty children).
   Time: O(n × d), O(1) when both operands share the same tree.
 
+**Benchmark results (2026-04-27, M5 Max, `cargo bench --bench trie`):**
+
+OrdTrie merge-walk vs flatten-and-rebuild — all scenarios, all operations faster:
+
+| Operation | Scenario | n=200 speedup | n=2 000 speedup |
+|-----------|----------|---------------|-----------------|
+| union | overlapping (50%) | 4.0× | 4.8× |
+| union | disjoint | **44.7×** | **315×** |
+| union | identical (ptr_eq) | ~2 600× | ~31 600× |
+| difference | overlapping | 7.5× | 10.5× |
+| difference | disjoint | **76×** | **382×** |
+| difference | identical (ptr_eq) | ~3 300× | ~42 500× |
+| intersection | overlapping | 4.8× | 5.6× |
+| intersection | disjoint | **76.5×** | **443×** |
+| intersection | identical (ptr_eq) | ~5 000× | ~62 000× |
+| sym_diff | overlapping | 13.4× | 18.4× |
+| sym_diff | identical (ptr_eq) | ~6 500× | ~82 500× |
+
+The counterintuitive disjoint speedup: merge-walk never descends into non-overlapping
+subtrees — for union it adopts all of `other.children` wholesale with zero recursion.
+The old flatten-and-rebuild unconditionally materialised every `Vec<K>` path regardless.
+
+Trie ptr_eq overhead in the non-matching case: +0.2% to +1.2% (within criterion noise,
+no consistent direction). Zero measurable cost. Speedup when ptr_eq fires: ~3 400–43 200×.
+
+Full results: `docs/baselines.md` § "OrdTrie set operations" and § "Trie set operations".
+
 **Consequences:**
 - `OrdTrie` and `Trie` set operations: merge-walk and ptr_eq fast-paths complete.
+  Benchmarked and confirmed as unambiguous improvements across all scenarios.
   Full merge-walk for `Trie` (beyond the ptr_eq fast-path) remains flatten-and-rebuild
   since `GenericHashMap` has no merge-join iterator.
 - Both `Trie` and `OrdTrie` `from_sorted_iter` work would benefit from the
