@@ -34,9 +34,9 @@
 //! ```
 
 use alloc::vec::Vec;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{FromIterator, FusedIterator};
 use core::ops::{Index, IndexMut};
 
 use archery::SharedPointerKind;
@@ -45,6 +45,40 @@ use equivalent::Comparable;
 use crate::ord::map::ConsumingIter as OrdMapConsumingIter;
 use crate::ordmap::GenericOrdMap;
 use crate::shared_ptr::DefaultSharedPtr;
+
+/// Constructs an [`OrdInsertionOrderMap`] from a sequence of key/value pairs.
+///
+/// # Examples
+///
+/// ```
+/// # #[macro_use] extern crate pds;
+/// # use pds::OrdInsertionOrderMap;
+/// # fn main() {
+/// let m = ord_insertion_order_map!["c" => 3, "a" => 1, "b" => 2];
+/// let keys: Vec<_> = m.keys().collect();
+/// assert_eq!(keys, vec![&"c", &"a", &"b"]);
+/// # }
+/// ```
+#[macro_export]
+macro_rules! ord_insertion_order_map {
+    () => { $crate::ord_insertion_order_map::OrdInsertionOrderMap::new() };
+
+    ( $( $key:expr => $value:expr ),* ) => {{
+        let mut map = $crate::ord_insertion_order_map::OrdInsertionOrderMap::new();
+        $({
+            map.insert($key, $value);
+        })*;
+        map
+    }};
+
+    ( $( $key:expr => $value:expr ,)* ) => {{
+        let mut map = $crate::ord_insertion_order_map::OrdInsertionOrderMap::new();
+        $({
+            map.insert($key, $value);
+        })*;
+        map
+    }};
+}
 
 /// Type alias for [`GenericOrdInsertionOrderMap`] with the default pointer type.
 pub type OrdInsertionOrderMap<K, V> = GenericOrdInsertionOrderMap<K, V, DefaultSharedPtr>;
@@ -77,7 +111,7 @@ impl<K: Clone, V: Clone, P: SharedPointerKind> Clone for GenericOrdInsertionOrde
 }
 
 impl<K, V, P: SharedPointerKind> GenericOrdInsertionOrderMap<K, V, P> {
-    /// Create an empty OrdInsertionOrderMap.
+    /// Creates an empty OrdInsertionOrderMap.
     #[must_use]
     pub fn new() -> Self {
         GenericOrdInsertionOrderMap {
@@ -87,19 +121,23 @@ impl<K, V, P: SharedPointerKind> GenericOrdInsertionOrderMap<K, V, P> {
         }
     }
 
-    /// Test whether the map is empty.
+    /// Tests whether the map is empty.
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// Return the number of entries.
+    /// Returns the number of entries.
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Test whether two maps share the same underlying allocation.
+    /// Tests whether two maps share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of the
     /// map — i.e. one is a clone of the other with no intervening
@@ -114,7 +152,19 @@ impl<K, V, P: SharedPointerKind> GenericOrdInsertionOrderMap<K, V, P> {
 }
 
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap<K, V, P> {
-    /// Get a reference to the value for a key.
+    /// Returns a reference to the value for a key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert("a", 1);
+    /// assert_eq!(map.get(&"a"), Some(&1));
+    /// assert_eq!(map.get(&"z"), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -124,7 +174,19 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap
         self.entries.get(idx).map(|(_, v)| v)
     }
 
-    /// Get a mutable reference to the value for a key.
+    /// Returns a mutable reference to the value for a key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert("a", 1i32);
+    /// *map.get_mut(&"a").unwrap() = 42;
+    /// assert_eq!(map.get(&"a"), Some(&42));
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         Q: Comparable<K> + ?Sized,
@@ -133,7 +195,19 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap
         self.entries.get_mut(&idx).map(|(_, v)| v)
     }
 
-    /// Test whether a key is present.
+    /// Tests whether a key is present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert("x", 42);
+    /// assert!(map.contains_key(&"x"));
+    /// assert!(!map.contains_key(&"y"));
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
@@ -142,10 +216,25 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap
         self.key_index.contains_key(key)
     }
 
-    /// Insert a key-value pair.
+    /// Inserts a key-value pair.
     ///
     /// If the key already exists, its value is updated but its position in
     /// the insertion order is preserved. Returns the previous value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// assert_eq!(map.insert("a", 1), None);
+    /// // Update: returns old value, preserves insertion position.
+    /// assert_eq!(map.insert("a", 99), Some(1));
+    /// map.insert("b", 2);
+    /// let keys: Vec<_> = map.keys().collect();
+    /// assert_eq!(keys, vec![&"a", &"b"]); // "a" stays first
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         if let Some(&idx) = self.key_index.get(&key) {
             // Key exists — update value, keep position.
@@ -162,9 +251,21 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap
         }
     }
 
-    /// Remove a key-value pair. Returns the removed value if present.
+    /// Removes a key-value pair. Returns the removed value if present.
     ///
     /// O(log n) — no tombstones. Both OrdMaps are cleaned up immediately.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert("a", 1);
+    /// assert_eq!(map.remove(&"a"), Some(1));
+    /// assert_eq!(map.remove(&"a"), None); // already removed
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         Q: Comparable<K> + ?Sized,
@@ -173,19 +274,59 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap
         self.entries.remove(&idx).map(|(_, v)| v)
     }
 
-    /// Return a reference to the first key-value pair in insertion order, or `None` if empty.
+    /// Returns a reference to the first key-value pair in insertion order, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert("b", 2);
+    /// map.insert("a", 1);
+    /// assert_eq!(map.front(), Some((&"b", &2))); // insertion order, not sorted
+    /// ```
+    ///
+    /// Time: O(log n)
+    #[must_use]
     pub fn front(&self) -> Option<(&K, &V)> {
         self.entries.get_min().map(|(_, (k, v))| (k, v))
     }
 
-    /// Return a reference to the last key-value pair in insertion order, or `None` if empty.
+    /// Returns a reference to the last key-value pair in insertion order, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert("b", 2);
+    /// map.insert("a", 1);
+    /// assert_eq!(map.back(), Some((&"a", &1))); // last inserted
+    /// ```
+    ///
+    /// Time: O(log n)
+    #[must_use]
     pub fn back(&self) -> Option<(&K, &V)> {
         self.entries.get_max().map(|(_, (k, v))| (k, v))
     }
 
-    /// Remove and return the first key-value pair in insertion order (FIFO dequeue).
+    /// Removes and return the first key-value pair in insertion order (FIFO dequeue).
     ///
     /// Returns `None` if the map is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert(1i32, "a");
+    /// map.insert(2, "b");
+    /// assert_eq!(map.pop_front(), Some((1, "a")));
+    /// assert_eq!(map.pop_front(), Some((2, "b")));
+    /// assert_eq!(map.pop_front(), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn pop_front(&mut self) -> Option<(K, V)> {
         let counter = self.entries.get_min()?.0;
         let (k, v) = self.entries.remove(&counter)?;
@@ -193,9 +334,23 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap
         Some((k, v))
     }
 
-    /// Remove and return the last key-value pair in insertion order (LIFO dequeue).
+    /// Removes and return the last key-value pair in insertion order (LIFO dequeue).
     ///
     /// Returns `None` if the map is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert(1i32, "a");
+    /// map.insert(2, "b");
+    /// assert_eq!(map.pop_back(), Some((2, "b")));
+    /// assert_eq!(map.pop_back(), Some((1, "a")));
+    /// assert_eq!(map.pop_back(), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn pop_back(&mut self) -> Option<(K, V)> {
         let counter = self.entries.get_max()?.0;
         let (k, v) = self.entries.remove(&counter)?;
@@ -203,32 +358,98 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap
         Some((k, v))
     }
 
-    /// Iterate over key-value pairs in insertion order.
+    /// Iterates over key-value pairs in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert("c", 3);
+    /// map.insert("a", 1);
+    /// let pairs: Vec<_> = map.iter().map(|(k, v)| (*k, *v)).collect();
+    /// assert_eq!(pairs, vec![("c", 3), ("a", 1)]); // insertion order, not sorted
+    /// ```
+    ///
+    /// Time: O(1) to create; O(n) to consume
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.entries.iter().map(|(_, (k, v))| (k, v))
     }
 
-    /// Iterate over keys in insertion order.
+    /// Iterates over keys in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert("c", 3);
+    /// map.insert("a", 1);
+    /// map.insert("b", 2);
+    /// let keys: Vec<_> = map.keys().collect();
+    /// assert_eq!(keys, vec![&"c", &"a", &"b"]);
+    /// ```
+    ///
+    /// Time: O(1) to create; O(n) to consume
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         self.entries.iter().map(|(_, (k, _))| k)
     }
 
-    /// Iterate over values in insertion order.
+    /// Iterates over values in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let mut map = OrdInsertionOrderMap::new();
+    /// map.insert("b", 2);
+    /// map.insert("a", 1);
+    /// let vals: Vec<_> = map.values().copied().collect();
+    /// assert_eq!(vals, vec![2, 1]); // insertion order
+    /// ```
+    ///
+    /// Time: O(1) to create; O(n) to consume
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.entries.iter().map(|(_, (_, v))| v)
     }
 
-    /// Return the union of two maps; entries from `other` overwrite entries in `self`.
+    /// Returns the union of two maps; entries from `other` overwrite entries in `self`.
     ///
     /// New keys from `other` are appended in `other`'s insertion order after
     /// all of `self`'s keys.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let a: OrdInsertionOrderMap<i32, i32> = [(1, 10)].into();
+    /// let b: OrdInsertionOrderMap<i32, i32> = [(2, 20)].into();
+    /// let u = a.union(b);
+    /// let keys: Vec<_> = u.keys().copied().collect();
+    /// assert_eq!(keys, vec![1, 2]);
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn union(mut self, other: Self) -> Self {
         self.extend(other);
         self
     }
 
-    /// Return entries whose keys are in `self` but not in `other`.
+    /// Returns entries whose keys are in `self` but not in `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let a: OrdInsertionOrderMap<i32, i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdInsertionOrderMap<i32, i32> = [(2, 20)].into();
+    /// let d = a.difference(&b);
+    /// assert_eq!(d.len(), 1);
+    /// assert_eq!(d.get(&1), Some(&10));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
         self.into_iter()
@@ -236,7 +457,20 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap
             .collect()
     }
 
-    /// Return entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    /// Returns entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let a: OrdInsertionOrderMap<i32, i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdInsertionOrderMap<i32, i32> = [(2, 99), (3, 30)].into();
+    /// let i = a.intersection(&b);
+    /// assert_eq!(i.len(), 1);
+    /// assert_eq!(i.get(&2), Some(&20)); // self's value is kept
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
         self.into_iter()
@@ -244,10 +478,25 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdInsertionOrderMap
             .collect()
     }
 
-    /// Return entries whose keys are in exactly one of `self` or `other`.
+    /// Returns entries whose keys are in exactly one of `self` or `other`.
     ///
     /// `self`'s unique entries come first (in their original insertion order),
     /// followed by `other`'s unique entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderMap;
+    /// let a: OrdInsertionOrderMap<i32, i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdInsertionOrderMap<i32, i32> = [(2, 20), (3, 30)].into();
+    /// let sd = a.symmetric_difference(&b);
+    /// assert_eq!(sd.len(), 2);
+    /// assert!(sd.contains_key(&1));
+    /// assert!(sd.contains_key(&3));
+    /// assert!(!sd.contains_key(&2));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn symmetric_difference(self, other: &Self) -> Self {
         let self_clone = self.clone();
@@ -318,6 +567,20 @@ impl<K: Ord + Clone + Debug, V: Debug + Clone, P: SharedPointerKind> Debug
     }
 }
 
+impl<K: Ord + Clone + Display, V: Display + Clone, P: SharedPointerKind> Display
+    for GenericOrdInsertionOrderMap<K, V, P>
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (k, v) in self.iter() {
+            write!(f, "{sep}{k}: {v}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
+
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> FromIterator<(K, V)>
     for GenericOrdInsertionOrderMap<K, V, P>
 {
@@ -369,6 +632,11 @@ where
 {
     type Output = V;
 
+    /// Returns a reference to the value associated with `key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index(&self, key: &Q) -> &Self::Output {
         match self.get(key) {
             Some(v) => v,
@@ -382,6 +650,11 @@ impl<Q, K: Ord + Clone, V: Clone, P: SharedPointerKind> IndexMut<&Q>
 where
     Q: Comparable<K> + ?Sized,
 {
+    /// Returns a mutable reference to the value associated with `key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index_mut(&mut self, key: &Q) -> &mut Self::Output {
         match self.get_mut(key) {
             Some(v) => v,
@@ -420,6 +693,8 @@ impl<K: Clone, V: Clone, P: SharedPointerKind> Iterator for ConsumingIter<K, V, 
 }
 
 impl<K: Clone, V: Clone, P: SharedPointerKind> ExactSizeIterator for ConsumingIter<K, V, P> {}
+
+impl<K: Clone, V: Clone, P: SharedPointerKind> FusedIterator for ConsumingIter<K, V, P> {}
 
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> IntoIterator
     for GenericOrdInsertionOrderMap<K, V, P>
@@ -649,8 +924,7 @@ mod test {
 
     #[test]
     fn from_iterator() {
-        let map: OrdInsertionOrderMap<&str, i32> =
-            vec![("a", 1), ("b", 2)].into_iter().collect();
+        let map: OrdInsertionOrderMap<&str, i32> = vec![("a", 1), ("b", 2)].into_iter().collect();
         assert_eq!(map.len(), 2);
     }
 
@@ -845,5 +1119,29 @@ mod test {
         assert_eq!(queue.pop_front().map(|(k, _)| k), Some(2));
         assert_eq!(queue.pop_front().map(|(k, _)| k), Some(3));
         assert_eq!(queue.pop_front(), None);
+    }
+
+    #[test]
+    fn macro_empty() {
+        let m: OrdInsertionOrderMap<&str, i32> = ord_insertion_order_map![];
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn macro_with_elements() {
+        let m = ord_insertion_order_map!["c" => 3, "a" => 1, "b" => 2];
+        assert_eq!(m.len(), 3);
+        assert_eq!(m.get(&"a"), Some(&1));
+        // Keys must iterate in insertion order.
+        let keys: Vec<_> = m.keys().collect();
+        assert_eq!(keys, vec![&"c", &"a", &"b"]);
+    }
+
+    #[test]
+    fn macro_trailing_comma() {
+        let m = ord_insertion_order_map!["x" => 1, "y" => 2,];
+        assert_eq!(m.len(), 2);
+        let keys: Vec<_> = m.keys().collect();
+        assert_eq!(keys, vec![&"x", &"y"]);
     }
 }

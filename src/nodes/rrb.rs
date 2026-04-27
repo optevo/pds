@@ -1272,7 +1272,7 @@ impl<A: Clone, P: SharedPointerKind> Node<A, P> {
         }
     }
 
-    /// Merge two nodes at the same level, returning the merged node and
+    /// Merges two nodes at the same level, returning the merged node and
     /// its level. Based on L'orange's RRB concatenation algorithm which
     /// maintains O(log n) tree height by redistributing children at each
     /// level and only increasing height when genuinely needed.

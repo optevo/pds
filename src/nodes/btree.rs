@@ -97,7 +97,7 @@ impl<K, V, P: SharedPointerKind> Node<K, V, P> {
         }
     }
 
-    /// Return a new tree node with all values transformed by `f(key, value)`.
+    /// Returns a new tree node with all values transformed by `f(key, value)`.
     ///
     /// Keys are unchanged, so tree topology (key comparisons, ordering) is
     /// preserved exactly. Used by `par_map_values` in `ord/rayon.rs`.
@@ -279,7 +279,7 @@ pub(crate) struct Leaf<K, V> {
 }
 
 impl<K: Clone, V, P: SharedPointerKind> Branch<K, V, P> {
-    /// Return a new branch with the same separator keys and all values
+    /// Returns a new branch with the same separator keys and all values
     /// transformed by `f`. Tree structure and key ordering are preserved.
     #[cfg(any(test, feature = "rayon"))]
     pub(crate) fn map_values<V2, F>(&self, f: &F) -> Branch<K, V2, P>
@@ -316,7 +316,7 @@ impl<K: Clone, V, P: SharedPointerKind> Branch<K, V, P> {
 }
 
 impl<K: Clone, V> Leaf<K, V> {
-    /// Return a new leaf with the same keys and all values transformed by `f`.
+    /// Returns a new leaf with the same keys and all values transformed by `f`.
     #[cfg(any(test, feature = "rayon"))]
     pub(crate) fn map_values<V2, F>(&self, f: &F) -> Leaf<K, V2>
     where
@@ -1508,7 +1508,7 @@ fn count_branch_entries<K, V, P: SharedPointerKind>(branch: &Branch<K, V, P>) ->
     }
 }
 
-/// Split `node` at `key`: returns `(left, exact_value, right)` where every key in
+/// Splits `node` at `key`: returns `(left, exact_value, right)` where every key in
 /// `left` is strictly less than `key`, every key in `right` is strictly greater, and
 /// `exact_value` is `Some(v)` if `key` was present in the tree.
 ///
@@ -1620,7 +1620,7 @@ where
 }
 
 impl<K, V, P: SharedPointerKind> Children<K, V, P> {
-    /// Remove and return the last child as a `Node`.
+    /// Removes and return the last child as a `Node`.
     #[cfg(any(test, feature = "rayon"))]
     fn pop_last_node(&mut self) -> Node<K, V, P> {
         match self {
@@ -1722,7 +1722,7 @@ where
     }
 }
 
-/// Insert `right` (which has level `branch.level() - 1` or less) at the rightmost
+/// Inserts `right` (which has level `branch.level() - 1` or less) at the rightmost
 /// position of `branch`. Returns `Some((separator, overflow_node))` on overflow.
 #[cfg(any(test, feature = "rayon"))]
 fn concat_insert_right_spine<K, V, P>(
@@ -1759,7 +1759,7 @@ where
     }
 }
 
-/// Append `sep` + `child` as the new rightmost child of `branch`. Splits on overflow.
+/// Appends `sep` + `child` as the new rightmost child of `branch`. Splits on overflow.
 #[cfg(any(test, feature = "rayon"))]
 fn concat_append_child_right<K, V, P>(
     branch: &mut Branch<K, V, P>,
@@ -1795,7 +1795,7 @@ where
     }
 }
 
-/// Insert `left` (which has level `branch.level() - 1` or less) at the leftmost
+/// Inserts `left` (which has level `branch.level() - 1` or less) at the leftmost
 /// position of `branch`. Returns `Some((separator, overflow_node))` on overflow.
 #[cfg(any(test, feature = "rayon"))]
 fn concat_insert_left_spine<K, V, P>(
@@ -1933,4 +1933,155 @@ mod slice_ext {
         }
         Err(low)
     }
+}
+
+// ─── Bottom-up bulk loader ───────────────────────────────────────────────────
+//
+// `build_sorted` builds a B+ tree in O(n) from a pre-sorted, deduplicated
+// iterator, avoiding the O(log n) per-insert overhead of sequential inserts.
+//
+// Called by `GenericOrdMap::from_sorted_iter`.
+
+/// Computes the sizes of groups when packing `total` items with a maximum of
+/// `max_size` and minimum of `min_size` per group. Returns a `Vec` of group
+/// sizes that sum to `total`.
+fn compute_group_sizes(total: usize, max_size: usize, min_size: usize) -> Vec<usize> {
+    debug_assert!(total > 0);
+    if total <= max_size {
+        // Single group — the root — no minimum fill requirement.
+        return core::iter::once(total).collect();
+    }
+    let num_full = total / max_size;
+    let remainder = total % max_size;
+    if remainder == 0 {
+        core::iter::repeat_n(max_size, num_full).collect()
+    } else if remainder >= min_size {
+        // All full groups plus one partial group with enough items.
+        core::iter::repeat_n(max_size, num_full)
+            .chain(core::iter::once(remainder))
+            .collect()
+    } else {
+        // Last partial group would be under-filled.  Redistribute: take the
+        // last full group and the remainder together, then split evenly.
+        // This is safe because max_size >= 2 * min_size for both leaves
+        // (NODE_SIZE >= 2 * THIRD) and branches (NUM_CHILDREN >= 2 * MEDIAN).
+        let last_total = max_size + remainder;
+        let right = last_total / 2;
+        let left = last_total - right;
+        debug_assert!(right >= min_size);
+        debug_assert!(left >= min_size);
+        core::iter::repeat_n(max_size, num_full - 1)
+            .chain([left, right])
+            .collect()
+    }
+}
+
+/// Assembles a `Branch` node from a slice of children at the given `level`.
+///
+/// Separator keys are the minimum key of each right sibling (children[1..]).
+/// At `level == 1` the children are leaves; at `level >= 2` they are branches.
+fn make_branch_node<K, V, P>(children: &[Node<K, V, P>], level: usize) -> Branch<K, V, P>
+where
+    K: Ord + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    debug_assert!(!children.is_empty());
+    debug_assert!(children.len() <= NUM_CHILDREN);
+    debug_assert!(level >= 1);
+
+    // Build separator key list: first key of each right child.
+    let mut keys: Chunk<K, NODE_SIZE> = Chunk::new();
+    for child in &children[1..] {
+        let (k, _) = child.min().expect("bulk-load child must be non-empty");
+        keys.push_back(k.clone());
+    }
+
+    if level == 1 {
+        let mut leaves: Chunk<SharedPointer<Leaf<K, V>, P>, NUM_CHILDREN> = Chunk::new();
+        for child in children {
+            match child {
+                Node::Leaf(lp) => leaves.push_back(lp.clone()),
+                Node::Branch(_) => unreachable!("expected Leaf at level 1"),
+            }
+        }
+        Branch {
+            keys,
+            children: Children::Leaves { leaves },
+        }
+    } else {
+        let level_nzu = NonZeroUsize::new(level).expect("level >= 1");
+        let mut branches: Chunk<SharedPointer<Branch<K, V, P>, P>, NUM_CHILDREN> = Chunk::new();
+        for child in children {
+            match child {
+                Node::Branch(bp) => branches.push_back(bp.clone()),
+                Node::Leaf(_) => unreachable!("expected Branch at level >= 2"),
+            }
+        }
+        Branch {
+            keys,
+            children: Children::Branches {
+                branches,
+                level: level_nzu,
+            },
+        }
+    }
+}
+
+/// Builds a B+ tree root node from a pre-sorted, deduplicated sequence of
+/// `(K, V)` pairs in O(n).
+///
+/// Returns `(root, count)` where `count` is the number of items consumed.
+/// Returns `(None, 0)` for an empty iterator.
+pub(crate) fn build_sorted<K, V, P, I>(iter: I) -> (Option<Node<K, V, P>>, usize)
+where
+    K: Ord + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+    I: Iterator<Item = (K, V)>,
+{
+    let items: Vec<(K, V)> = iter.collect();
+    let n = items.len();
+
+    if n == 0 {
+        return (None, 0);
+    }
+
+    // Phase 1: pack items into leaf nodes.
+    let leaf_sizes = compute_group_sizes(n, NODE_SIZE, THIRD);
+    let mut items_iter = items.into_iter();
+
+    let leaf_ptrs: Vec<SharedPointer<Leaf<K, V>, P>> = leaf_sizes
+        .iter()
+        .map(|&sz| {
+            let mut keys: Chunk<(K, V), NODE_SIZE> = Chunk::new();
+            for _ in 0..sz {
+                keys.push_back(items_iter.next().expect("enough items for leaf"));
+            }
+            SharedPointer::new(Leaf { keys })
+        })
+        .collect();
+
+    if leaf_ptrs.len() == 1 {
+        return (Some(Node::Leaf(leaf_ptrs.into_iter().next().unwrap())), n);
+    }
+
+    // Phase 2: build branch levels bottom-up.
+    let mut current: Vec<Node<K, V, P>> = leaf_ptrs.into_iter().map(Node::Leaf).collect();
+    let mut level = 1usize;
+
+    while current.len() > 1 {
+        let group_sizes = compute_group_sizes(current.len(), NUM_CHILDREN, MEDIAN);
+        let mut nodes_iter = current.into_iter();
+        current = group_sizes
+            .iter()
+            .map(|&sz| {
+                let group: Vec<Node<K, V, P>> = nodes_iter.by_ref().take(sz).collect();
+                Node::Branch(SharedPointer::new(make_branch_node(&group, level)))
+            })
+            .collect();
+        level += 1;
+    }
+
+    (Some(current.into_iter().next().unwrap()), n)
 }

@@ -31,9 +31,9 @@
 //! Parallel iteration (`rayon`) is not supported for `Trie` — the path-dependent
 //! branching structure makes uniform work distribution impractical.
 
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{FromIterator, FusedIterator};
 use core::ops::{Index, IndexMut};
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
@@ -83,7 +83,7 @@ impl<K, V, P> GenericTrie<K, V, RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty trie.
+    /// Creates an empty trie.
     #[must_use]
     pub fn new() -> Self {
         GenericTrie {
@@ -98,7 +98,7 @@ impl<K, V, P> GenericTrie<K, V, foldhash::fast::RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty trie (no_std + foldhash).
+    /// Creates an empty trie (no_std + foldhash).
     #[must_use]
     pub fn new() -> Self {
         GenericTrie {
@@ -112,30 +112,73 @@ impl<K, V, S, P> GenericTrie<K, V, S, P>
 where
     P: SharedPointerKind,
 {
-    /// Test whether this trie is empty (no values at any depth).
+    /// Tests whether this trie is empty (no values at any depth).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// assert!(trie.is_empty());
+    ///
+    /// trie.insert(&["a"], 1);
+    /// assert!(!trie.is_empty());
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.value.is_none() && self.children.is_empty()
     }
 
-    /// Get the value at this node (the root / empty path).
+    /// Returns the value at this node (the root / empty path).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// assert_eq!(trie.value(), None);
+    ///
+    /// trie.insert(&[], 42);
+    /// assert_eq!(trie.value(), Some(&42));
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn value(&self) -> Option<&V> {
         self.value.as_ref()
     }
 
-    /// Get a mutable reference to the value at this node.
+    /// Returns a mutable reference to the value at this node.
+    ///
+    /// Time: O(1)
+    #[must_use]
     pub fn value_mut(&mut self) -> Option<&mut V> {
         self.value.as_mut()
     }
 
-    /// Return the number of direct children.
+    /// Returns the number of direct children.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// assert_eq!(trie.child_count(), 0);
+    ///
+    /// trie.insert(&["a", "x"], 1);
+    /// trie.insert(&["b", "y"], 2);
+    /// assert_eq!(trie.child_count(), 2);
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn child_count(&self) -> usize {
         self.children.len()
     }
 
-    /// Test whether two tries share the same underlying allocation.
+    /// Tests whether two tries share the same underlying allocation.
     ///
     /// Returns `true` if the root-level children map of `self` and
     /// `other` are structurally shared (same pointer). This is always
@@ -156,7 +199,22 @@ where
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    /// Get a reference to the subtrie at the given path.
+    /// Returns a reference to the subtrie at the given path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// trie.insert(&["usr", "bin"], 1);
+    /// trie.insert(&["usr", "lib"], 2);
+    ///
+    /// let sub = trie.subtrie(&["usr"]).unwrap();
+    /// assert_eq!(sub.get(&["bin"]), Some(&1));
+    /// assert!(trie.subtrie(&["etc"]).is_none());
+    /// ```
+    ///
+    /// Time: O(d) (d = path length)
     #[must_use]
     pub fn subtrie<Q>(&self, path: &[Q]) -> Option<&Self>
     where
@@ -170,7 +228,21 @@ where
         Some(node)
     }
 
-    /// Get the value at the given path.
+    /// Returns the value at the given path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// trie.insert(&["etc", "hosts"], 1);
+    ///
+    /// assert_eq!(trie.get(&["etc", "hosts"]), Some(&1));
+    /// assert_eq!(trie.get(&["etc"]), None); // no value at interior node
+    /// assert_eq!(trie.get(&["missing"]), None);
+    /// ```
+    ///
+    /// Time: O(d)
     #[must_use]
     pub fn get<Q>(&self, path: &[Q]) -> Option<&V>
     where
@@ -180,7 +252,21 @@ where
         self.subtrie(path)?.value()
     }
 
-    /// Test whether a value exists at the given path.
+    /// Tests whether a value exists at the given path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// trie.insert(&["a", "b"], 1);
+    ///
+    /// assert!(trie.contains_path(&["a", "b"]));
+    /// assert!(!trie.contains_path(&["a"])); // interior node has no value
+    /// assert!(!trie.contains_path(&["z"]));
+    /// ```
+    ///
+    /// Time: O(d)
     #[must_use]
     pub fn contains_path<Q>(&self, path: &[Q]) -> bool
     where
@@ -198,7 +284,9 @@ where
     S: BuildHasher + Clone + Default,
     P: SharedPointerKind,
 {
-    /// Get a mutable reference to the value at the given path.
+    /// Returns a mutable reference to the value at the given path.
+    ///
+    /// Time: O(d) (d = path length)
     #[must_use]
     pub fn get_mut(&mut self, path: &[K]) -> Option<&mut V> {
         if path.is_empty() {
@@ -209,7 +297,23 @@ where
             .and_then(|child| child.get_mut(&path[1..]))
     }
 
-    /// Insert a value at the given path, returning the previous value.
+    /// Inserts a value at the given path, returning the previous value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    ///
+    /// // First insert returns None — no previous value.
+    /// assert_eq!(trie.insert(&["a", "b"], 1), None);
+    ///
+    /// // Inserting at the same path returns the old value.
+    /// assert_eq!(trie.insert(&["a", "b"], 2), Some(1));
+    /// assert_eq!(trie.get(&["a", "b"]), Some(&2));
+    /// ```
+    ///
+    /// Time: O(d)
     pub fn insert(&mut self, path: &[K], value: V) -> Option<V> {
         if path.is_empty() {
             return self.value.replace(value);
@@ -224,10 +328,25 @@ where
         child.insert(&path[1..], value)
     }
 
-    /// Remove the value at the given path, returning it if present.
+    /// Removes the value at the given path, returning it if present.
     ///
     /// Does not remove empty interior nodes — the trie structure is
     /// preserved. Use [`prune`][Self::prune] to clean up empty subtrees.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// trie.insert(&["a", "b"], 1);
+    /// trie.insert(&["a", "c"], 2);
+    ///
+    /// assert_eq!(trie.remove(&["a", "b"]), Some(1));
+    /// assert_eq!(trie.get(&["a", "b"]), None);
+    /// assert_eq!(trie.remove(&["missing"]), None);
+    /// ```
+    ///
+    /// Time: O(d)
     pub fn remove<Q>(&mut self, path: &[Q]) -> Option<V>
     where
         Q: Hash + Eq,
@@ -240,7 +359,7 @@ where
         child.remove(&path[1..])
     }
 
-    /// Remove a direct child by key, returning it if present.
+    /// Removes a direct child by key, returning it if present.
     ///
     /// Uses the invalidating remove path to avoid requiring `V: Hash`
     /// on the trie value type.
@@ -252,10 +371,24 @@ where
         self.children.remove_invalidate_kv(key).map(|(_, v)| v)
     }
 
-    /// Remove the value at the given path and prune empty nodes.
+    /// Removes the value at the given path and prune empty nodes.
     ///
     /// After removing the value, walks back up the path and removes
     /// any nodes that have no value and no children.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// trie.insert(&["a", "b", "c"], 1);
+    ///
+    /// // Removes value and prunes empty interior nodes.
+    /// assert_eq!(trie.remove_and_prune(&["a", "b", "c"]), Some(1));
+    /// assert!(trie.is_empty());
+    /// ```
+    ///
+    /// Time: O(d)
     pub fn remove_and_prune<Q>(&mut self, path: &[Q]) -> Option<V>
     where
         Q: Hash + Eq,
@@ -287,7 +420,9 @@ where
         result
     }
 
-    /// Remove all empty interior nodes (nodes with no value and no children).
+    /// Removes all empty interior nodes (nodes with no value and no children).
+    ///
+    /// Time: O(n)
     pub fn prune(&mut self) {
         // Recurse first so children are pruned bottom-up.
         for (_, child) in self.children.iter_mut() {
@@ -303,16 +438,47 @@ where
         }
     }
 
-    /// Iterate over all (path, value) pairs in the trie.
+    /// Iterates over all (path, value) pairs in the trie.
     ///
     /// Paths are returned as `Vec<&K>` segments. Iteration order follows
     /// the hash map's internal ordering at each level.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// trie.insert(&["a"], 1);
+    /// trie.insert(&["b"], 2);
+    ///
+    /// let mut values: Vec<i32> = trie.iter().map(|(_, v)| *v).collect();
+    /// values.sort();
+    /// assert_eq!(values, vec![1, 2]);
+    /// ```
+    ///
+    /// Time: O(1)
+    #[must_use]
     pub fn iter(&self) -> TrieIter<'_, K, V, S, P> {
         let stack = alloc::vec![(alloc::vec::Vec::new(), self)];
         TrieIter { stack }
     }
 
-    /// Return the number of values stored in the trie (at all depths).
+    /// Returns the number of values stored in the trie (at all depths).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// assert_eq!(trie.len(), 0);
+    ///
+    /// trie.insert(&["a"], 1);
+    /// trie.insert(&["a", "b"], 2); // interior node can also hold a value
+    /// // Note: len() performs a full traversal — O(n).
+    /// assert_eq!(trie.len(), 2);
+    /// ```
+    ///
+    /// Time: O(n)
     #[must_use]
     pub fn len(&self) -> usize {
         let own = if self.value.is_some() { 1 } else { 0 };
@@ -323,9 +489,26 @@ where
             .sum::<usize>()
     }
 
-    /// Iterate over all paths that share the given prefix.
+    /// Iterates over all paths that share the given prefix.
     ///
     /// Returns (remaining_path, value) pairs for all values under the prefix.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// trie.insert(&["usr", "bin", "rustc"], 1);
+    /// trie.insert(&["usr", "lib", "libc"], 2);
+    /// trie.insert(&["etc", "hosts"], 3);
+    ///
+    /// let count = trie.iter_prefix(&["usr"]).unwrap().count();
+    /// assert_eq!(count, 2);
+    /// assert!(trie.iter_prefix(&["nonexistent"]).is_none());
+    /// ```
+    ///
+    /// Time: O(d)
+    #[must_use]
     pub fn iter_prefix<'a, Q>(&'a self, prefix: &[Q]) -> Option<TrieIter<'a, K, V, S, P>>
     where
         Q: Hash + Eq,
@@ -335,34 +518,93 @@ where
         Some(subtrie.iter())
     }
 
-    /// Return the union of two tries; when a path exists in both, `other`'s value wins.
+    /// Returns the union of two tries; when a path exists in both, `other`'s value wins.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut a: Trie<&str, i32> = Trie::new();
+    /// a.insert(&["x"], 1);
+    ///
+    /// let mut b: Trie<&str, i32> = Trie::new();
+    /// b.insert(&["y"], 2);
+    /// b.insert(&["x"], 99); // conflict — b's value wins
+    ///
+    /// let c = a.union(b);
+    /// assert_eq!(c.get(&["x"]), Some(&99));
+    /// assert_eq!(c.get(&["y"]), Some(&2));
+    /// ```
+    ///
+    /// Time: O(n × d), O(1) when both operands share the same tree (e.g. after `clone()`)
     #[must_use]
     pub fn union(mut self, other: Self) -> Self {
+        // Fast-path: shared children pointer means all non-root subtrees are identical.
+        // Only the root value needs merging; skip iterating n entries.
+        if self.ptr_eq(&other) {
+            if other.value.is_some() {
+                self.value = other.value;
+            }
+            return self;
+        }
         for (path, value) in other {
             self.insert(&path, value);
         }
         self
     }
 
-    /// Return entries whose paths are in `self` but not in `other`.
+    /// Returns entries whose paths are in `self` but not in `other`.
+    ///
+    /// Time: O(n × d), O(1) when both operands share the same tree (e.g. after `clone()`)
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
+        // Fast-path: shared children means all non-root paths cancel.
+        // Root survives only if self has it and other doesn't.
+        if self.ptr_eq(other) {
+            let mut r = Self::default();
+            if other.value.is_none() {
+                r.value = self.value;
+            }
+            return r;
+        }
         self.into_iter()
             .filter(|(path, _)| !other.contains_path(path))
             .collect()
     }
 
-    /// Return entries whose paths are in both `self` and `other`; `self`'s values are kept.
+    /// Returns entries whose paths are in both `self` and `other`; `self`'s values are kept.
+    ///
+    /// Time: O(n × d), O(1) when both operands share the same tree (e.g. after `clone()`)
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
+        // Fast-path: shared children means all non-root paths survive.
+        // Root survives only if both have it; we keep self's value.
+        if self.ptr_eq(other) {
+            let mut r = self;
+            if other.value.is_none() {
+                r.value = None;
+            }
+            return r;
+        }
         self.into_iter()
             .filter(|(path, _)| other.contains_path(path))
             .collect()
     }
 
-    /// Return entries whose paths are in exactly one of `self` or `other`.
+    /// Returns entries whose paths are in exactly one of `self` or `other`.
+    ///
+    /// Time: O(n × d), O(1) when both operands share the same tree (e.g. after `clone()`)
     #[must_use]
     pub fn symmetric_difference(self, other: &Self) -> Self {
+        // Fast-path: shared children means all non-root paths cancel.
+        // Root survives only if exactly one operand has it.
+        if self.ptr_eq(other) {
+            let mut r = Self::default();
+            if self.value.is_some() != other.value.is_some() {
+                r.value = self.value.or_else(|| other.value.clone());
+            }
+            return r;
+        }
         // Clone self before consuming it — O(1) via structural sharing — so we can
         // check path membership for other's entries after self is consumed.
         let self_clone = self.clone();
@@ -430,6 +672,30 @@ where
             d.field("children", &self.children);
         }
         d.finish()
+    }
+}
+
+impl<K, V, S, P> Display for GenericTrie<K, V, S, P>
+where
+    K: Display + Hash + Eq + Clone,
+    V: Display + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (path, v) in self.iter() {
+            write!(f, "{sep}")?;
+            let mut path_sep = "";
+            for k in &path {
+                write!(f, "{path_sep}{k}")?;
+                path_sep = "/";
+            }
+            write!(f, ": {v}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
     }
 }
 
@@ -536,7 +802,11 @@ where
 {
     type Output = V;
 
-    /// Index by path, panicking if the path has no associated value.
+    /// Returns a reference to the value at `path`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `path` has no associated value in the trie.
     fn index(&self, path: &[K]) -> &Self::Output {
         match self.get(path) {
             Some(v) => v,
@@ -552,7 +822,11 @@ where
     S: BuildHasher + Clone + Default,
     P: SharedPointerKind,
 {
-    /// Index mutably by path, panicking if the path has no associated value.
+    /// Returns a mutable reference to the value at `path`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `path` has no associated value in the trie.
     fn index_mut(&mut self, path: &[K]) -> &mut Self::Output {
         match self.get_mut(path) {
             Some(v) => v,
@@ -592,6 +866,15 @@ where
     }
 }
 
+impl<'a, K, V, S, P> FusedIterator for TrieIter<'a, K, V, S, P>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+}
+
 impl<'a, K, V, S, P> IntoIterator for &'a GenericTrie<K, V, S, P>
 where
     K: Hash + Eq + Clone,
@@ -626,6 +909,10 @@ impl<K, V> Iterator for TrieConsumingIter<K, V> {
         self.inner.size_hint()
     }
 }
+
+impl<K, V> ExactSizeIterator for TrieConsumingIter<K, V> {}
+
+impl<K, V> FusedIterator for TrieConsumingIter<K, V> {}
 
 impl<K, V, S, P> IntoIterator for GenericTrie<K, V, S, P>
 where

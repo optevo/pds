@@ -110,7 +110,7 @@ impl<'a, A, P: SharedPointerKind> Focus<'a, A, P>
 where
     A: 'a,
 {
-    /// Construct a `Focus` for a [`Vector`][Vector].
+    /// Constructs a `Focus` for a [`Vector`][Vector].
     ///
     /// [Vector]: type.Vector.html
     pub fn new(vector: &'a GenericVector<A, P>) -> Self {
@@ -204,7 +204,7 @@ where
         }
     }
 
-    /// Split the focus into two.
+    /// Splits the focus into two.
     ///
     /// Given an index `index`, consume the focus and produce two new foci, the
     /// left onto indices `0..index`, and the right onto indices `index..N`
@@ -553,7 +553,7 @@ where
         R: RangeBounds<usize>,
     {
         let r = to_range(&range, self.len());
-        if r.start > r.end || r.start > self.len() {
+        if r.start > r.end || r.end > self.len() {
             panic!("vector::FocusMut::narrow: range out of bounds");
         }
         match self {
@@ -562,7 +562,7 @@ where
         }
     }
 
-    /// Split the focus into two.
+    /// Splits the focus into two.
     ///
     /// Given an index `index`, consume the focus and produce two new foci, the
     /// left onto indices `0..index`, and the right onto indices `index..N`
@@ -636,7 +636,7 @@ impl<'a, A, P: SharedPointerKind> FocusMut<'a, A, P>
 where
     A: Clone + 'a,
 {
-    /// Construct a `FocusMut` for a `Vector`.
+    /// Constructs a `FocusMut` for a `Vector`.
     pub fn new(vector: &'a mut GenericVector<A, P>) -> Self {
         match &mut vector.vector {
             Inline(chunk) => FocusMut::Single(chunk),
@@ -707,7 +707,7 @@ where
         self.get_mut(index).map(|pos| replace(pos, value))
     }
 
-    /// Swap the values at two given indices.
+    /// Swaps the values at two given indices.
     ///
     /// Panics if either index is out of bounds.
     ///
@@ -1027,5 +1027,283 @@ where
         let slice_len = self.get_focus().len();
         let slice = &mut self.get_focus().as_mut_slice()[left..(slice_len - right)];
         (log_range, slice)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use core::iter::FromIterator;
+
+    use crate::vector::Vector;
+
+    // ── Focus (immutable) ────────────────────────────────────────────────────
+
+    #[test]
+    fn focus_is_empty_small() {
+        let empty: Vector<i32> = Vector::new();
+        assert!(empty.focus().is_empty());
+        let one: Vector<i32> = Vector::unit(1);
+        assert!(!one.focus().is_empty());
+    }
+
+    #[test]
+    fn focus_is_empty_large() {
+        let v: Vector<i32> = Vector::from_iter(0..200);
+        assert!(!v.focus().is_empty());
+    }
+
+    #[test]
+    #[should_panic]
+    fn focus_chunk_at_out_of_bounds() {
+        let v: Vector<i32> = Vector::from_iter(0..5);
+        let mut f = v.focus();
+        let _ = f.chunk_at(10);
+    }
+
+    #[test]
+    #[should_panic]
+    fn focus_narrow_out_of_bounds() {
+        let v: Vector<i32> = Vector::from_iter(0..10);
+        let _ = v.focus().narrow(5..20);
+    }
+
+    #[test]
+    #[should_panic]
+    fn focus_split_at_out_of_bounds() {
+        let v: Vector<i32> = Vector::from_iter(0..10);
+        let _ = v.focus().split_at(100);
+    }
+
+    // ── FocusMut — set ───────────────────────────────────────────────────────
+
+    #[test]
+    fn focus_mut_set_small() {
+        // Small vector exercises the Single (inline) branch.
+        let mut v: Vector<i32> = Vector::from_iter(0..5);
+        let mut f = v.focus_mut();
+        assert_eq!(f.set(2, 99), Some(2));
+        assert_eq!(f.set(10, 0), None); // out of bounds
+        drop(f);
+        assert_eq!(v[2], 99);
+    }
+
+    #[test]
+    fn focus_mut_set_large() {
+        // Large vector exercises the Full (tree) branch.
+        let mut v: Vector<i32> = Vector::from_iter(0..500);
+        let mut f = v.focus_mut();
+        assert_eq!(f.set(250, 9999), Some(250));
+        drop(f);
+        assert_eq!(v[250], 9999);
+    }
+
+    // ── FocusMut — swap equal indices ────────────────────────────────────────
+
+    #[test]
+    fn focus_mut_swap_equal_is_noop() {
+        // swap(i, i) must return without panicking.
+        let mut v: Vector<i32> = Vector::from_iter(0..10);
+        let mut f = v.focus_mut();
+        f.swap(3, 3); // exercises the `if a == b { return; }` branch
+        drop(f);
+        assert_eq!(v[3], 3); // unchanged
+    }
+
+    // ── FocusMut — pair ──────────────────────────────────────────────────────
+
+    #[test]
+    fn focus_mut_pair_small_vector() {
+        // Small vector (Single branch) exercises the unsafe raw-pointer path
+        // inside get_many_mut for inline/single-chunk vectors.
+        let mut v: Vector<i32> = Vector::from_iter(0..5);
+        let mut f = v.focus_mut();
+        f.pair(1, 3, |a, b| core::mem::swap(a, b));
+        drop(f);
+        assert_eq!(v[1], 3);
+        assert_eq!(v[3], 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn focus_mut_pair_equal_indices_panics() {
+        let mut v: Vector<i32> = Vector::from_iter(0..10);
+        v.focus_mut().pair(2, 2, |_, _| ());
+    }
+
+    // ── FocusMut — triplet ───────────────────────────────────────────────────
+
+    #[test]
+    fn focus_mut_triplet_small_vector() {
+        // Small vector (Single branch) — covers the unsafe raw-pointer path
+        // in get_many_mut and the full triplet() body.
+        let mut v: Vector<i32> = Vector::from_iter(0..5);
+        v.focus_mut().triplet(0, 2, 4, |a, b, c| {
+            *a += *b + *c;
+        });
+        assert_eq!(v[0], 0 + 2 + 4);
+    }
+
+    #[test]
+    fn focus_mut_triplet_large_vector() {
+        // Large vector (Full/tree branch) — exercises the unsafe pointer path
+        // in TreeFocusMut::get_many.
+        let mut v: Vector<i32> = Vector::from_iter(0..500);
+        v.focus_mut().triplet(10, 250, 499, |a, b, c| {
+            *a = 1;
+            *b = 2;
+            *c = 3;
+        });
+        assert_eq!(v[10], 1);
+        assert_eq!(v[250], 2);
+        assert_eq!(v[499], 3);
+    }
+
+    #[test]
+    #[should_panic]
+    fn focus_mut_triplet_equal_indices_panics() {
+        let mut v: Vector<i32> = Vector::from_iter(0..10);
+        v.focus_mut().triplet(1, 1, 3, |_, _, _| ());
+    }
+
+    // ── FocusMut — unmut ─────────────────────────────────────────────────────
+
+    #[test]
+    fn focus_mut_unmut_small() {
+        let mut v: Vector<i32> = Vector::from_iter(0..5);
+        {
+            let mut f = v.focus_mut();
+            f.set(2, 99);
+            let ro = f.unmut();
+            // Readable after unmut
+            let elems: Vec<i32> = ro.into_iter().copied().collect();
+            assert_eq!(elems[2], 99);
+        }
+    }
+
+    #[test]
+    fn focus_mut_unmut_large() {
+        let mut v: Vector<i32> = Vector::from_iter(0..500);
+        {
+            let mut f = v.focus_mut();
+            f.set(300, 9999);
+            let ro = f.unmut(); // exercises FocusMut::Full path in unmut()
+            let mut ro_f = ro;
+            assert_eq!(ro_f.get(300), Some(&9999));
+        }
+    }
+
+    // ── FocusMut — From impl ─────────────────────────────────────────────────
+
+    #[test]
+    fn focus_mut_from_into_focus() {
+        use crate::vector::focus::Focus;
+        use crate::vector::focus::FocusMut;
+        let mut v: Vector<i32> = Vector::from_iter(0..5);
+        let fm: FocusMut<'_, i32, _> = v.focus_mut();
+        let _ro: Focus<'_, i32, _> = Focus::from(fm); // exercises From<FocusMut> for Focus
+    }
+
+    // ── FocusMut — narrow and split_at panics ────────────────────────────────
+
+    #[test]
+    fn focus_mut_narrow_small() {
+        // Exercises FocusMut::Single path in narrow().
+        let mut v: Vector<i32> = Vector::from_iter(0..10);
+        let mut f = v.focus_mut();
+        let narrowed = f.narrow(2..5);
+        assert_eq!(narrowed.len(), 3);
+    }
+
+    #[test]
+    fn focus_mut_narrow_large() {
+        // Exercises FocusMut::Full path and TreeFocusMut::narrow.
+        let mut v: Vector<i32> = Vector::from_iter(0..500);
+        let f = v.focus_mut();
+        let narrowed = f.narrow(100..200);
+        assert_eq!(narrowed.len(), 100);
+    }
+
+    #[test]
+    #[should_panic]
+    fn focus_mut_narrow_out_of_bounds_panics() {
+        let mut v: Vector<i32> = Vector::from_iter(0..10);
+        let f = v.focus_mut();
+        let _ = f.narrow(5..20);
+    }
+
+    #[test]
+    #[should_panic]
+    fn focus_mut_split_at_out_of_bounds_panics() {
+        let mut v: Vector<i32> = Vector::from_iter(0..10);
+        let _ = v.focus_mut().split_at(100);
+    }
+
+    #[test]
+    #[should_panic]
+    fn focus_mut_chunk_at_out_of_bounds_panics() {
+        let mut v: Vector<i32> = Vector::from_iter(0..5);
+        let mut f = v.focus_mut();
+        let _ = f.chunk_at(10);
+    }
+
+    // ── Miri-targeted unsafe code coverage ───────────────────────────────────
+    // These tests are NOT marked #[cfg_attr(miri, ignore)].
+    // Run with: nix develop .#nightly --command cargo miri test focus
+
+    #[test]
+    fn miri_pair_small_no_aliasing() {
+        // pair() on a small (Single) vector. The unsafe raw-pointer path in
+        // get_many_mut must not produce aliased &mut references — miri detects this.
+        let mut v: Vector<i32> = Vector::from_iter(0..8);
+        v.focus_mut().pair(0, 7, |a, b| {
+            *a += 10;
+            *b += 20;
+        });
+        assert_eq!(v[0], 10);
+        assert_eq!(v[7], 27);
+    }
+
+    #[test]
+    fn miri_triplet_small_no_aliasing() {
+        // triplet() on a small (Single) vector — three distinct raw-pointer
+        // dereferences that must not alias.
+        let mut v: Vector<i32> = Vector::from_iter(0..8);
+        v.focus_mut().triplet(1, 3, 5, |a, b, c| {
+            let sum = *a + *b + *c;
+            *a = sum;
+            *b = sum;
+            *c = sum;
+        });
+        let expected = 1 + 3 + 5;
+        assert_eq!(v[1], expected);
+        assert_eq!(v[3], expected);
+        assert_eq!(v[5], expected);
+    }
+
+    #[test]
+    fn miri_triplet_large_cross_chunk() {
+        // triplet() on a large vector where all three indices are in different
+        // tree chunks. The unsafe get_many in TreeFocusMut updates target_ptr
+        // between lookups — miri verifies no dangling/aliased access.
+        let mut v: Vector<i32> = Vector::from_iter(0..500i32);
+        v.focus_mut().triplet(0, 200, 499, |a, b, c| {
+            *a = -1;
+            *b = -2;
+            *c = -3;
+        });
+        assert_eq!(v[0], -1);
+        assert_eq!(v[200], -2);
+        assert_eq!(v[499], -3);
+    }
+
+    #[test]
+    fn miri_get_many_mut_boundary_indices() {
+        // pair() at the very first and very last index of a small vector.
+        let mut v: Vector<i32> = Vector::from_iter([10, 20, 30, 40, 50]);
+        v.focus_mut().pair(0, 4, |first, last| {
+            core::mem::swap(first, last);
+        });
+        assert_eq!(v[0], 50);
+        assert_eq!(v[4], 10);
     }
 }

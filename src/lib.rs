@@ -36,7 +36,7 @@
 //! accidental mutation of data - is already handled so well by Rust's
 //! type system that it's just not something a Rust programmer needs
 //! to worry about even when using data structures that would send a
-//! conscientious Clojure programmer into a panic.
+//! conscientious Clojure, Haskell, Scala, or F# programmer into a panic.
 //!
 //! Immutable data structures offer other benefits, though, some of
 //! which are useful even in a language like Rust. The most prominent
@@ -205,7 +205,13 @@
 //! not usually as bad as it sounds, but even O(n) isn't cheap and the
 //! cost still increases logarithmically, if slowly, as the size of
 //! your data increases. O(n log n) basically means "are you sure you
-//! need to do this?"
+//! need to do this?" Operations in this class include: sorting a
+//! [`Vector`]; constructing an [`OrdMap`] or [`OrdSet`] from an
+//! iterator (each of the *n* insertions costs O(log n)); and all bulk
+//! set operations — `union`, `intersection`, `difference`,
+//! `symmetric_difference` — across every collection type, because each
+//! iterates *n* elements and inserts each into a new collection at
+//! O(log n) per insert.
 //!
 //! *O(1)** means 'amortised O(1),' which means that an operation
 //! usually runs in constant time but will occasionally be more
@@ -241,7 +247,7 @@
 //! | Type | Algorithm | Key Constraints | Order | Clone | Eq | Insert | Remove | Lookup |
 //! | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 //! | [`HashMap<K, V>`] | [HAMT][hamt] | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] | undefined | O(1) | O(1)† | O(log n) | O(log n) | O(log n) |
-//! | [`OrdMap<K, V>`] | [B+tree][b+tree] | [`Clone`] + [`Ord`] | sorted | O(1) | O(n) | O(log n) | O(log n) | O(log n) |
+//! | [`OrdMap<K, V>`] | [B+tree][b+tree] | [`Clone`] + [`Ord`] | sorted | O(1) | O(n)‡ | O(log n) | O(log n) | O(log n) |
 //!
 //! ### Sets
 //!
@@ -252,12 +258,16 @@
 //! | Type | Algorithm | Constraints | Order | Clone | Eq | Insert | Remove | Lookup |
 //! | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 //! | [`HashSet<A>`] | [HAMT][hamt] | [`Clone`] + [`Hash`][std::hash::Hash] + [`Eq`] | undefined | O(1) | O(1)† | O(log n) | O(log n) | O(log n) |
-//! | [`OrdSet<A>`] | [B+tree][b+tree] | [`Clone`] + [`Ord`] | sorted | O(1) | O(n) | O(log n) | O(log n) | O(log n) |
+//! | [`OrdSet<A>`] | [B+tree][b+tree] | [`Clone`] + [`Ord`] | sorted | O(1) | O(n)‡ | O(log n) | O(log n) | O(log n) |
 //!
 //! † Merkle-accelerated equality: O(1) when both collections have valid
 //! Merkle hashes (common after clone-and-modify workflows). Falls back
 //! to O(n) element-by-element comparison otherwise. For `HashMap`, requires
 //! both maps to share a hasher instance (common ancestor via `clone`).
+//!
+//! ‡ O(1) when both collections have a valid cached content hash (requires
+//! the `ord-hash` feature, enabled by default). Falls back to O(n) sorted
+//! scan otherwise.
 //!
 //! ### Other Collections
 //!
@@ -371,6 +381,89 @@
 //! collector (which, in our case, is just a simple
 //! [`Rc`](std::rc::Rc)).
 //!
+//! ## pds vs the standard library
+//!
+//! The standard library provides `HashMap`, `BTreeMap`, and `Vec` as mutable, owned
+//! containers. Every `clone()` allocates fresh memory and copies every element — O(n)
+//! in both time and space. pds collections use structural sharing: clone is always O(1),
+//! and a modification touches only the path from the root to the changed node.
+//!
+//! ### Maps
+//!
+//! | Operation | `std::HashMap` | `pds::HashMap` | `std::BTreeMap` | `pds::OrdMap` |
+//! |-----------|:--------------:|:--------------:|:---------------:|:-------------:|
+//! | `clone()` | O(n) | **O(1)** | O(n) | **O(1)** |
+//! | Lookup | **O(1) avg** | O(log n) | O(log n) | O(log n) |
+//! | Insert | **O(1) avg** | O(log n) | O(log n) | O(log n) |
+//! | Remove | **O(1) avg** | O(log n) | O(log n) | O(log n) |
+//! | Iterate | O(n) | O(n) | O(n) | O(n) |
+//! | Equality | O(n) | **O(1)†** | O(n) | **O(1)‡** |
+//!
+//! † Merkle hash fast-path — same-lineage maps with equal length and equal Merkle hash compare in O(1).
+//! ‡ Cached content hash (`ord-hash` feature, on by default) — O(1) when the hash is valid.
+//!
+//! The trade-off is clone cost versus point-lookup speed. `std::HashMap` wins on random
+//! lookups (roughly 2× faster than [`HashMap`]). pds wins on any operation that involves
+//! copying: every clone that would cost O(n) with a standard map becomes O(1).
+//!
+//! When a single thread owns a map and mutates it in a tight loop with no snapshotting,
+//! `std::HashMap` is the right tool. When you need snapshots, undo/redo, versioning, or
+//! shared state between threads — pds collections win.
+//!
+//! ### Vectors
+//!
+//! | Operation | `std::Vec` | `pds::Vector` |
+//! |-----------|:----------:|:-------------:|
+//! | `clone()` | O(n) | **O(1)** |
+//! | Push (back) | **O(1) avg** | O(1) avg |
+//! | Random access | **O(1)** | O(log n) |
+//! | Insert (middle) | O(n) | **O(log n)** |
+//! | Split | O(n) | **O(log n)** |
+//! | Concat | O(n) | **O(log n)** |
+//!
+//! `std::Vec` is unbeatable for purely sequential workloads: appending and reading by
+//! index in a tight loop. [`Vector`] trades a constant factor on random access (the RRB
+//! tree depth) for dramatically cheaper structural operations — split and concat are
+//! O(log n) rather than O(n), and clone is O(1). Use [`Vector`] when you need to branch
+//! on a sequence: taking a snapshot before a speculative edit, passing an independent
+//! view to another thread, or producing multiple output variants from a single input.
+//!
+//! ### Multi-threading
+//!
+//! Rust's ownership model prevents data races at compile time. pds extends this
+//! advantage: because clone is O(1), you can hand a complete, independent snapshot to
+//! another thread with no synchronisation overhead.
+//!
+//! With a standard library map:
+//!
+//! ```ignore
+//! // Every reader must acquire the lock — even for read-only access.
+//! let shared: Arc<Mutex<std::collections::HashMap<K, V>>> = ...;
+//! let guard = shared.lock().unwrap();
+//! let value = guard.get(&key);
+//! ```
+//!
+//! With a pds map:
+//!
+//! ```ignore
+//! // Clone the current snapshot in O(1) — no lock held during processing.
+//! let snapshot: pds::HashMap<K, V> = current_state.clone();
+//! let value = snapshot.get(&key);
+//! ```
+//!
+//! Because each modification produces a new root without touching the old one, multiple
+//! threads can hold snapshots at different points in time — all sharing structure, all
+//! independent, none blocking the others. Common patterns:
+//!
+//! - **Worker pools** — distribute independent snapshots to workers; merge results back
+//!   with `par_union`.
+//! - **Speculative execution** — clone before a tentative operation; discard the clone
+//!   on rollback, keep it on commit.
+//! - **Event sourcing** — each state transition produces a new snapshot; prior states
+//!   are retained cheaply because unchanged subtrees are shared.
+//! - **Read scale-out** — any number of readers hold the latest snapshot with zero
+//!   contention; the writer atomically publishes a new root.
+//!
 //! ## Thread Safety
 //!
 //! The data structures in `pds` are thread safe by default using
@@ -382,7 +475,7 @@
 //! `pds` also supports `Rc` as the pointer type through the [`archery`]
 //! crate, just like `im-rc` in the original `im` crate. If you prioritise
 //! speed over thread safety, you can use
-//! [`GenericVector<T, shared_pointer::RcK>`](vector::GenericVector) with
+//! [`GenericVector<T, archery::shared_pointer::RcK>`](vector::GenericVector) with
 //! non-threadsafe but faster `Rc`, instead of the type alias [`Vector`].
 //! The same pattern works on all other collection types.
 //!
@@ -410,7 +503,7 @@
 //! | ------- | :-----: | ----------- |
 //! | `std` | Yes | Enables `std`-dependent functionality: `RandomState`-based type aliases (`HashMap`, `HashSet`, etc.), `From<std::collections::*>` conversions, and `Mutex`-based locking. Disable for `no_std + alloc` environments. |
 //! | [`triomphe`](https://crates.io/crates/triomphe/) | Yes | Use [`triomphe::Arc`](https://docs.rs/triomphe/latest/triomphe/struct.Arc.html) as the default shared pointer — faster than `std::sync::Arc` (no weak reference count). |
-//! | [`proptest`](https://crates.io/crates/proptest) | No | Proptest strategies for all collection types: `Vector`, `OrdMap`, `OrdSet`, `HashMap`, `HashSet`, `Bag`, `HashMultiMap`, `InsertionOrderMap`, `InsertionOrderSet`, `BiMap`, `SymMap`, and `Trie`. |
+//! | [`proptest`](https://crates.io/crates/proptest) | No | Proptest strategies for all 20 collection types. |
 //! | [`quickcheck`](https://crates.io/crates/quickcheck) | No | [`quickcheck::Arbitrary`](https://docs.rs/quickcheck/latest/quickcheck/trait.Arbitrary.html) implementations for all collection types. |
 //! | [`rayon`](https://crates.io/crates/rayon) | No | Parallel iterators, parallel set operations (`par_union`, `par_intersection`, `par_difference`, `par_symmetric_difference`), and parallel transform operations (`par_filter`, `par_map_values`, `par_map_values_with_key`) for all eligible collection types. See [Parallel operations](#parallel-operations) below. |
 //! | [`serde`](https://crates.io/crates/serde) | No | [`Serialize`](https://docs.rs/serde/latest/serde/trait.Serialize.html) and [`Deserialize`](https://docs.rs/serde/latest/serde/trait.Deserialize.html) implementations for all `pds` datatypes |
@@ -581,20 +674,27 @@ pub mod intern;
 #[cfg(feature = "persist")]
 pub mod persist;
 
+#[macro_use]
 pub mod bag;
 pub mod bimap;
 pub mod hash_multimap;
+#[macro_use]
+pub mod insertion_order_map;
+#[macro_use]
+pub mod insertion_order_set;
+#[macro_use]
 pub mod ord_bag;
+pub mod ord_bimap;
+#[macro_use]
+pub mod ord_insertion_order_map;
+#[macro_use]
+pub mod ord_insertion_order_set;
 pub mod ord_multimap;
 pub mod ord_symmap;
-pub mod ord_bimap;
 pub mod ord_trie;
-pub mod ord_insertion_order_map;
-pub mod ord_insertion_order_set;
-pub mod insertion_order_map;
-pub mod insertion_order_set;
 pub mod symmap;
 pub mod trie;
+#[macro_use]
 pub mod unique_vector;
 
 #[cfg(any(test, feature = "rayon"))]
@@ -621,14 +721,14 @@ pub use crate::insertion_order_map::InsertionOrderMap;
 pub use crate::insertion_order_set::GenericInsertionOrderSet;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::insertion_order_set::InsertionOrderSet;
-pub use crate::ordmap::{GenericOrdMap, OrdMap};
 pub use crate::ord_bag::{GenericOrdBag, OrdBag};
-pub use crate::ord_multimap::{GenericOrdMultiMap, OrdMultiMap};
-pub use crate::ord_symmap::{GenericOrdSymMap, OrdSymMap};
 pub use crate::ord_bimap::{GenericOrdBiMap, OrdBiMap};
-pub use crate::ord_trie::{GenericOrdTrie, OrdTrie};
 pub use crate::ord_insertion_order_map::{GenericOrdInsertionOrderMap, OrdInsertionOrderMap};
 pub use crate::ord_insertion_order_set::{GenericOrdInsertionOrderSet, OrdInsertionOrderSet};
+pub use crate::ord_multimap::{GenericOrdMultiMap, OrdMultiMap};
+pub use crate::ord_symmap::{GenericOrdSymMap, OrdSymMap};
+pub use crate::ord_trie::{GenericOrdTrie, OrdTrie};
+pub use crate::ordmap::{GenericOrdMap, OrdMap};
 pub use crate::ordset::{GenericOrdSet, OrdSet};
 pub use crate::symmap::GenericSymMap;
 #[cfg(any(feature = "std", feature = "foldhash"))]
@@ -711,6 +811,41 @@ macro_rules! get_in {
     ($target:expr, $path:expr) => {
         $target.get($path)
     };
+}
+
+/// Centralised `Send + Sync` static assertions for all 20 public collection types.
+///
+/// Individual modules also carry their own assertions; this module provides a single
+/// place to verify the complete set compiles together under `--all-features`.
+#[cfg(test)]
+mod send_sync_tests {
+    use static_assertions::assert_impl_all;
+
+    // --- Hash-based collections ---
+    assert_impl_all!(crate::HashMap<String, i32>: Send, Sync);
+    assert_impl_all!(crate::HashSet<String>: Send, Sync);
+    assert_impl_all!(crate::Bag<String>: Send, Sync);
+    assert_impl_all!(crate::HashMultiMap<String, i32>: Send, Sync);
+    assert_impl_all!(crate::BiMap<String, i32>: Send, Sync);
+    assert_impl_all!(crate::SymMap<String>: Send, Sync);
+    assert_impl_all!(crate::InsertionOrderMap<String, i32>: Send, Sync);
+    assert_impl_all!(crate::InsertionOrderSet<String>: Send, Sync);
+    assert_impl_all!(crate::Trie<String, i32>: Send, Sync);
+    assert_impl_all!(crate::UniqueVector<String>: Send, Sync);
+
+    // --- Ord-based collections ---
+    assert_impl_all!(crate::OrdMap<String, i32>: Send, Sync);
+    assert_impl_all!(crate::OrdSet<String>: Send, Sync);
+    assert_impl_all!(crate::OrdBag<String>: Send, Sync);
+    assert_impl_all!(crate::OrdMultiMap<String, i32>: Send, Sync);
+    assert_impl_all!(crate::OrdBiMap<String, i32>: Send, Sync);
+    assert_impl_all!(crate::OrdSymMap<String>: Send, Sync);
+    assert_impl_all!(crate::OrdInsertionOrderMap<String, i32>: Send, Sync);
+    assert_impl_all!(crate::OrdInsertionOrderSet<String>: Send, Sync);
+    assert_impl_all!(crate::OrdTrie<String, i32>: Send, Sync);
+
+    // --- Sequence ---
+    assert_impl_all!(crate::Vector<String>: Send, Sync);
 }
 
 #[cfg(test)]

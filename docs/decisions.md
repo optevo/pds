@@ -2064,3 +2064,244 @@ node upgrade, amortised over many inserts) and the initialisation is a single
 - `OrdMap::PartialEq` is now O(1) for structurally-shared clones.
 - `HashMap::insert` skips `hash_one` when `kv_merkle_valid = false`.
 - All other performance review candidates are confirmed not worth changing.
+
+---
+
+## DEC-038: InsertionOrderMap/Set complexity corrections and performance investigation — April 2026 {#sec:dec-038}
+
+**Date:** 2026-04-27
+**Status:** Accepted
+
+**Context:**
+A systematic audit of all `InsertionOrderMap` and `InsertionOrderSet` method
+complexity annotations revealed widespread stale documentation from before the B+
+tree backing was introduced. The original implementation used a `Vec` for
+insertion-order tracking; the B+ tree (`GenericOrdMap<usize, (K,V)>`) replaced it,
+but the doc comments were never updated. Three performance improvement opportunities
+in the compound types were then investigated.
+
+### Correction: stale complexity annotations in InsertionOrderMap / InsertionOrderSet
+
+The following method annotations were wrong and have been corrected:
+
+| Method | Old label | Correct label | Root cause |
+|--------|-----------|---------------|------------|
+| `InsertionOrderMap::remove` | `O(n) (must remove from insertion-order vector)` | `O(log n)` | Stale Vec reference; now removes from HAMT + OrdMap |
+| `InsertionOrderMap::insert` | `O(1) avg (amortised; updates both map and vector)` | `O(log n)` | Stale Vec reference; OrdMap insert is O(log n) |
+| `InsertionOrderMap::get` / `get_mut` | `O(1) avg` | `O(log n)` | HAMT lookup (O(1) avg) + OrdMap lookup (O(log n)); bottleneck is OrdMap |
+| `InsertionOrderMap::front` / `back` | `O(1)` | `O(log n)` | Calls OrdMap `get_min`/`get_max`, both O(log n) |
+| `InsertionOrderMap::pop_front` | `O(n) (shifts vector)` | `O(log n)` | Stale Vec reference; now OrdMap `get_min` + `remove` |
+| `InsertionOrderMap::pop_back` | `O(1)` | `O(log n)` | Was O(1) with Vec `pop()`; now OrdMap `get_max` + `remove` |
+| `InsertionOrderMap::union` / `difference` / `intersection` / `symmetric_difference` | `O(n) avg` | `O(n log n)` | n iterations × O(log n) OrdMap insert per element |
+| `InsertionOrderSet::remove` | `O(n) (must shift insertion-order vector)` | `O(log n)` | Stale Vec reference |
+| `InsertionOrderSet::insert` | `O(1) avg` | `O(log n)` | Delegates to InsertionOrderMap::insert |
+| `InsertionOrderSet::front` / `back` | `O(1)` | `O(log n)` | Delegates to InsertionOrderMap::front/back |
+| `InsertionOrderSet::pop_front` | `O(n)` | `O(log n)` | Stale Vec reference |
+| `InsertionOrderSet::pop_back` | `O(1)` | `O(log n)` | Was O(1) with Vec `pop()`; now OrdMap path |
+| `InsertionOrderSet::union` / `difference` / `intersection` / `symmetric_difference` | `O(n) avg` | `O(n log n)` | n iterations × O(log n) per element |
+
+Note: `contains_key` / `contains` remain correctly labelled `O(1) avg` because
+they only touch the HAMT index, not the OrdMap entries.
+
+The `lib.rs` Performance Notes and README were updated to reflect that all bulk set
+operations (`union`, `intersection`, `difference`, `symmetric_difference`) across
+every collection type are O(n log n), not O(n). The README now notes the O(log n)
+per-op bottleneck for `InsertionOrderMap` and `InsertionOrderSet`.
+
+---
+
+### Investigation A: InsertionOrderMap `front()` / `back()` — O(1) caching
+
+**Verdict: Not worth implementing.**
+
+**Findings:**
+
+The struct (`insertion_order_map.rs:105–118`) holds `index: GenericHashMap<K,
+usize>`, `entries: GenericOrdMap<usize, (K,V)>`, and `next_idx: usize`. Counters
+are assigned monotonically on new-key inserts; `next_idx` never decreases.
+
+`back()` via `next_idx - 1` is incorrect after any remove: removes create gaps in
+the counter space (e.g., insert a/b/c → pop_back removes counter 2 → max is now 1,
+but `next_idx` is still 3). A cached `max_counter` field would need to be updated on
+every `remove(key)` call — when the removed counter equals the cached max, finding
+the new max requires O(log n) anyway (an OrdMap `get_max` call).
+
+`front()` via a cached `min_counter` is more tractable but still degrades on
+arbitrary `remove`: if the removed key held the minimum counter, the new minimum
+requires O(log n) to discover. Only for pure FIFO (`insert` then `pop_front` only,
+no arbitrary removes) would this be genuinely O(1).
+
+The maintenance overhead — two `Option<usize>` fields to update correctly on every
+`insert`, `remove`, `pop_front`, and `pop_back` — introduces correctness risk with
+minimal asymptotic benefit, since the OrdMap's `get_min`/`get_max` are already a
+tight leftmost/rightmost leaf walk with excellent cache locality.
+
+**Alternatives considered:**
+- Cache only for the pure-FIFO case (no arbitrary removes): adds API complexity
+  (users cannot know whether the fast path applies); not worth it.
+- Doubly-linked list for insertion order: would make `front`/`back`/`pop_front`/
+  `pop_back` O(1) but eliminates structural sharing on structural operations,
+  defeating the purpose of the persistent design.
+
+---
+
+### Investigation B: InsertionOrderMap `from_iter` — O(n) bulk load
+
+**Verdict: Implemented (2026-04-27).**
+
+**Findings:**
+
+`from_iter` (`insertion_order_map.rs:619–637`) previously called `insert()` n times
+at O(log n) each — O(n log n) total. The `entries` OrdMap was built via sequential
+B+ tree inserts.
+
+Since counters are assigned 0, 1, 2, ... in strictly ascending order for new keys,
+the `(counter, entry)` pairs are inserted in sorted order — the ideal case for a
+bottom-up bulk-load algorithm.
+
+**Implementation:**
+
+Added `pub(crate) fn build_sorted<K, V, P, I>` to `src/nodes/btree.rs` and
+`pub(crate) fn from_sorted_iter` to `GenericOrdMap` (`src/ord/map.rs`). The
+algorithm:
+
+1. Collect iterator into a `Vec<(K, V)>`.
+2. Pack items into leaf nodes of size `NODE_SIZE`, redistributing the last leaf if
+   it would have fewer than `THIRD` items (merge with previous leaf and split evenly;
+   safe because `NODE_SIZE >= 2 * THIRD`).
+3. Group leaf nodes into level-1 branch nodes of up to `NUM_CHILDREN` children,
+   redistributing the last branch if fewer than `MEDIAN` children; repeat for
+   higher levels until one root node remains.
+4. Separator keys at each branch level are the minimum key of each right child.
+
+Updated `InsertionOrderMap::from_iter` to a two-pass approach:
+- Pass 1: deduplicate via the HAMT index — first occurrence assigns a sequential
+  index; subsequent occurrences update the value in-place. O(n avg).
+- Pass 2: build `entries` OrdMap from the sorted (index → (K, V)) sequence via
+  `from_sorted_iter`. O(n).
+
+Total: O(n avg) instead of O(n log n). At n = 10,000, approximately 14× reduction
+in comparison operations for the entries OrdMap construction.
+
+The same `from_sorted_iter` is available for any `GenericOrdMap` caller that can
+guarantee pre-sorted, deduplicated input.
+
+---
+
+### Investigation C: Trie / OrdTrie set operations — merge-walk
+
+**Verdict: Implemented (2026-04-27).**
+
+**Findings:**
+
+Both `GenericTrie` and `GenericOrdTrie` share the same node layout
+(`trie.rs:66–69`, `ord_trie.rs:69–72`):
+
+```
+value:    Option<V>
+children: GenericHashMap<K, GenericTrie<...>>   // Trie
+children: GenericOrdMap<K, GenericOrdTrie<...>> // OrdTrie
+```
+
+Current set operations all use flatten-and-rebuild:
+- `union` (`trie.rs:541`): iterates `other` into a `Vec<(Vec<K>, V)>` via
+  `TrieConsumingIter`, then calls `self.insert(&path, value)` for each path.
+  Cost: O(n) paths × O(d) per insert = O(n × d). The `Vec<K>` path allocation
+  is itself O(n × d) in memory.
+- `difference`, `intersection`, `symmetric_difference`: similar pattern.
+
+A merge-walk visits both tries recursively, matching children by key:
+- For each key in `a.children ∩ b.children`: recurse on the subtrie pair.
+- For keys only in `a` (or `b`): copy directly (for union/difference).
+- Short-circuit: `if a.ptr_eq(b) { return a.clone() }` at each recursion level
+  (O(1) clone via structural sharing). `ptr_eq` is already implemented
+  (`trie.rs:191`).
+
+Complexity:
+- Worst case (fully disjoint tries): O(n × d) — identical to current.
+- Typical case (k shared paths of depth d): O(k × d) instead of O((n_a + n_b) × d).
+- Best case (identical tries): O(1) via `ptr_eq` at the root.
+- Eliminates O(n × d) path materialisation into `Vec<K>` that the current
+  `TrieConsumingIter` performs unconditionally.
+
+`OrdTrie` is the priority target: its children are `GenericOrdMap<K, OrdTrie>`
+which can be iterated in sorted key order, enabling a merge-join (O(n_a + n_b) per
+level for matching keys) rather than O(n_a + n_b × log n_b) with hash lookups.
+This is the same sorted-merge advantage that makes `OrdMap`'s sequential set
+operations efficient.
+
+`Trie` merge-walk is harder: `GenericHashMap` has no merge-join iterator. The best
+approach iterates one map and looks up in the other — O(n_a + n_b × O(1) avg) per
+level with HAMT lookups. Asymptotically no worse than current; better in practice
+due to eliminated path materialisation.
+
+Gotcha: `remove` does not prune empty nodes by design (see `trie.rs:334`). After
+`difference` or `intersection` via merge-walk, interior nodes with `value: None`
+and empty `children` may accumulate. The result is structurally valid but wastes
+space. The current flatten-and-rebuild approach avoids this because it only inserts
+paths that have values. A merge-walk implementation must either prune as it goes
+(check children emptiness after recursion) or document the sparsification.
+
+**Alternatives considered:**
+- Keep flatten-and-rebuild for correctness, add `ptr_eq` fast-path at the top of
+  each set operation: O(1) for identical-trie case, O(n × d) otherwise. Easy to
+  add; worth doing immediately as a low-risk improvement even without the full
+  merge-walk.
+- Implement merge-walk only for `OrdTrie` first (natural fit due to sorted children
+  map), then `Trie` separately.
+
+**Implementation:**
+
+All four set operations (`union`, `difference`, `intersection`, `symmetric_difference`)
+replaced with full merge-walk implementations in both `src/trie.rs` and `src/ord_trie.rs`.
+
+`Trie` (`src/trie.rs`):
+- Added `ptr_eq` fast-path at the top of all four operations (O(1) for structurally
+  shared tries). Each fast-path correctly handles the root `value: Option<V>` separately
+  from children (since `ptr_eq` checks only the `children` pointer, not the value).
+- union fast-path: if `other.value.is_some()`, update self's root value (other wins).
+- difference fast-path: return empty trie unless `other.value.is_none()` (self's root
+  value survives only when other does not have a root value).
+- intersection fast-path: clear self's root value if `other.value.is_none()`.
+- symmetric_difference fast-path: return empty trie; root survives iff exactly one has it.
+- Flatten-and-rebuild retained for the non-fast-path cases (HAMT has no merge-join iterator).
+  Time: O(n × d), O(1) when both operands share the same tree.
+
+`OrdTrie` (`src/ord_trie.rs`):
+- All four operations replaced with recursive merge-walk over sorted `OrdMap` children.
+- `ptr_eq` fast-path at each recursion level (short-circuits shared subtrees in O(1)).
+- `union`: consumes `self.children` via mutable removal; for each key in `other.children`,
+  removes self's child (if present) and recurses; uses other's child directly when self
+  has none. O(n_a + n_b) per level.
+- `difference`: iterates `self.children`; recurses when key is in `other`, prunes empty
+  results via `!merged.is_empty()`.
+- `intersection`: iterates `self.children`; only recurses when key is in `other`; prunes
+  empty results.
+- `symmetric_difference`: two-pass — pass 1 consumes `self.children` (collecting
+  `in_both: Vec<K>` in sorted order); pass 2 iterates `other.children`, using
+  `binary_search` on `in_both` (O(log n) per lookup) to add keys present only in other.
+- Empty-node pruning applied to difference and intersection (avoids accumulating interior
+  nodes with `value: None` and empty children).
+  Time: O(n × d), O(1) when both operands share the same tree.
+
+**Consequences:**
+- `OrdTrie` and `Trie` set operations: merge-walk and ptr_eq fast-paths complete.
+  Full merge-walk for `Trie` (beyond the ptr_eq fast-path) remains flatten-and-rebuild
+  since `GenericHashMap` has no merge-join iterator.
+- Both `Trie` and `OrdTrie` `from_sorted_iter` work would benefit from the
+  same bottom-up bulk-load algorithm (Investigation B); `OrdTrie` is a natural future
+  target if a bulk-load path is needed.
+
+**Alternatives considered (overall):**
+- Address all three in one phase: too much scope; the merge-walk and bulk-load
+  are independent and should be sequenced.
+- Skip bulk-load entirely: acceptable for now since `from_iter` is rarely a hot
+  path, but the asymptotic gain is real and should be captured eventually.
+
+**Consequences (overall):**
+- Complexity annotation corrections are complete; docs regenerated.
+- `front()`/`back()` O(1) caching ruled out; the O(log n) cost is accepted as
+  inherent to the B+ tree backing.
+- `from_iter` O(n) bulk load: implemented (Investigation B).
+- `OrdTrie` merge-walk and `Trie` `ptr_eq` fast-path: implemented (Investigation C).
+- All findings (positive and negative) recorded here per the decision log convention.

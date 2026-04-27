@@ -44,7 +44,7 @@ use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator};
 use core::mem;
@@ -66,7 +66,7 @@ use crate::nodes::hamt::{
 #[cfg(any(feature = "std", feature = "foldhash"))]
 use crate::shared_ptr::DefaultSharedPtr;
 
-/// Construct a hash map from a sequence of key/value pairs.
+/// Constructs a hash map from a sequence of key/value pairs.
 ///
 /// # Examples
 ///
@@ -224,7 +224,7 @@ where
     V: Clone + Hash,
     P: SharedPointerKind,
 {
-    /// Construct a hash map with a single mapping.
+    /// Constructs a hash map with a single mapping.
     ///
     /// # Examples
     ///
@@ -251,7 +251,7 @@ where
     V: Clone + Hash,
     P: SharedPointerKind,
 {
-    /// Construct a hash map with a single mapping (no_std + foldhash).
+    /// Constructs a hash map with a single mapping (no_std + foldhash).
     #[inline]
     #[must_use]
     pub fn unit(k: K, v: V) -> GenericHashMap<K, V, foldhash::fast::RandomState, P, H> {
@@ -260,7 +260,7 @@ where
 }
 
 impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> {
-    /// Construct an empty hash map.
+    /// Constructs an empty hash map.
     #[inline]
     #[must_use]
     pub fn new() -> Self
@@ -270,7 +270,7 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         Self::default()
     }
 
-    /// Test whether a hash map is empty.
+    /// Tests whether a hash map is empty.
     ///
     /// Time: O(1)
     ///
@@ -292,7 +292,7 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         self.len() == 0
     }
 
-    /// Get the size of a hash map.
+    /// Returns the size of the map.
     ///
     /// Time: O(1)
     ///
@@ -313,7 +313,7 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         self.size
     }
 
-    /// Test whether two maps refer to the same content in memory.
+    /// Tests whether two maps refer to the same content in memory.
     ///
     /// This is true if the two sides are references to the same map,
     /// or if the two maps refer to the same root node.
@@ -322,6 +322,7 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
     /// if you're comparing a map to a fresh clone of itself.
     ///
     /// Time: O(1)
+    #[must_use]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         match (&self.root, &other.root) {
             (Some(a), Some(b)) => SharedPointer::ptr_eq(a, b),
@@ -330,7 +331,7 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         }
     }
 
-    /// Construct an empty hash map using the provided hasher.
+    /// Constructs an empty hash map using the provided hasher.
     #[inline]
     #[must_use]
     pub fn with_hasher(hasher: S) -> Self {
@@ -344,7 +345,7 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         }
     }
 
-    /// Get a reference to the map's [`BuildHasher`][BuildHasher].
+    /// Returns a reference to the map's [`BuildHasher`][BuildHasher].
     ///
     /// [BuildHasher]: https://doc.rust-lang.org/std/hash/trait.BuildHasher.html
     #[must_use]
@@ -352,7 +353,7 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         &self.hasher
     }
 
-    /// Construct an empty hash map using the same hasher as the
+    /// Constructs an empty hash map using the same hasher as the
     /// current hash map.
     #[inline]
     #[must_use]
@@ -372,7 +373,7 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         }
     }
 
-    /// Get an iterator over the key/value pairs of a hash map.
+    /// Returns an iterator over the key/value pairs.
     ///
     /// Please note that the order is consistent between maps using
     /// the same hasher, but no other ordering guarantee is offered.
@@ -387,7 +388,7 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         }
     }
 
-    /// Get an iterator over a hash map's keys.
+    /// Returns an iterator over the keys.
     ///
     /// Please note that the order is consistent between maps using
     /// the same hasher, but no other ordering guarantee is offered.
@@ -402,7 +403,7 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         }
     }
 
-    /// Get an iterator over a hash map's values.
+    /// Returns an iterator over the values.
     ///
     /// Please note that the order is consistent between maps using
     /// the same hasher, but no other ordering guarantee is offered.
@@ -465,17 +466,24 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
         self.kv_merkle_valid = true;
     }
 
-    /// Return a content hash of this map.
+    /// Returns a content hash of this map.
     ///
     /// The hash covers both keys and values and is order-independent:
     /// two maps with the same key-value pairs produce the same hash
     /// regardless of insertion history. It is maintained incrementally
-    /// during `insert` and `remove`; in-place mutations (`get_mut`,
-    /// `iter_mut`, entry API) invalidate it and trigger a full O(n)
-    /// recompute on the next call.
+    /// during [`insert`][Self::insert] and [`remove`][Self::remove];
+    /// in-place mutations (`get_mut`, `iter_mut`, entry API) invalidate
+    /// it and trigger a full O(n) recompute on the next call.
+    ///
+    /// Takes `&mut self` because the cached value is stored in a plain
+    /// `bool` flag that requires write access to update (unlike the
+    /// `AtomicU64` cache used by [`HashSet`][crate::HashSet] and
+    /// [`OrdMap`][crate::OrdMap]).
     ///
     /// When both operands have a valid content hash, `PartialEq`
-    /// returns directly from the hash comparison in O(1).
+    /// returns directly from the hash comparison in O(1). Use
+    /// [`content_hash_valid`][Self::content_hash_valid] to check
+    /// without triggering a recompute.
     ///
     /// Time: O(1) amortised; O(n) after in-place mutations.
     #[inline]
@@ -498,6 +506,8 @@ impl<K, V, S, P: SharedPointerKind, H: HashWidth> GenericHashMap<K, V, S, P, H> 
     ///
     /// When `false`, the next call to [`content_hash`][Self::content_hash]
     /// will recompute the hash in O(n).
+    ///
+    /// Time: O(1)
     #[inline]
     #[must_use]
     pub fn content_hash_valid(&self) -> bool {
@@ -709,7 +719,7 @@ where
         true
     }
 
-    /// Get the value for a key from a hash map.
+    /// Returns a reference to the value for a key.
     ///
     /// Time: O(log n)
     ///
@@ -737,7 +747,7 @@ where
         }
     }
 
-    /// Get the key/value pair for a key from a hash map.
+    /// Returns the key/value pair for a key.
     ///
     /// Time: O(log n)
     ///
@@ -791,7 +801,7 @@ where
         self.get(k).is_some()
     }
 
-    /// Test whether a map is a submap of another map, meaning that
+    /// Tests whether a map is a submap of another map, meaning that
     /// all keys in our map must also be in the other map, with the
     /// same values.
     ///
@@ -808,7 +818,7 @@ where
             .all(|(k, v)| other.borrow().get(k).map(|ov| cmp(v, ov)).unwrap_or(false))
     }
 
-    /// Test whether a map is a proper submap of another map, meaning
+    /// Tests whether a map is a proper submap of another map, meaning
     /// that all keys in our map must also be in the other map, with
     /// the same values. To be a proper submap, ours must also contain
     /// fewer keys than the other map.
@@ -825,7 +835,7 @@ where
         self.len() != other.borrow().len() && self.is_submap_by(other, cmp)
     }
 
-    /// Test whether a map is a submap of another map, meaning that
+    /// Tests whether a map is a submap of another map, meaning that
     /// all keys in our map must also be in the other map, with the
     /// same values.
     ///
@@ -850,7 +860,7 @@ where
         self.is_submap_by(other.borrow(), PartialEq::eq)
     }
 
-    /// Test whether a map is a proper submap of another map, meaning
+    /// Tests whether a map is a proper submap of another map, meaning
     /// that all keys in our map must also be in the other map, with
     /// the same values. To be a proper submap, ours must also contain
     /// fewer keys than the other map.
@@ -880,7 +890,7 @@ where
         self.is_proper_submap_by(other.borrow(), PartialEq::eq)
     }
 
-    /// Compute the diff between two hash maps.
+    /// Computes the diff between two hash maps.
     ///
     /// Returns an iterator of [`DiffItem`] values describing the
     /// differences between `self` (old) and `other` (new). Keys
@@ -972,7 +982,7 @@ where
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    /// Apply a diff to produce a new map.
+    /// Applies a diff to produce a new map.
     ///
     /// Takes any iterator of [`DiffItem`] values (such as from
     /// [`diff`][GenericHashMap::diff]) and applies each change —
@@ -1012,7 +1022,7 @@ where
         out
     }
 
-    /// Split a map into two maps, where the first contains entries
+    /// Splits a map into two maps, where the first contains entries
     /// that satisfy the predicate and the second contains entries
     /// that do not.
     ///
@@ -1148,7 +1158,7 @@ where
     S: BuildHasher,
     P: SharedPointerKind,
 {
-    /// Insert without maintaining kv_merkle (invalidates it).
+    /// Inserts without maintaining kv_merkle (invalidates it).
     /// Used by internal code paths that don't have V: Hash.
     pub(crate) fn insert_invalidate_kv(&mut self, k: K, v: V) -> Option<V> {
         let hash = hash_key(&self.hasher, &k);
@@ -1161,7 +1171,7 @@ where
         result.map(|(_, v)| v)
     }
 
-    /// Remove without maintaining kv_merkle (invalidates it).
+    /// Removes without maintaining kv_merkle (invalidates it).
     /// Used by internal code paths that don't have V: Hash.
     pub(crate) fn remove_invalidate_kv<Q>(&mut self, k: &Q) -> Option<(K, V)>
     where
@@ -1190,7 +1200,7 @@ where
     S: BuildHasher,
     P: SharedPointerKind,
 {
-    /// Get a mutable iterator over the values of a hash map.
+    /// Returns a mutable iterator over the values.
     ///
     /// Please note that the order is consistent between maps using
     /// the same hasher, but no other ordering guarantee is offered.
@@ -1207,7 +1217,7 @@ where
         }
     }
 
-    /// Get a mutable reference to the value for a key from a hash
+    /// Returns a mutable reference to the value for a key
     /// map.
     ///
     /// Note: invalidates the key-value Merkle hash, causing subsequent
@@ -1238,7 +1248,7 @@ where
         self.get_key_value_mut(key).map(|(_, v)| v)
     }
 
-    /// Get the key/value pair for a key from a hash map, returning a mutable reference to the value.
+    /// Returns the key/value pair for a key, with a mutable reference to the value.
     ///
     /// Note: invalidates the key-value Merkle hash. See [`get_mut`][Self::get_mut].
     ///
@@ -1268,7 +1278,7 @@ where
         }
     }
 
-    /// Insert a key/value mapping into a map, maintaining the
+    /// Inserts a key/value mapping into a map, maintaining the
     /// key-value Merkle hash for O(1) equality checks.
     ///
     /// If the map already has a mapping for the given key, the
@@ -1323,7 +1333,7 @@ where
         }
     }
 
-    /// Remove a key/value pair from a map, if it exists, and return
+    /// Removes a key/value pair from a map, if it exists, and return
     /// the removed value. Maintains the key-value Merkle hash.
     ///
     /// This is a copy-on-write operation, so that the parts of the
@@ -1351,7 +1361,7 @@ where
         self.remove_with_key(k).map(|(_, v)| v)
     }
 
-    /// Remove a key/value pair from a map, if it exists, and return
+    /// Removes a key/value pair from a map, if it exists, and return
     /// the removed key and value. Maintains the key-value Merkle hash.
     ///
     /// Time: O(log n)
@@ -1389,7 +1399,7 @@ where
         result
     }
 
-    /// Filter out values from a map which don't satisfy a predicate.
+    /// Filters out values from a map which don't satisfy a predicate.
     ///
     /// This is slightly more efficient than filtering using an
     /// iterator, in that it doesn't need to rehash the retained
@@ -1435,7 +1445,7 @@ where
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    /// Get the [`Entry`][Entry] for a key in the map for in-place manipulation.
+    /// Returns the [`Entry`][Entry] for a key for in-place manipulation.
     ///
     /// Time: O(log n)
     ///
@@ -1463,7 +1473,7 @@ where
         }
     }
 
-    /// Construct a new hash map by inserting a key/value mapping into a map.
+    /// Constructs a new hash map by inserting a key/value mapping into a map.
     ///
     /// If the map already has a mapping for the given key, the previous value
     /// is overwritten.
@@ -1492,7 +1502,7 @@ where
         out
     }
 
-    /// Construct a new hash map by inserting a key/value mapping into
+    /// Constructs a new hash map by inserting a key/value mapping into
     /// a map.
     ///
     /// If the map already has a mapping for the given key, we call
@@ -1512,7 +1522,7 @@ where
         }
     }
 
-    /// Construct a new map by inserting a key/value mapping into a
+    /// Constructs a new map by inserting a key/value mapping into a
     /// map.
     ///
     /// If the map already has a mapping for the given key, we call
@@ -1535,7 +1545,7 @@ where
         }
     }
 
-    /// Construct a new map by inserting a key/value mapping into a
+    /// Constructs a new map by inserting a key/value mapping into a
     /// map, returning the old value for the key as well as the new
     /// map.
     ///
@@ -1586,9 +1596,9 @@ where
         }
     }
 
-    /// Construct a new map without the given key.
+    /// Constructs a new map without the given key.
     ///
-    /// Construct a map that's a copy of the current map, absent the
+    /// Constructs a map that's a copy of the current map, absent the
     /// mapping for `key` if it's present.
     ///
     /// Time: O(log n)
@@ -1626,7 +1636,7 @@ where
         out
     }
 
-    /// Remove all entries whose keys are in the given set.
+    /// Removes all entries whose keys are in the given set.
     ///
     /// Time: O(m log n) where m = keys.len(), n = self.len()
     ///
@@ -1650,7 +1660,7 @@ where
         out
     }
 
-    /// Merge two maps with different value types using three closures:
+    /// Merges two maps with different value types using three closures:
     /// one for keys present only in `self`, one for keys in both maps,
     /// and one for keys present only in `other`.
     ///
@@ -1721,7 +1731,7 @@ where
         result
     }
 
-    /// Remove a key/value pair from a map, if it exists, and return
+    /// Removes a key/value pair from a map, if it exists, and return
     /// the removed value as well as the updated map.
     ///
     /// Time: O(log n)
@@ -1734,7 +1744,7 @@ where
         self.extract_with_key(k).map(|(_, v, m)| (v, m))
     }
 
-    /// Remove a key/value pair from a map, if it exists, and return
+    /// Removes a key/value pair from a map, if it exists, and return
     /// the removed key and value as well as the updated list.
     ///
     /// Time: O(log n)
@@ -1748,7 +1758,7 @@ where
         out.remove_with_key(k).map(|(k, v)| (k, v, out))
     }
 
-    /// Construct the union of two maps, keeping the values in the
+    /// Constructs the union of two maps, keeping the values in the
     /// current map when keys exist in both maps.
     ///
     /// Time: O(n log n)
@@ -1784,7 +1794,7 @@ where
         to_mutate
     }
 
-    /// Construct the union of two maps, using a function to decide
+    /// Constructs the union of two maps, using a function to decide
     /// what to do with the value when a key is in both maps.
     ///
     /// The function is called when a value exists in both maps, and
@@ -1802,7 +1812,7 @@ where
         self.union_with_key(other, |_, v1, v2| f(v1, v2))
     }
 
-    /// Construct the union of two maps, using a function to decide
+    /// Constructs the union of two maps, using a function to decide
     /// what to do with the value when a key is in both maps.
     ///
     /// The function is called when a value exists in both maps, and
@@ -1858,7 +1868,7 @@ where
         self
     }
 
-    /// Construct the union of a sequence of maps, selecting the value
+    /// Constructs the union of a sequence of maps, selecting the value
     /// of the leftmost when a key appears in more than one map.
     ///
     /// Time: O(n log n)
@@ -1882,7 +1892,7 @@ where
         i.into_iter().fold(Self::default(), Self::union)
     }
 
-    /// Construct the union of a sequence of maps, using a function to
+    /// Constructs the union of a sequence of maps, using a function to
     /// decide what to do with the value when a key is in more than
     /// one map.
     ///
@@ -1903,7 +1913,7 @@ where
             .fold(Self::default(), |a, b| a.union_with(b, &f))
     }
 
-    /// Construct the union of a sequence of maps, using a function to
+    /// Constructs the union of a sequence of maps, using a function to
     /// decide what to do with the value when a key is in more than
     /// one map.
     ///
@@ -1925,7 +1935,7 @@ where
             .fold(Self::default(), |a, b| a.union_with_key(b, &f))
     }
 
-    /// Construct the symmetric difference between two maps by discarding keys
+    /// Constructs the symmetric difference between two maps by discarding keys
     /// which occur in both maps.
     ///
     /// Time: O(n log n)
@@ -1946,7 +1956,7 @@ where
         self.symmetric_difference_with_key(other, |_, _, _| None)
     }
 
-    /// Construct the symmetric difference between two maps by using a function
+    /// Constructs the symmetric difference between two maps by using a function
     /// to decide what to do if a key occurs in both.
     ///
     /// Time: O(n log n)
@@ -1959,7 +1969,7 @@ where
         self.symmetric_difference_with_key(other, |_, a, b| f(a, b))
     }
 
-    /// Construct the symmetric difference between two maps by using a function
+    /// Constructs the symmetric difference between two maps by using a function
     /// to decide what to do if a key occurs in both. The function
     /// receives the key as well as both values.
     ///
@@ -1999,7 +2009,7 @@ where
         out.union(self)
     }
 
-    /// Construct the relative complement between two maps by discarding keys
+    /// Constructs the relative complement between two maps by discarding keys
     /// which occur in `other`.
     ///
     /// Time: O(m log n) where m is the size of the other map
@@ -2023,7 +2033,7 @@ where
         self
     }
 
-    /// Construct the intersection of two maps, keeping the values
+    /// Constructs the intersection of two maps, keeping the values
     /// from the current map.
     ///
     /// Time: O(n log n)
@@ -2044,7 +2054,7 @@ where
         self.intersection_with_key(other, |_, v, _| v)
     }
 
-    /// Construct the intersection of two maps, calling a function
+    /// Constructs the intersection of two maps, calling a function
     /// with both values for each key and using the result as the
     /// value for the key.
     ///
@@ -2064,7 +2074,7 @@ where
         self.intersection_with_key(other, |_, v1, v2| f(v1, v2))
     }
 
-    /// Construct the intersection of two maps, calling a function
+    /// Constructs the intersection of two maps, calling a function
     /// with the key and both values for each key and using the result
     /// as the value for the key.
     ///
@@ -2115,7 +2125,7 @@ where
     S: BuildHasher,
     P: SharedPointerKind,
 {
-    /// Check whether two maps share no keys.
+    /// Tests whether two maps share no keys.
     ///
     /// Time: O(n) — iterates the smaller map and checks each key
     /// against the larger map.
@@ -2149,7 +2159,7 @@ where
     S: BuildHasher,
     P: SharedPointerKind,
 {
-    /// Construct a new map with the same keys but values transformed
+    /// Constructs a new map with the same keys but values transformed
     /// by the given function.
     ///
     /// Time: O(n log n)
@@ -2177,7 +2187,7 @@ where
         result
     }
 
-    /// Construct a new map with the same keys but values transformed
+    /// Constructs a new map with the same keys but values transformed
     /// by the given function, which also receives the key.
     ///
     /// Time: O(n log n)
@@ -2205,7 +2215,7 @@ where
         result
     }
 
-    /// Construct a new map with the same keys but values transformed
+    /// Constructs a new map with the same keys but values transformed
     /// by a fallible function. Returns the first error encountered.
     ///
     /// Time: O(n log n)
@@ -2277,7 +2287,7 @@ where
     S: BuildHasher,
     P: SharedPointerKind,
 {
-    /// Construct a new map with keys transformed by the given
+    /// Constructs a new map with keys transformed by the given
     /// function, keeping the values. If the function maps two
     /// different keys to the same new key, one entry is kept
     /// (unspecified which).
@@ -2343,15 +2353,17 @@ where
     S: 'a + BuildHasher,
     P: SharedPointerKind,
 {
-    /// Insert the default value provided if there was no value
+    /// Inserts the default value provided if there was no value
     /// already, and return a mutable reference to the value.
+    #[must_use]
     pub fn or_insert(self, default: V) -> &'a mut V {
         self.or_insert_with(|| default)
     }
 
-    /// Insert the default value from the provided function if there
+    /// Inserts the default value from the provided function if there
     /// was no value already, and return a mutable reference to the
     /// value.
+    #[must_use]
     pub fn or_insert_with<F>(self, default: F) -> &'a mut V
     where
         F: FnOnce() -> V,
@@ -2362,8 +2374,9 @@ where
         }
     }
 
-    /// Insert a default value if there was no value already, and
+    /// Inserts a default value if there was no value already, and
     /// return a mutable reference to the value.
+    #[must_use]
     pub fn or_default(self) -> &'a mut V
     where
         V: Default,
@@ -2376,7 +2389,7 @@ where
         self.or_insert_with(Default::default)
     }
 
-    /// Get the key for this entry.
+    /// Returns the key for this entry.
     #[must_use]
     pub fn key(&self) -> &K {
         match self {
@@ -2387,6 +2400,7 @@ where
 
     /// Call the provided function to modify the value if the value
     /// exists.
+    #[must_use]
     pub fn and_modify<F>(mut self, f: F) -> Self
     where
         F: FnOnce(&mut V),
@@ -2420,15 +2434,16 @@ where
     S: 'a + BuildHasher,
     P: SharedPointerKind,
 {
-    /// Get the key for this entry.
+    /// Returns the key for this entry.
     #[must_use]
     pub fn key(&self) -> &K {
         &self.key
     }
 
-    /// Remove this entry from the map and return the removed mapping.
+    /// Removes this entry from the map and return the removed mapping.
     ///
     /// Note: invalidates the key-value Merkle hash.
+    #[must_use]
     pub fn remove_entry(self) -> (K, V) {
         self.map.kv_merkle_valid = false;
         // unwrap: occupied entries can only be created for non-empty maps
@@ -2438,7 +2453,7 @@ where
         result.unwrap()
     }
 
-    /// Get the current value.
+    /// Returns the current value.
     #[must_use]
     pub fn get(&self) -> &V {
         // unwrap: occupied entries can only be created for non-empty maps
@@ -2452,7 +2467,7 @@ where
             .1
     }
 
-    /// Get a mutable reference to the current value.
+    /// Returns a mutable reference to the current value.
     ///
     /// Note: invalidates the key-value Merkle hash.
     #[must_use]
@@ -2481,7 +2496,7 @@ where
         mem::replace(self.get_mut(), value)
     }
 
-    /// Remove this entry from the map and return the removed value.
+    /// Removes this entry from the map and return the removed value.
     pub fn remove(self) -> V {
         self.remove_entry().1
     }
@@ -2508,7 +2523,7 @@ where
     S: 'a + BuildHasher,
     P: SharedPointerKind,
 {
-    /// Get the key for this entry.
+    /// Returns the key for this entry.
     #[must_use]
     pub fn key(&self) -> &K {
         &self.key
@@ -2520,7 +2535,7 @@ where
         self.key
     }
 
-    /// Insert a value into this entry.
+    /// Inserts a value into this entry.
     ///
     /// Note: invalidates the key-value Merkle hash.
     pub fn insert(self, value: V) -> &'a mut V {
@@ -2772,6 +2787,11 @@ where
 {
     type Output = V;
 
+    /// Returns a reference to the value associated with `key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index(&self, key: &Q) -> &Self::Output {
         match self.get(key) {
             None => panic!("HashMap::index: invalid key"),
@@ -2788,6 +2808,11 @@ where
     S: BuildHasher,
     P: SharedPointerKind,
 {
+    /// Returns a mutable reference to the value associated with `key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index_mut(&mut self, key: &Q) -> &mut Self::Output {
         match self.get_mut(key) {
             None => panic!("HashMap::index_mut: invalid key"),
@@ -2808,6 +2833,23 @@ where
             d.entry(k, v);
         }
         d.finish()
+    }
+}
+
+impl<K, V, S, P, H: HashWidth> Display for GenericHashMap<K, V, S, P, H>
+where
+    K: Display,
+    V: Display,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (k, v) in self {
+            write!(f, "{sep}{k}: {v}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
     }
 }
 
@@ -3192,7 +3234,7 @@ impl<K, V> Clone for DiffItem<'_, '_, K, V> {
 
 impl<K, V> Copy for DiffItem<'_, '_, K, V> {}
 
-/// Check whether two BuildHasher instances produce the same hash output.
+/// Tests whether two BuildHasher instances produce the same hash output.
 ///
 /// Maps derived from a common ancestor share their hasher state.
 /// Independently-constructed maps (e.g. two `HashMap::new()` calls) have

@@ -230,7 +230,7 @@ where
     V: Clone + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {
-    /// Return a pivot key for splitting: the median separator key of the root
+    /// Returns a pivot key for splitting: the median separator key of the root
     /// Branch, or the median entry key of a root Leaf. O(1).
     fn root_pivot_key(&self) -> Option<K> {
         use crate::nodes::btree::Node;
@@ -247,7 +247,7 @@ where
         }
     }
 
-    /// Construct the union of two maps in parallel using a join-based algorithm.
+    /// Constructs the union of two maps in parallel using a join-based algorithm.
     ///
     /// Values from `self` take precedence for keys present in both maps.
     ///
@@ -285,7 +285,7 @@ where
         result
     }
 
-    /// Construct the intersection of two maps in parallel, keeping values from `self`.
+    /// Constructs the intersection of two maps in parallel, keeping values from `self`.
     ///
     /// This is the parallel equivalent of [`intersection`][GenericOrdMap::intersection].
     ///
@@ -320,7 +320,7 @@ where
         result
     }
 
-    /// Construct the relative complement (self − other) in parallel:
+    /// Constructs the relative complement (self − other) in parallel:
     /// keys in `self` not present in `other`.
     ///
     /// This is the parallel equivalent of [`difference`][GenericOrdMap::difference].
@@ -356,7 +356,7 @@ where
         result
     }
 
-    /// Construct the symmetric difference of two maps in parallel:
+    /// Constructs the symmetric difference of two maps in parallel:
     /// keys present in exactly one of the two maps.
     ///
     /// This is the parallel equivalent of
@@ -404,7 +404,7 @@ where
     V: Clone + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {
-    /// Return a new map keeping only entries that satisfy the predicate.
+    /// Returns a new map keeping only entries that satisfy the predicate.
     ///
     /// Evaluates `f(&key, &value)` for every entry in parallel; returns a new
     /// map containing only those where `f` returns `true`. The original map
@@ -427,7 +427,7 @@ where
             .collect()
     }
 
-    /// Return a new map with values transformed by `f`, applied in parallel.
+    /// Returns a new map with values transformed by `f`, applied in parallel.
     ///
     /// Keys are unchanged; each value is replaced by `f(&value)`. Equivalent
     /// to the sequential [`map_values`][Self::map_values] but evaluated in
@@ -462,7 +462,7 @@ where
         }
     }
 
-    /// Return a new map with values transformed by `f(key, value)`, applied in
+    /// Returns a new map with values transformed by `f(key, value)`, applied in
     /// parallel.
     ///
     /// Each entry's value is replaced by `f(&key, &value)`. Equivalent to
@@ -637,7 +637,7 @@ where
         }
     }
 
-    /// Construct the union of two sets in parallel using a join-based algorithm.
+    /// Constructs the union of two sets in parallel using a join-based algorithm.
     ///
     /// This is the parallel equivalent of [`union`][GenericOrdSet::union].
     ///
@@ -669,7 +669,7 @@ where
         result
     }
 
-    /// Construct the intersection of two sets in parallel.
+    /// Constructs the intersection of two sets in parallel.
     ///
     /// This is the parallel equivalent of [`intersection`][GenericOrdSet::intersection].
     ///
@@ -700,7 +700,7 @@ where
         result
     }
 
-    /// Construct the relative complement (self − other) in parallel.
+    /// Constructs the relative complement (self − other) in parallel.
     ///
     /// This is the parallel equivalent of [`difference`][GenericOrdSet::difference].
     ///
@@ -731,7 +731,7 @@ where
         result
     }
 
-    /// Construct the symmetric difference of two sets in parallel.
+    /// Constructs the symmetric difference of two sets in parallel.
     ///
     /// This is the parallel equivalent of
     /// [`symmetric_difference`][GenericOrdSet::symmetric_difference].
@@ -767,7 +767,7 @@ where
         result
     }
 
-    /// Return a new set keeping only elements that satisfy the predicate.
+    /// Returns a new set keeping only elements that satisfy the predicate.
     ///
     /// Evaluates `f(&element)` for every element in parallel; returns a new
     /// set containing only those where `f` returns `true`. The original set

@@ -4,7 +4,7 @@
 
 //! Iterators over immutable data.
 
-/// Create an iterator of values using a function to update an owned state
+/// Creates an iterator of values using a function to update an owned state
 /// value.
 ///
 /// The function is called with the current state as its argument, and should

@@ -38,7 +38,7 @@ use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::cmp::Ordering;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator};
 use core::ops::RangeBounds;
@@ -51,7 +51,7 @@ use crate::hashset::GenericHashSet;
 use crate::shared_ptr::DefaultSharedPtr;
 use crate::GenericOrdMap;
 
-/// Construct a set from a sequence of values.
+/// Constructs a set from a sequence of values.
 ///
 /// # Examples
 ///
@@ -120,7 +120,7 @@ pub struct GenericOrdSet<A, P: SharedPointerKind> {
 }
 
 impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
-    /// Construct an empty set.
+    /// Constructs an empty set.
     #[inline]
     #[must_use]
     pub fn new() -> Self {
@@ -129,7 +129,7 @@ impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
         }
     }
 
-    /// Construct a set with a single value.
+    /// Constructs a set with a single value.
     ///
     /// # Examples
     ///
@@ -147,7 +147,7 @@ impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
         }
     }
 
-    /// Test whether a set is empty.
+    /// Tests whether a set is empty.
     ///
     /// Time: O(1)
     ///
@@ -169,7 +169,7 @@ impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
         self.len() == 0
     }
 
-    /// Get the size of a set.
+    /// Returns the size of the set.
     ///
     /// Time: O(1)
     ///
@@ -186,7 +186,7 @@ impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
         self.map.len()
     }
 
-    /// Test whether two sets refer to the same content in memory.
+    /// Tests whether two sets refer to the same content in memory.
     ///
     /// This is true if the two sides are references to the same set,
     /// or if the two sets refer to the same root node.
@@ -195,6 +195,7 @@ impl<A, P: SharedPointerKind> GenericOrdSet<A, P> {
     /// if you're comparing a set to a fresh clone of itself.
     ///
     /// Time: O(1)
+    #[must_use]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.map.ptr_eq(&other.map)
     }
@@ -225,7 +226,7 @@ where
     A: Ord,
     P: SharedPointerKind,
 {
-    /// Get the smallest value in a set.
+    /// Returns the smallest value in the set.
     ///
     /// If the set is empty, returns `None`.
     ///
@@ -235,7 +236,7 @@ where
         self.map.get_min().map(|v| &v.0)
     }
 
-    /// Get the largest value in a set.
+    /// Returns the largest value in the set.
     ///
     /// If the set is empty, returns `None`.
     ///
@@ -245,7 +246,7 @@ where
         self.map.get_max().map(|v| &v.0)
     }
 
-    /// Create an iterator over the contents of the set.
+    /// Creates an iterator over the contents of the set.
     #[must_use]
     pub fn iter(&self) -> Iter<'_, A, P> {
         Iter {
@@ -253,7 +254,7 @@ where
         }
     }
 
-    /// Create an iterator over a range inside the set.
+    /// Creates an iterator over a range inside the set.
     #[must_use]
     pub fn range<R, Q>(&self, range: R) -> RangedIter<'_, A, P>
     where
@@ -265,7 +266,7 @@ where
         }
     }
 
-    /// Get an iterator over the differences between this set and
+    /// Returns an iterator over the differences between this set and
     /// another, i.e. the set of entries to add or remove to this set
     /// in order to make it equal to the other set.
     ///
@@ -283,7 +284,7 @@ where
         }
     }
 
-    /// Test if a value is part of a set.
+    /// Tests whether a value is in the set.
     ///
     /// Time: O(log n)
     ///
@@ -345,7 +346,7 @@ where
         self.map.get_key_value(value).map(|(k, _)| k)
     }
 
-    /// Get the closest smaller value in a set to a given value.
+    /// Returns the closest smaller value in the set to a given value.
     ///
     /// If the set contains the given value, this is returned.
     /// Otherwise, the closest value in the set smaller than the
@@ -368,7 +369,7 @@ where
         self.map.get_prev(value).map(|(k, _)| k)
     }
 
-    /// Get the closest larger value in a set to a given value.
+    /// Returns the closest larger value in the set to a given value.
     ///
     /// If the set contains the given value, this is returned.
     /// Otherwise, the closest value in the set larger than the
@@ -391,7 +392,7 @@ where
         self.map.get_next(value).map(|(k, _)| k)
     }
 
-    /// Get the closest strictly smaller value in a set to a given value.
+    /// Returns the closest strictly smaller value in the set to a given value.
     ///
     /// Unlike [`get_prev`][Self::get_prev], this never returns the given
     /// value itself — it uses `Bound::Excluded`.
@@ -413,7 +414,7 @@ where
         self.map.get_prev_exclusive(value).map(|(k, _)| k)
     }
 
-    /// Get the closest strictly larger value in a set to a given value.
+    /// Returns the closest strictly larger value in the set to a given value.
     ///
     /// Unlike [`get_next`][Self::get_next], this never returns the given
     /// value itself — it uses `Bound::Excluded`.
@@ -435,7 +436,7 @@ where
         self.map.get_next_exclusive(value).map(|(k, _)| k)
     }
 
-    /// Test whether a set is a subset of another set, meaning that
+    /// Tests whether a set is a subset of another set, meaning that
     /// all values in our set must also be in the other set.
     ///
     /// Time: O(n log m) where m is the size of the other set
@@ -451,7 +452,7 @@ where
         self.iter().all(|a| other.contains(a))
     }
 
-    /// Test whether a set is a proper subset of another set, meaning
+    /// Tests whether a set is a proper subset of another set, meaning
     /// that all values in our set must also be in the other set. A
     /// proper subset must also be smaller than the other set.
     ///
@@ -464,7 +465,7 @@ where
         self.len() != other.borrow().len() && self.is_subset(other)
     }
 
-    /// Check whether two sets share no elements.
+    /// Tests whether two sets share no elements.
     ///
     /// Uses a simultaneous traversal of both sets in sorted order,
     /// returning `false` at the first shared element. O(n + m) time.
@@ -501,7 +502,7 @@ where
     A: Ord + Clone,
     P: SharedPointerKind,
 {
-    /// Insert a value into a set.
+    /// Inserts a value into a set.
     ///
     /// Time: O(log n)
     ///
@@ -523,7 +524,7 @@ where
         self.map.insert_key_value(a, ()).map(|(k, _)| k)
     }
 
-    /// Remove a value from a set.
+    /// Removes a value from a set.
     ///
     /// Time: O(log n)
     #[inline]
@@ -534,7 +535,7 @@ where
         self.map.remove_with_key(value).map(|(k, _)| k)
     }
 
-    /// Apply a diff to produce a new set.
+    /// Applies a diff to produce a new set.
     ///
     /// Takes any iterator of [`DiffItem`] values (such as from
     /// [`diff`][GenericOrdSet::diff]) and applies each change —
@@ -573,7 +574,7 @@ where
         out
     }
 
-    /// Remove all values from a set that do not satisfy the given
+    /// Removes all values from a set that do not satisfy the given
     /// predicate.
     ///
     /// Time: O(n log n)
@@ -597,7 +598,7 @@ where
         }
     }
 
-    /// Split a set into two sets, where the first contains values
+    /// Splits a set into two sets, where the first contains values
     /// that satisfy the predicate and the second contains values
     /// that do not.
     ///
@@ -650,7 +651,7 @@ where
         out
     }
 
-    /// Remove the smallest value from a set.
+    /// Removes the smallest value from a set.
     ///
     /// Time: O(log n)
     pub fn remove_min(&mut self) -> Option<A> {
@@ -659,7 +660,7 @@ where
         self.remove(&key)
     }
 
-    /// Remove the largest value from a set.
+    /// Removes the largest value from a set.
     ///
     /// Time: O(log n)
     pub fn remove_max(&mut self) -> Option<A> {
@@ -668,7 +669,7 @@ where
         self.remove(&key)
     }
 
-    /// Construct a new set from the current set with the given value
+    /// Constructs a new set from the current set with the given value
     /// added.
     ///
     /// Time: O(log n)
@@ -691,7 +692,7 @@ where
         out
     }
 
-    /// Construct a new set with the given value removed if it's in
+    /// Constructs a new set with the given value removed if it's in
     /// the set.
     ///
     /// Time: O(log n)
@@ -705,7 +706,7 @@ where
         out
     }
 
-    /// Remove a value from the set, returning the stored element and
+    /// Removes a value from the set, returning the stored element and
     /// the updated set, or `None` if the value was not present.
     ///
     /// This is the functional counterpart to [`remove`][Self::remove].
@@ -724,7 +725,7 @@ where
         Some((elem, out))
     }
 
-    /// Remove the smallest value from a set, and return that value as
+    /// Removes the smallest value from a set, and return that value as
     /// well as the updated set.
     ///
     /// Time: O(log n)
@@ -736,7 +737,7 @@ where
         }
     }
 
-    /// Remove the largest value from a set, and return that value as
+    /// Removes the largest value from a set, and return that value as
     /// well as the updated set.
     ///
     /// Time: O(log n)
@@ -748,7 +749,7 @@ where
         }
     }
 
-    /// Construct the union of two sets.
+    /// Constructs the union of two sets.
     ///
     /// Time: O(n log n)
     ///
@@ -775,7 +776,7 @@ where
         to_mutate
     }
 
-    /// Construct the union of multiple sets.
+    /// Constructs the union of multiple sets.
     ///
     /// Time: O(n log n)
     #[must_use]
@@ -786,7 +787,7 @@ where
         i.into_iter().fold(Self::default(), Self::union)
     }
 
-    /// Construct the symmetric difference between two sets.
+    /// Constructs the symmetric difference between two sets.
     ///
     /// Time: O(n log n)
     ///
@@ -810,7 +811,7 @@ where
         self
     }
 
-    /// Construct the relative complement between two sets, that is the set
+    /// Constructs the relative complement between two sets, that is the set
     /// of values in `self` that do not occur in `other`.
     ///
     /// Time: O(m log n) where m is the size of the other set
@@ -833,7 +834,7 @@ where
         self
     }
 
-    /// Construct the intersection of two sets.
+    /// Constructs the intersection of two sets.
     ///
     /// Time: O(n log n)
     ///
@@ -858,7 +859,7 @@ where
         out
     }
 
-    /// Split a set into two, with the left hand set containing values
+    /// Splits a set into two, with the left hand set containing values
     /// which are smaller than `split`, and the right hand set
     /// containing values which are larger than `split`.
     ///
@@ -874,7 +875,7 @@ where
         (left, right)
     }
 
-    /// Split a set into two, with the left hand set containing values
+    /// Splits a set into two, with the left hand set containing values
     /// which are smaller than `split`, and the right hand set
     /// containing values which are larger than `split`.
     ///
@@ -907,7 +908,7 @@ where
         (left, present, right)
     }
 
-    /// Split a set at `key` in O(log n), consuming it.
+    /// Splits a set at `key` in O(log n), consuming it.
     ///
     /// Returns `(left, present, right)` where every element in `left` is strictly
     /// less than `key`, every element in `right` is strictly greater, and `present`
@@ -937,7 +938,7 @@ where
         }
     }
 
-    /// Construct a set with only the `n` smallest values from a given
+    /// Constructs a set with only the `n` smallest values from a given
     /// set.
     ///
     /// Time: O(n)
@@ -946,7 +947,7 @@ where
         self.iter().take(n).cloned().collect()
     }
 
-    /// Construct a set with the `n` smallest values removed from a
+    /// Constructs a set with the `n` smallest values removed from a
     /// given set.
     ///
     /// Time: O(n)
@@ -1008,14 +1009,27 @@ where
     A: Ord + Hash,
     P: SharedPointerKind,
 {
-    /// Return a content hash of this set.
+    /// Returns a content hash of this set.
+    ///
+    /// Only available with the `ord-hash` feature (enabled by default).
     ///
     /// The hash is order-independent: two sets with the same elements
     /// produce the same value regardless of insertion history. It is
     /// computed once and cached; subsequent calls are O(1).
     ///
     /// **`PartialEq` integration:** when both operands have a populated
-    /// cache, `eq` returns in O(1) via hash comparison.
+    /// cache, `eq` returns directly from the hash comparison in O(1).
+    /// Equal hashes mean equal sets with probability ≥ 1 − 2⁻⁶⁴;
+    /// different hashes mean definitely unequal. The cache is invalidated
+    /// (reset to 0) on every mutation.
+    ///
+    /// Uses [`std::collections::hash_map::DefaultHasher`] internally. The
+    /// result is deterministic within a single compilation but is **not**
+    /// guaranteed stable across Rust versions and is not comparable across
+    /// different binaries. It is not a cryptographic hash.
+    ///
+    /// Returns a non-zero `u64`. A computed hash of `0` is stored as `1`
+    /// (the sentinel `0` means "not yet cached").
     ///
     /// Time: O(n) first call; O(1) thereafter.
     #[must_use]
@@ -1061,6 +1075,18 @@ where
 impl<A: Ord + Debug, P: SharedPointerKind> Debug for GenericOrdSet<A, P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         f.debug_set().entries(self.iter()).finish()
+    }
+}
+
+impl<A: Ord + Display, P: SharedPointerKind> Display for GenericOrdSet<A, P> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for a in self {
+            write!(f, "{sep}{a}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
     }
 }
 
@@ -1158,6 +1184,13 @@ where
     fn next_back(&mut self) -> Option<Self::Item> {
         self.it.next_back().map(|(k, _)| k)
     }
+}
+
+impl<'a, A, P> FusedIterator for RangedIter<'a, A, P>
+where
+    A: 'a + Ord,
+    P: SharedPointerKind,
+{
 }
 
 /// A consuming iterator over the elements of a set.

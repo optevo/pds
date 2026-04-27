@@ -45,7 +45,7 @@ use alloc::borrow::ToOwned;
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator};
 use core::ops::Deref;
@@ -67,7 +67,7 @@ use crate::ordset::GenericOrdSet;
 use crate::shared_ptr::DefaultSharedPtr;
 use crate::GenericVector;
 
-/// Construct a set from a sequence of values.
+/// Constructs a set from a sequence of values.
 ///
 /// # Examples
 ///
@@ -213,7 +213,7 @@ where
     S: BuildHasher + Default + Clone,
     P: SharedPointerKind,
 {
-    /// Construct a set with a single value.
+    /// Constructs a set with a single value.
     ///
     /// # Examples
     ///
@@ -232,7 +232,7 @@ where
 }
 
 impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
-    /// Construct an empty set.
+    /// Constructs an empty set.
     #[must_use]
     pub fn new() -> Self
     where
@@ -241,7 +241,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
         Self::default()
     }
 
-    /// Test whether a set is empty.
+    /// Tests whether a set is empty.
     ///
     /// Time: O(1)
     ///
@@ -263,7 +263,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
         self.len() == 0
     }
 
-    /// Get the size of a set.
+    /// Returns the size of the set.
     ///
     /// Time: O(1)
     ///
@@ -280,7 +280,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
         self.size
     }
 
-    /// Test whether two sets refer to the same content in memory.
+    /// Tests whether two sets refer to the same content in memory.
     ///
     /// This is true if the two sides are references to the same set,
     /// or if the two sets refer to the same root node.
@@ -289,6 +289,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
     /// if you're comparing a set to a fresh clone of itself.
     ///
     /// Time: O(1)
+    #[must_use]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         match (&self.root, &other.root) {
             (Some(a), Some(b)) => SharedPointer::ptr_eq(a, b),
@@ -297,7 +298,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
         }
     }
 
-    /// Construct an empty hash set using the provided hasher.
+    /// Constructs an empty hash set using the provided hasher.
     #[inline]
     #[must_use]
     pub fn with_hasher(hasher: S) -> Self {
@@ -310,7 +311,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
         }
     }
 
-    /// Get a reference to the set's [`BuildHasher`][BuildHasher].
+    /// Returns a reference to the set's [`BuildHasher`][BuildHasher].
     ///
     /// [BuildHasher]: https://doc.rust-lang.org/std/hash/trait.BuildHasher.html
     #[must_use]
@@ -318,7 +319,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
         &self.hasher
     }
 
-    /// Construct an empty hash set using the same hasher as the current hash set.
+    /// Constructs an empty hash set using the same hasher as the current hash set.
     #[inline]
     #[must_use]
     pub fn new_from<A2>(&self) -> GenericHashSet<A2, S, P, H>
@@ -357,7 +358,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
         self.content_hash_cache.store(0, AtomicOrdering::Relaxed);
     }
 
-    /// Get an iterator over the values in a hash set.
+    /// Returns an iterator over the values in the set.
     ///
     /// Please note that the order is consistent between sets using
     /// the same hasher, but no other ordering guarantee is offered.
@@ -371,7 +372,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
         }
     }
 
-    /// Return a deterministic fingerprint of the set's contents.
+    /// Returns a deterministic fingerprint of the set's contents.
     ///
     /// Computed by combining the per-element HAMT hashes using `fmix64`.
     /// Because HAMT hashes are order-independent (stored at insertion time),
@@ -405,11 +406,11 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericHashSet<A, S, P, H> {
         h
     }
 
-    /// Return `true` if the content hash has been computed and is currently
-    /// cached.
+    /// Tests whether the content hash is currently cached.
     ///
-    /// A `false` result means the next call to [`content_hash`][Self::content_hash]
-    /// will perform a full O(n) traversal.
+    /// Returns `false` when the set has not been hashed yet or was recently
+    /// mutated. The next call to [`content_hash`][Self::content_hash] will
+    /// perform a full O(n) traversal.
     ///
     /// Time: O(1)
     #[must_use]
@@ -474,7 +475,7 @@ where
         true
     }
 
-    /// Test if a value is part of a set.
+    /// Tests whether a value is in the set.
     ///
     /// Time: O(log n)
     #[must_use]
@@ -489,7 +490,7 @@ where
         }
     }
 
-    /// Get a reference to the element in the set that is equal to the
+    /// Returns a reference to the element in the set that is equal to the
     /// given value, if it exists.
     ///
     /// This is useful when the stored type carries data beyond what
@@ -511,7 +512,7 @@ where
         }
     }
 
-    /// Test whether a set is a subset of another set, meaning that
+    /// Tests whether a set is a subset of another set, meaning that
     /// all values in our set must also be in the other set.
     ///
     /// Time: O(n log n)
@@ -524,7 +525,7 @@ where
         self.iter().all(|a| o.contains(a))
     }
 
-    /// Test whether a set is a proper subset of another set, meaning
+    /// Tests whether a set is a proper subset of another set, meaning
     /// that all values in our set must also be in the other set. A
     /// proper subset must also be smaller than the other set.
     ///
@@ -537,7 +538,7 @@ where
         self.len() != other.borrow().len() && self.is_subset(other)
     }
 
-    /// Compute the diff between two hash sets.
+    /// Computes the diff between two hash sets.
     ///
     /// Returns an iterator of [`DiffItem`] values describing the
     /// differences between `self` (old) and `other` (new). Values
@@ -628,7 +629,7 @@ where
     S: BuildHasher,
     P: SharedPointerKind,
 {
-    /// Insert a value into a set.
+    /// Inserts a value into a set.
     ///
     /// Time: O(log n)
     #[inline]
@@ -645,7 +646,7 @@ where
         }
     }
 
-    /// Remove a value from a set if it exists.
+    /// Removes a value from a set if it exists.
     ///
     /// Time: O(log n)
     pub fn remove<Q>(&mut self, value: &Q) -> Option<A>
@@ -661,7 +662,7 @@ where
         result.map(|v| v.0)
     }
 
-    /// Filter out values from a set which don't satisfy a predicate.
+    /// Filters out values from a set which don't satisfy a predicate.
     ///
     /// This is slightly more efficient than filtering using an
     /// iterator, in that it doesn't need to rehash the retained
@@ -701,7 +702,7 @@ where
         }
     }
 
-    /// Split a set into two sets, where the first contains values
+    /// Splits a set into two sets, where the first contains values
     /// that satisfy the predicate and the second contains values
     /// that do not.
     ///
@@ -735,7 +736,7 @@ where
         (left, right)
     }
 
-    /// Construct the union of two sets.
+    /// Constructs the union of two sets.
     ///
     /// Time: O(n log n)
     ///
@@ -762,7 +763,7 @@ where
         to_mutate
     }
 
-    /// Construct the union of multiple sets.
+    /// Constructs the union of multiple sets.
     ///
     /// Time: O(n log n)
     #[must_use]
@@ -774,7 +775,7 @@ where
         i.into_iter().fold(Self::default(), Self::union)
     }
 
-    /// Construct the symmetric difference between two sets.
+    /// Constructs the symmetric difference between two sets.
     ///
     /// Time: O(n log n)
     ///
@@ -798,7 +799,7 @@ where
         self
     }
 
-    /// Construct the relative complement between two sets, that is the set
+    /// Constructs the relative complement between two sets, that is the set
     /// of values in `self` that do not occur in `other`.
     ///
     /// Time: O(m log n) where m is the size of the other set
@@ -830,7 +831,7 @@ where
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    /// Apply a diff to produce a new set.
+    /// Applies a diff to produce a new set.
     ///
     /// Takes any iterator of [`DiffItem`] values (such as from
     /// [`diff`][GenericHashSet::diff]) and applies each change —
@@ -869,7 +870,7 @@ where
         out
     }
 
-    /// Construct a new set from the current set with the given value
+    /// Constructs a new set from the current set with the given value
     /// added.
     ///
     /// Time: O(log n)
@@ -893,7 +894,7 @@ where
         out
     }
 
-    /// Construct a new set with the given value removed if it's in
+    /// Constructs a new set with the given value removed if it's in
     /// the set.
     ///
     /// Time: O(log n)
@@ -907,7 +908,7 @@ where
         out
     }
 
-    /// Remove a value from the set, returning the stored element and
+    /// Removes a value from the set, returning the stored element and
     /// the updated set, or `None` if the value was not present.
     ///
     /// This is the functional counterpart to [`remove`][Self::remove].
@@ -946,7 +947,7 @@ where
         out
     }
 
-    /// Construct the intersection of two sets.
+    /// Constructs the intersection of two sets.
     ///
     /// Time: O(n log n)
     ///
@@ -979,7 +980,7 @@ where
     S: BuildHasher,
     P: SharedPointerKind,
 {
-    /// Check whether two sets share no elements.
+    /// Tests whether two sets share no elements.
     ///
     /// Time: O(n) — iterates the smaller set and checks each element
     /// against the larger set.
@@ -1152,6 +1153,23 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         f.debug_set().entries(self.iter()).finish()
+    }
+}
+
+impl<A, S, P, H: HashWidth> Display for GenericHashSet<A, S, P, H>
+where
+    A: Display,
+    S: BuildHasher,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for a in self.iter() {
+            write!(f, "{sep}{a}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
     }
 }
 
@@ -1446,7 +1464,7 @@ impl<A> Clone for DiffItem<'_, '_, A> {
 
 impl<A> Copy for DiffItem<'_, '_, A> {}
 
-/// Check whether two BuildHasher instances produce the same hash output.
+/// Tests whether two BuildHasher instances produce the same hash output.
 fn set_hashers_compatible<S: BuildHasher>(a: &S, b: &S) -> bool {
     use core::hash::Hasher;
     let mut ha = a.build_hasher();
@@ -2185,7 +2203,7 @@ mod test {
     #[test]
     fn content_hash_different_sets_differ() {
         // Clone shares the hasher, so content hashes are comparable.
-        let mut a: HashSet<i32> = (0..20).collect();
+        let a: HashSet<i32> = (0..20).collect();
         let mut b = a.clone();
         b.insert(999);
         // Probability of collision ≈ 2⁻⁶⁴.
@@ -2194,7 +2212,7 @@ mod test {
 
     #[test]
     fn content_hash_clone_inherits_cache() {
-        let mut set: HashSet<i32> = (0..30).collect();
+        let set: HashSet<i32> = (0..30).collect();
         let h = set.content_hash();
         assert!(set.content_hash_valid());
         let cloned = set.clone();

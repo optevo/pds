@@ -58,7 +58,7 @@
 
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::FromIterator;
 use core::ops::RangeBounds;
@@ -68,6 +68,43 @@ use equivalent::Comparable;
 
 use crate::ordmap::{ConsumingIter as MapConsumingIter, GenericOrdMap};
 use crate::shared_ptr::DefaultSharedPtr;
+
+/// Constructs an [`OrdBag`] from a sequence of elements (duplicates allowed).
+///
+/// # Examples
+///
+/// ```
+/// # #[macro_use] extern crate pds;
+/// # use pds::OrdBag;
+/// # fn main() {
+/// let b = ord_bag![3, 1, 1, 2];
+/// assert_eq!(b.count(&1), 2);
+/// assert_eq!(b.total_count(), 4);
+/// // Iteration is always in sorted order.
+/// let items: Vec<_> = b.iter().collect();
+/// assert_eq!(items, vec![(&1, 2), (&2, 1), (&3, 1)]);
+/// # }
+/// ```
+#[macro_export]
+macro_rules! ord_bag {
+    () => { $crate::ord_bag::OrdBag::new() };
+
+    ( $($x:expr),* ) => {{
+        let mut l = $crate::ord_bag::OrdBag::new();
+        $(
+            l.insert($x);
+        )*
+        l
+    }};
+
+    ( $($x:expr ,)* ) => {{
+        let mut l = $crate::ord_bag::OrdBag::new();
+        $(
+            l.insert($x);
+        )*
+        l
+    }};
+}
 
 /// Type alias for [`GenericOrdBag`] with the default pointer type.
 ///
@@ -95,7 +132,7 @@ impl<A: Clone, P: SharedPointerKind> Clone for GenericOrdBag<A, P> {
 }
 
 impl<A, P: SharedPointerKind> GenericOrdBag<A, P> {
-    /// Create an empty bag.
+    /// Creates an empty bag.
     #[must_use]
     pub fn new() -> Self {
         GenericOrdBag {
@@ -104,25 +141,66 @@ impl<A, P: SharedPointerKind> GenericOrdBag<A, P> {
         }
     }
 
-    /// Test whether a bag is empty.
+    /// Tests whether a bag is empty.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut bag = OrdBag::new();
+    /// assert!(bag.is_empty());
+    ///
+    /// bag.insert(1);
+    /// assert!(!bag.is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
-    /// Return the number of distinct elements in the bag.
+    /// Returns the number of distinct elements in the bag.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut bag = OrdBag::new();
+    /// bag.insert("a");
+    /// bag.insert("a");
+    /// bag.insert("b");
+    /// // Two distinct elements even though "a" appears twice.
+    /// assert_eq!(bag.len(), 2);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Return the total count of all elements (sum of all multiplicities).
+    /// Returns the total count of all elements (sum of all multiplicities).
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut bag = OrdBag::new();
+    /// bag.insert("a");
+    /// bag.insert("a");
+    /// bag.insert("b");
+    /// // 2 occurrences of "a" plus 1 of "b".
+    /// assert_eq!(bag.total_count(), 3);
+    /// ```
     #[must_use]
     pub fn total_count(&self) -> usize {
         self.total
     }
 
-    /// Test whether two bags share the same underlying allocation.
+    /// Tests whether two bags share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of the
     /// bag — i.e. one is a clone of the other with no intervening
@@ -141,7 +219,22 @@ where
     A: Ord,
     P: SharedPointerKind,
 {
-    /// Return the count of a specific element.
+    /// Returns the count of a specific element.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut bag = OrdBag::new();
+    /// bag.insert("apple");
+    /// bag.insert("apple");
+    /// bag.insert("banana");
+    /// assert_eq!(bag.count(&"apple"), 2);
+    /// assert_eq!(bag.count(&"banana"), 1);
+    /// assert_eq!(bag.count(&"cherry"), 0); // absent element returns 0
+    /// ```
     #[must_use]
     pub fn count<Q>(&self, value: &Q) -> usize
     where
@@ -150,7 +243,19 @@ where
         self.map.get(value).copied().unwrap_or(0)
     }
 
-    /// Test whether the bag contains at least one occurrence of the given element.
+    /// Tests whether the bag contains at least one occurrence of the given element.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut bag = OrdBag::new();
+    /// bag.insert(42);
+    /// assert!(bag.contains(&42));
+    /// assert!(!bag.contains(&99));
+    /// ```
     #[must_use]
     pub fn contains<Q>(&self, value: &Q) -> bool
     where
@@ -165,7 +270,19 @@ where
     A: Ord + Clone,
     P: SharedPointerKind,
 {
-    /// Insert one occurrence of a value, returning the previous count.
+    /// Inserts one occurrence of a value, returning the previous count.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut bag = OrdBag::new();
+    /// assert_eq!(bag.insert("x"), 0); // was absent
+    /// assert_eq!(bag.insert("x"), 1); // previous count was 1
+    /// assert_eq!(bag.count(&"x"), 2);
+    /// ```
     pub fn insert(&mut self, value: A) -> usize {
         let prev = self.count(&value);
         self.map.insert(value, prev + 1);
@@ -173,7 +290,22 @@ where
         prev
     }
 
-    /// Insert `n` occurrences of a value, returning the previous count.
+    /// Inserts `n` occurrences of a value, returning the previous count.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut bag = OrdBag::new();
+    /// bag.insert_many("a", 3);
+    /// assert_eq!(bag.count(&"a"), 3);
+    /// assert_eq!(bag.total_count(), 3);
+    ///
+    /// bag.insert_many("a", 2); // adds 2 more
+    /// assert_eq!(bag.count(&"a"), 5);
+    /// ```
     pub fn insert_many(&mut self, value: A, n: usize) -> usize {
         if n == 0 {
             return self.count(&value);
@@ -184,9 +316,22 @@ where
         prev
     }
 
-    /// Remove one occurrence of a value, returning the previous count.
+    /// Removes one occurrence of a value, returning the previous count.
     ///
     /// If the element is not present, returns 0 and makes no changes.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut bag = OrdBag::new();
+    /// bag.insert_many("a", 3);
+    /// assert_eq!(bag.remove(&"a"), 3); // previous count returned
+    /// assert_eq!(bag.count(&"a"), 2); // one occurrence removed
+    /// assert_eq!(bag.remove(&"z"), 0); // absent — no change
+    /// ```
     pub fn remove<Q>(&mut self, value: &Q) -> usize
     where
         Q: Comparable<A> + ?Sized,
@@ -209,7 +354,21 @@ where
         prev
     }
 
-    /// Remove all occurrences of a value, returning the previous count.
+    /// Removes all occurrences of a value, returning the previous count.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut bag = OrdBag::new();
+    /// bag.insert_many("a", 4);
+    /// bag.insert("b");
+    /// assert_eq!(bag.remove_all(&"a"), 4);
+    /// assert!(!bag.contains(&"a"));
+    /// assert_eq!(bag.total_count(), 1); // only "b" remains
+    /// ```
     pub fn remove_all<Q>(&mut self, value: &Q) -> usize
     where
         Q: Comparable<A> + ?Sized,
@@ -223,9 +382,29 @@ where
         }
     }
 
-    /// Return the multiset union (sum of multiplicities).
+    /// Returns the multiset union (sum of multiplicities).
     ///
     /// For each element, the result count is the sum of counts in both bags.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut a = OrdBag::new();
+    /// a.insert_many("x", 2);
+    /// a.insert("y");
+    ///
+    /// let mut b = OrdBag::new();
+    /// b.insert_many("x", 3);
+    /// b.insert("z");
+    ///
+    /// let c = a.union(&b);
+    /// assert_eq!(c.count(&"x"), 5); // 2 + 3
+    /// assert_eq!(c.count(&"y"), 1);
+    /// assert_eq!(c.count(&"z"), 1);
+    /// ```
     #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         let mut result = self.clone();
@@ -237,10 +416,30 @@ where
         result
     }
 
-    /// Return the multiset intersection (minimum multiplicities).
+    /// Returns the multiset intersection (minimum multiplicities).
     ///
     /// For each element, the result count is the minimum of the counts in
     /// both bags.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut a = OrdBag::new();
+    /// a.insert_many("x", 3);
+    /// a.insert_many("y", 1);
+    ///
+    /// let mut b = OrdBag::new();
+    /// b.insert_many("x", 2);
+    /// b.insert_many("z", 5);
+    ///
+    /// let c = a.intersection(&b);
+    /// assert_eq!(c.count(&"x"), 2); // min(3, 2)
+    /// assert_eq!(c.count(&"y"), 0); // not in b
+    /// assert_eq!(c.count(&"z"), 0); // not in a
+    /// ```
     #[must_use]
     pub fn intersection(&self, other: &Self) -> Self {
         let mut result = Self::new();
@@ -255,10 +454,29 @@ where
         result
     }
 
-    /// Return the multiset relative complement (`self` minus `other`).
+    /// Returns the multiset relative complement (`self` minus `other`).
     ///
     /// For each element, the result count is `self.count − other.count`,
     /// clamped to zero.
+    ///
+    /// Time: O(n log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut a = OrdBag::new();
+    /// a.insert_many("x", 5);
+    /// a.insert_many("y", 2);
+    ///
+    /// let mut b = OrdBag::new();
+    /// b.insert_many("x", 3);
+    /// b.insert_many("y", 10); // exceeds a's count — clamped to 0
+    ///
+    /// let c = a.difference(&b);
+    /// assert_eq!(c.count(&"x"), 2); // 5 - 3
+    /// assert_eq!(c.count(&"y"), 0); // clamped
+    /// ```
     #[must_use]
     pub fn difference(&self, other: &Self) -> Self {
         let mut result = Self::new();
@@ -273,10 +491,12 @@ where
         result
     }
 
-    /// Return the multiset symmetric difference (absolute difference of multiplicities).
+    /// Returns the multiset symmetric difference (absolute difference of multiplicities).
     ///
     /// For each element, the result count is `|self.count − other.count|`.
     /// Elements whose counts are equal in both bags are excluded.
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn symmetric_difference(&self, other: &Self) -> Self {
         let mut result = Self::new();
@@ -307,14 +527,33 @@ where
     A: Ord,
     P: SharedPointerKind,
 {
-    /// Iterate over distinct elements and their counts in ascending element order.
+    /// Iterates over distinct elements and their counts in ascending element order.
+    ///
+    /// Time: O(1) (creates iterator; traversal is on the caller)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBag;
+    /// let mut bag = OrdBag::new();
+    /// bag.insert(3i32);
+    /// bag.insert(1i32);
+    /// bag.insert(1i32);
+    /// bag.insert(2i32);
+    ///
+    /// // Yields pairs in ascending order regardless of insertion order.
+    /// let items: Vec<_> = bag.iter().map(|(&k, c)| (k, c)).collect();
+    /// assert_eq!(items, vec![(1, 2), (2, 1), (3, 1)]);
+    /// ```
     pub fn iter(&self) -> impl Iterator<Item = (&A, usize)> {
         self.map.iter().map(|(k, &v)| (k, v))
     }
 
-    /// Iterate over a range of elements and their counts in ascending order.
+    /// Iterates over a range of elements and their counts in ascending order.
     ///
     /// The range is bounded by element value, not by index or count.
+    ///
+    /// Time: O(log n) to position, then O(k) to exhaust where k = matching elements
     pub fn range<R, Q>(&self, range: R) -> impl Iterator<Item = (&A, usize)> + '_
     where
         R: RangeBounds<Q>,
@@ -401,6 +640,22 @@ where
             d.entry(k, &count);
         }
         d.finish()
+    }
+}
+
+impl<A, P> Display for GenericOrdBag<A, P>
+where
+    A: Ord + Display,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (a, count) in self.iter() {
+            write!(f, "{sep}{a}: {count}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
     }
 }
 
@@ -893,5 +1148,30 @@ mod test {
         let b: OrdBag<i32> = OrdBag::from(&v);
         assert_eq!(b.count(&1), 2);
         assert_eq!(b.count(&2), 1);
+    }
+
+    #[test]
+    fn macro_empty() {
+        let b: OrdBag<i32> = ord_bag![];
+        assert!(b.is_empty());
+        assert_eq!(b.total_count(), 0);
+    }
+
+    #[test]
+    fn macro_with_elements() {
+        let b = ord_bag![3, 1, 1, 2];
+        assert_eq!(b.count(&1), 2);
+        assert_eq!(b.count(&2), 1);
+        assert_eq!(b.count(&3), 1);
+        assert_eq!(b.total_count(), 4);
+        // Iteration must be sorted.
+        let items: Vec<_> = b.iter().collect();
+        assert_eq!(items, vec![(&1, 2), (&2, 1), (&3, 1)]);
+    }
+
+    #[test]
+    fn macro_trailing_comma() {
+        let b = ord_bag![1, 2, 3,];
+        assert_eq!(b.total_count(), 3);
     }
 }

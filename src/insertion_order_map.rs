@@ -38,7 +38,7 @@
 //! `FromIterator` / `Extend` impls when insertion order must be preserved.
 
 use alloc::vec::Vec;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FromIterator;
 use core::ops::{Index, IndexMut};
@@ -52,6 +52,40 @@ use crate::hash_width::HashWidth;
 use crate::hashmap::GenericHashMap;
 use crate::ordmap::GenericOrdMap;
 use crate::shared_ptr::DefaultSharedPtr;
+
+/// Constructs an [`InsertionOrderMap`] from a sequence of key/value pairs.
+///
+/// # Examples
+///
+/// ```
+/// # #[macro_use] extern crate pds;
+/// # use pds::InsertionOrderMap;
+/// # fn main() {
+/// let m = insertion_order_map!["c" => 3, "a" => 1, "b" => 2];
+/// let keys: Vec<_> = m.keys().collect();
+/// assert_eq!(keys, vec![&"c", &"a", &"b"]);
+/// # }
+/// ```
+#[macro_export]
+macro_rules! insertion_order_map {
+    () => { $crate::insertion_order_map::InsertionOrderMap::new() };
+
+    ( $( $key:expr => $value:expr ),* ) => {{
+        let mut map = $crate::insertion_order_map::InsertionOrderMap::new();
+        $({
+            map.insert($key, $value);
+        })*;
+        map
+    }};
+
+    ( $( $key:expr => $value:expr ,)* ) => {{
+        let mut map = $crate::insertion_order_map::InsertionOrderMap::new();
+        $({
+            map.insert($key, $value);
+        })*;
+        map
+    }};
+}
 
 /// Type alias for [`GenericInsertionOrderMap`] with default hasher and pointer type.
 #[cfg(feature = "std")]
@@ -101,7 +135,7 @@ impl<K, V, P> GenericInsertionOrderMap<K, V, RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty insertion-ordered map.
+    /// Creates an empty insertion-ordered map.
     #[must_use]
     pub fn new() -> Self {
         GenericInsertionOrderMap {
@@ -117,7 +151,7 @@ impl<K, V, P> GenericInsertionOrderMap<K, V, foldhash::fast::RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty insertion-ordered map (no_std + foldhash).
+    /// Creates an empty insertion-ordered map (no_std + foldhash).
     #[must_use]
     pub fn new() -> Self {
         GenericInsertionOrderMap {
@@ -132,19 +166,44 @@ impl<K, V, S, P, H: HashWidth> GenericInsertionOrderMap<K, V, S, P, H>
 where
     P: SharedPointerKind,
 {
-    /// Test whether the map is empty.
+    /// Tests whether the map is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// assert!(map.is_empty());
+    /// map.insert("a", 1);
+    /// assert!(!map.is_empty());
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// Return the number of entries.
+    /// Returns the number of entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// assert_eq!(map.len(), 0);
+    /// map.insert("a", 1);
+    /// map.insert("b", 2);
+    /// assert_eq!(map.len(), 2);
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Test whether two maps share the same underlying allocation.
+    /// Tests whether two maps share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of the
     /// map — i.e. one is a clone of the other with no intervening
@@ -166,6 +225,18 @@ where
     P: SharedPointerKind,
 {
     /// Get a reference to the value for a key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// map.insert("a", 1);
+    /// assert_eq!(map.get("a"), Some(&1));
+    /// assert_eq!(map.get("z"), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -176,6 +247,21 @@ where
     }
 
     /// Get a mutable reference to the value for a key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// map.insert("a", 1);
+    /// if let Some(v) = map.get_mut("a") {
+    ///     *v = 99;
+    /// }
+    /// assert_eq!(map.get("a"), Some(&99));
+    /// assert_eq!(map.get_mut("z"), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -184,7 +270,19 @@ where
         self.entries.get_mut(&idx).map(|(_, v)| v)
     }
 
-    /// Test whether a key is present.
+    /// Tests whether a key is present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// map.insert("a", 1);
+    /// assert!(map.contains_key("a"));
+    /// assert!(!map.contains_key("z"));
+    /// ```
+    ///
+    /// Time: O(1) avg
     #[must_use]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
@@ -193,10 +291,27 @@ where
         self.index.contains_key(key)
     }
 
-    /// Insert a key-value pair. If the key already exists, its value
+    /// Inserts a key-value pair. If the key already exists, its value
     /// is updated but its position in the insertion order is preserved.
     ///
     /// Returns the previous value if the key was already present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// map.insert("a", 1);
+    /// map.insert("b", 2);
+    /// map.insert("c", 3);
+    /// // Re-inserting "a" updates the value but keeps "a" first in iteration order.
+    /// assert_eq!(map.insert("a", 10), Some(1));
+    /// let keys: Vec<_> = map.keys().collect();
+    /// assert_eq!(keys, vec![&"a", &"b", &"c"]);
+    /// assert_eq!(map.get("a"), Some(&10));
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         if let Some(&idx) = self.index.get(&key) {
             // Key exists — update value, keep position.
@@ -213,9 +328,23 @@ where
         }
     }
 
-    /// Remove a key-value pair.
+    /// Removes a key-value pair.
     ///
     /// Returns the removed value if the key was present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// map.insert("a", 1);
+    /// map.insert("b", 2);
+    /// assert_eq!(map.remove("a"), Some(1));
+    /// assert_eq!(map.remove("z"), None);
+    /// assert!(!map.contains_key("a"));
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -224,19 +353,61 @@ where
         self.entries.remove(&idx).map(|(_, v)| v)
     }
 
-    /// Return a reference to the first key-value pair in insertion order, or `None` if empty.
+    /// Returns a reference to the first key-value pair in insertion order, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// assert_eq!(map.front(), None);
+    /// map.insert("first", 1);
+    /// map.insert("second", 2);
+    /// assert_eq!(map.front(), Some((&"first", &1)));
+    /// ```
+    ///
+    /// Time: O(log n)
+    #[must_use]
     pub fn front(&self) -> Option<(&K, &V)> {
         self.entries.get_min().map(|(_, (k, v))| (k, v))
     }
 
-    /// Return a reference to the last key-value pair in insertion order, or `None` if empty.
+    /// Returns a reference to the last key-value pair in insertion order, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// assert_eq!(map.back(), None);
+    /// map.insert("first", 1);
+    /// map.insert("last", 99);
+    /// assert_eq!(map.back(), Some((&"last", &99)));
+    /// ```
+    ///
+    /// Time: O(log n)
+    #[must_use]
     pub fn back(&self) -> Option<(&K, &V)> {
         self.entries.get_max().map(|(_, (k, v))| (k, v))
     }
 
-    /// Remove and return the first key-value pair in insertion order (FIFO dequeue).
+    /// Removes and return the first key-value pair in insertion order (FIFO dequeue).
     ///
     /// Returns `None` if the map is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// map.insert("a", 1);
+    /// map.insert("b", 2);
+    /// assert_eq!(map.pop_front(), Some(("a", 1)));
+    /// assert_eq!(map.len(), 1);
+    /// assert!(!map.contains_key("a"));
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn pop_front(&mut self) -> Option<(K, V)> {
         let counter = self.entries.get_min()?.0;
         let (k, v) = self.entries.remove(&counter)?;
@@ -244,9 +415,23 @@ where
         Some((k, v))
     }
 
-    /// Remove and return the last key-value pair in insertion order (LIFO dequeue).
+    /// Removes and return the last key-value pair in insertion order (LIFO dequeue).
     ///
     /// Returns `None` if the map is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// map.insert("a", 1);
+    /// map.insert("b", 2);
+    /// assert_eq!(map.pop_back(), Some(("b", 2)));
+    /// assert_eq!(map.len(), 1);
+    /// assert!(!map.contains_key("b"));
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn pop_back(&mut self) -> Option<(K, V)> {
         let counter = self.entries.get_max()?.0;
         let (k, v) = self.entries.remove(&counter)?;
@@ -254,25 +439,84 @@ where
         Some((k, v))
     }
 
-    /// Iterate over key-value pairs in insertion order.
+    /// Iterates over key-value pairs in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// map.insert("c", 3);
+    /// map.insert("a", 1);
+    /// map.insert("b", 2);
+    /// // Keys come back in insertion order, not alphabetical order.
+    /// let pairs: Vec<_> = map.iter().map(|(&k, &v)| (k, v)).collect();
+    /// assert_eq!(pairs, vec![("c", 3), ("a", 1), ("b", 2)]);
+    /// ```
+    ///
+    /// Time: O(1) (creates iterator; in insertion order)
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.entries.iter().map(|(_, (k, v))| (k, v))
     }
 
-    /// Iterate over keys in insertion order.
+    /// Iterates over keys in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// map.insert("b", 2);
+    /// map.insert("a", 1);
+    /// let keys: Vec<_> = map.keys().collect();
+    /// assert_eq!(keys, vec![&"b", &"a"]); // insertion order, not sorted
+    /// ```
+    ///
+    /// Time: O(1) (creates iterator)
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         self.entries.iter().map(|(_, (k, _))| k)
     }
 
-    /// Iterate over values in insertion order.
+    /// Iterates over values in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut map = InsertionOrderMap::new();
+    /// map.insert("b", 20);
+    /// map.insert("a", 10);
+    /// let values: Vec<_> = map.values().copied().collect();
+    /// assert_eq!(values, vec![20, 10]); // insertion order, not sorted by key
+    /// ```
+    ///
+    /// Time: O(1) (creates iterator)
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.entries.iter().map(|(_, (_, v))| v)
     }
 
-    /// Return the union of two maps; entries from `other` overwrite entries in `self`.
+    /// Returns the union of two maps; entries from `other` overwrite entries in `self`.
     ///
     /// For conflicting keys, `other`'s value wins. New keys from `other` are
     /// appended in `other`'s insertion order after all of `self`'s keys.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut a = InsertionOrderMap::new();
+    /// a.insert("x", 1);
+    /// a.insert("y", 2);
+    /// let mut b = InsertionOrderMap::new();
+    /// b.insert("y", 99); // conflict: b's value wins
+    /// b.insert("z", 3);
+    /// let c = a.union(b);
+    /// assert_eq!(c.get("x"), Some(&1));
+    /// assert_eq!(c.get("y"), Some(&99));
+    /// assert_eq!(c.get("z"), Some(&3));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn union(mut self, other: Self) -> Self {
         self.extend(other);
@@ -354,6 +598,24 @@ where
     }
 }
 
+impl<K, V, S, P, H: HashWidth> Display for GenericInsertionOrderMap<K, V, S, P, H>
+where
+    K: Display + Hash + Eq + Clone,
+    V: Display + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (k, v) in self.iter() {
+            write!(f, "{sep}{k}: {v}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
+
 impl<K, V, S, P, H: HashWidth> FromIterator<(K, V)> for GenericInsertionOrderMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
@@ -362,15 +624,33 @@ where
     P: SharedPointerKind,
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
-        let mut map = GenericInsertionOrderMap {
-            index: GenericHashMap::default(),
-            entries: GenericOrdMap::new(),
-            next_idx: 0,
-        };
+        // Two-pass bulk load.
+        //
+        // Pass 1: deduplicate via the HAMT index.
+        //   - First occurrence: assign the next sequential index, push to `ordered`.
+        //   - Subsequent occurrence: update the value in `ordered` in-place.
+        //
+        // Pass 2: build the OrdMap from the sorted (index → (K, V)) sequence in
+        //   O(n) using bottom-up B+ tree construction, instead of O(n log n) via
+        //   n individual inserts.
+        let mut index: GenericHashMap<K, usize, S, P, H> = GenericHashMap::default();
+        let mut ordered: Vec<(K, V)> = Vec::new(); // idx → (K, V)
         for (k, v) in iter {
-            map.insert(k, v);
+            if let Some(&idx) = index.get(&k) {
+                ordered[idx].1 = v; // duplicate: update value, keep original index
+            } else {
+                let idx = ordered.len();
+                index.insert(k.clone(), idx);
+                ordered.push((k, v));
+            }
         }
-        map
+        let next_idx = ordered.len();
+        let entries = GenericOrdMap::from_sorted_iter(ordered.into_iter().enumerate());
+        GenericInsertionOrderMap {
+            index,
+            entries,
+            next_idx,
+        }
     }
 }
 
@@ -433,6 +713,11 @@ where
 {
     type Output = V;
 
+    /// Returns a reference to the value associated with `key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index(&self, key: &Q) -> &Self::Output {
         match self.get(key) {
             Some(v) => v,
@@ -449,6 +734,11 @@ where
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
+    /// Returns a mutable reference to the value associated with `key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index_mut(&mut self, key: &Q) -> &mut Self::Output {
         match self.get_mut(key) {
             Some(v) => v,
@@ -464,7 +754,24 @@ where
     S: BuildHasher + Clone + Default,
     P: SharedPointerKind,
 {
-    /// Return entries whose keys are in `self` but not in `other`.
+    /// Returns entries whose keys are in `self` but not in `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut a = InsertionOrderMap::new();
+    /// a.insert("x", 1);
+    /// a.insert("y", 2);
+    /// let mut b = InsertionOrderMap::new();
+    /// b.insert("y", 2);
+    /// let d = a.difference(&b);
+    /// // "y" is in both — excluded. Only "x" remains.
+    /// assert!(!d.contains_key("y"));
+    /// assert_eq!(d.get("x"), Some(&1));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
         self.into_iter()
@@ -472,7 +779,26 @@ where
             .collect()
     }
 
-    /// Return entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    /// Returns entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut a = InsertionOrderMap::new();
+    /// a.insert("x", 1);
+    /// a.insert("y", 2);
+    /// let mut b = InsertionOrderMap::new();
+    /// b.insert("y", 99);
+    /// b.insert("z", 3);
+    /// let i = a.intersection(&b);
+    /// // Only "y" is in both; self's value (2) is kept.
+    /// assert_eq!(i.get("y"), Some(&2));
+    /// assert!(!i.contains_key("x"));
+    /// assert!(!i.contains_key("z"));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
         self.into_iter()
@@ -480,10 +806,29 @@ where
             .collect()
     }
 
-    /// Return entries whose keys are in exactly one of `self` or `other`.
+    /// Returns entries whose keys are in exactly one of `self` or `other`.
     ///
     /// The result preserves insertion order: self's unique entries first
     /// (in their original order), followed by other's unique entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut a = InsertionOrderMap::new();
+    /// a.insert("x", 1);
+    /// a.insert("y", 2);
+    /// let mut b = InsertionOrderMap::new();
+    /// b.insert("y", 2);
+    /// b.insert("z", 3);
+    /// let sd = a.symmetric_difference(&b);
+    /// // "y" is in both — excluded. "x" and "z" are each unique to one map.
+    /// assert!(!sd.contains_key("y"));
+    /// assert_eq!(sd.get("x"), Some(&1));
+    /// assert_eq!(sd.get("z"), Some(&3));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn symmetric_difference(self, other: &Self) -> Self {
         // Clone self before consuming it — O(1) via structural sharing — so we can
@@ -1016,5 +1361,29 @@ mod test {
         assert_eq!(queue.pop_front().map(|(k, _)| k), Some("task-b"));
         assert_eq!(queue.pop_front().map(|(k, _)| k), Some("task-c"));
         assert_eq!(queue.pop_front(), None);
+    }
+
+    #[test]
+    fn macro_empty() {
+        let m: InsertionOrderMap<&str, i32> = insertion_order_map![];
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn macro_with_elements() {
+        let m = insertion_order_map!["c" => 3, "a" => 1, "b" => 2];
+        assert_eq!(m.len(), 3);
+        assert_eq!(m.get("a"), Some(&1));
+        // Keys must iterate in insertion order.
+        let keys: Vec<_> = m.keys().collect();
+        assert_eq!(keys, vec![&"c", &"a", &"b"]);
+    }
+
+    #[test]
+    fn macro_trailing_comma() {
+        let m = insertion_order_map!["x" => 1, "y" => 2,];
+        assert_eq!(m.len(), 2);
+        let keys: Vec<_> = m.keys().collect();
+        assert_eq!(keys, vec![&"x", &"y"]);
     }
 }

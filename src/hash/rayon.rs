@@ -102,7 +102,7 @@ where
     }
 }
 
-/// Iterate all (K, V) pairs reachable from a single Entry, yielding (&K, &V).
+/// Iterates all (K, V) pairs reachable from a single Entry, yielding (&K, &V).
 fn map_entry_iter<'a, K, V, P: SharedPointerKind>(
     entry: &'a Entry<(K, V), P>,
 ) -> MapEntryIter<'a, K, V, P> {
@@ -268,7 +268,7 @@ where
     }
 }
 
-/// Create a mutable DFS iterator from a single Entry, yielding (&K, &mut V).
+/// Creates a mutable DFS iterator from a single Entry, yielding (&K, &mut V).
 fn map_entry_iter_mut<'a, K, V, P>(entry: &'a mut Entry<(K, V), P>) -> MapEntryIterMut<'a, K, V, P>
 where
     K: Clone,
@@ -429,7 +429,7 @@ where
     S: BuildHasher + Clone + Default + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {
-    /// Construct the union of two maps in parallel.
+    /// Constructs the union of two maps in parallel.
     ///
     /// Values from `self` take precedence for keys present in both maps.
     /// Parallel speedup comes from filtering `other`'s elements against
@@ -475,7 +475,7 @@ where
         self.union(only_in_other)
     }
 
-    /// Construct the intersection of two maps in parallel, keeping
+    /// Constructs the intersection of two maps in parallel, keeping
     /// values from `self`.
     ///
     /// `ptr_eq` and Merkle-hash fast-paths short-circuit in O(1) for
@@ -527,7 +527,7 @@ where
         }
     }
 
-    /// Construct the relative complement (self − other) in parallel:
+    /// Constructs the relative complement (self − other) in parallel:
     /// elements in `self` whose keys are not in `other`.
     ///
     /// `ptr_eq` and Merkle-hash fast-paths short-circuit in O(1) for
@@ -568,7 +568,7 @@ where
             .reduce(Self::default, |a, b| a.union(b))
     }
 
-    /// Construct the symmetric difference of two maps in parallel:
+    /// Constructs the symmetric difference of two maps in parallel:
     /// elements present in exactly one of the two maps.
     ///
     /// Uses `rayon::join` to compute both halves (self \ other and
@@ -799,7 +799,7 @@ where
     S: BuildHasher + Clone + Default + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {
-    /// Return a new map keeping only entries that satisfy the predicate.
+    /// Returns a new map keeping only entries that satisfy the predicate.
     ///
     /// Evaluates `f(&key, &value)` for every entry in parallel; returns a new
     /// map containing only those where `f` returns `true`. The original map
@@ -833,7 +833,7 @@ where
     S: BuildHasher + Clone + Default + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {
-    /// Return a new map with values transformed by `f`, applied in parallel.
+    /// Returns a new map with values transformed by `f`, applied in parallel.
     ///
     /// Keys are unchanged; each value is replaced by `f(&value)`. This method
     /// walks the HAMT tree directly rather than using `par_iter().collect()`:
@@ -872,7 +872,7 @@ where
         }
     }
 
-    /// Return a new map with values transformed by `f(key, value)`, applied in
+    /// Returns a new map with values transformed by `f(key, value)`, applied in
     /// parallel.
     ///
     /// Each entry's value is replaced by `f(&key, &value)`. Uses the same
@@ -917,7 +917,7 @@ where
     S: BuildHasher + Clone + Default + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {
-    /// Return a new set keeping only elements that satisfy the predicate.
+    /// Returns a new set keeping only elements that satisfy the predicate.
     ///
     /// Evaluates `f(&element)` for every element in parallel; returns a new
     /// set containing only those where `f` returns `true`. The original set
@@ -1016,7 +1016,7 @@ where
     }
 }
 
-/// Iterate all A values reachable from a single Entry<Value<A>, P>.
+/// Iterates all A values reachable from a single Entry<Value<A>, P>.
 fn set_entry_iter<'a, A, P: SharedPointerKind>(
     entry: &'a Entry<Value<A>, P>,
 ) -> SetEntryIter<'a, A, P> {
@@ -1143,7 +1143,7 @@ where
     S: BuildHasher + Clone + Default + Send + Sync,
     P: SharedPointerKind + Send + Sync,
 {
-    /// Construct the union of two sets in parallel.
+    /// Constructs the union of two sets in parallel.
     ///
     /// `ptr_eq` fast-path short-circuits in O(1) for structurally
     /// identical sets.
@@ -1176,7 +1176,7 @@ where
         self.union(only_in_other)
     }
 
-    /// Construct the intersection of two sets in parallel.
+    /// Constructs the intersection of two sets in parallel.
     ///
     /// `ptr_eq` fast-path short-circuits in O(1) for structurally
     /// identical sets.
@@ -1214,7 +1214,7 @@ where
             .reduce(Self::default, |a, b| a.union(b))
     }
 
-    /// Construct the relative complement (self − other) in parallel:
+    /// Constructs the relative complement (self − other) in parallel:
     /// elements in `self` not in `other`.
     ///
     /// `ptr_eq` fast-path returns empty in O(1) for identical sets.
@@ -1246,7 +1246,7 @@ where
             .reduce(Self::default, |a, b| a.union(b))
     }
 
-    /// Construct the symmetric difference of two sets in parallel:
+    /// Constructs the symmetric difference of two sets in parallel:
     /// elements in exactly one of the two sets.
     ///
     /// Uses `rayon::join` to compute both halves concurrently.
@@ -1316,7 +1316,7 @@ fn root_entries<A, P: SharedPointerKind>(root: Option<&Node<A, P>>) -> Vec<&Entr
     }
 }
 
-/// Split a vec of entry references for rayon work distribution.
+/// Splits a vec of entry references for rayon work distribution.
 /// If there are multiple entries, splits in half.
 /// If there's a single HamtNode entry, expands it and splits its children.
 fn split_entries<A, P: SharedPointerKind>(
@@ -1351,7 +1351,7 @@ fn root_entries_mut<A, P: SharedPointerKind>(
     }
 }
 
-/// Split a vec of mutable entry references for rayon work distribution.
+/// Splits a vec of mutable entry references for rayon work distribution.
 /// Same strategy as `split_entries` but with `make_mut` for exclusive ownership.
 fn split_entries_mut<A: Clone, P: SharedPointerKind>(
     mut entries: Vec<&mut Entry<A, P>>,

@@ -71,7 +71,7 @@ fn group_find(control: &SimdGroup, value: u8) -> GroupBitmap {
     GroupBitmap::from_value(mask as _)
 }
 
-/// Construct a node directly inside a SharedPointer allocation to avoid memcpy.
+/// Constructs a node directly inside a SharedPointer allocation to avoid memcpy.
 /// Nodes can be large (SparseChunk with SIMD control bytes), and the safe path
 /// (construct on stack → clone into Arc) measurably slows down insert-heavy workloads.
 #[inline]
@@ -779,7 +779,7 @@ impl<A, P: SharedPointerKind, H: HashWidth> Entry<A, P, H> {
         matches!(self, Entry::Value(_, _))
     }
 
-    /// Return this entry's contribution to its parent's Merkle hash.
+    /// Returns this entry's contribution to its parent's Merkle hash.
     /// For leaf values this is fmix64(key_hash). For child nodes the
     /// merkle_hash is passed through directly — the root hash is a flat
     /// sum of fmix64(leaf_hash) values, independent of tree structure.

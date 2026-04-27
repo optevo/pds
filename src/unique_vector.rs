@@ -26,7 +26,7 @@
 //! |-----------|-----------|-------|
 //! | `push_back` / `push_front` | O(log n) | HashSet check + Vector push |
 //! | `pop_front` | O(log n) | Vector pop + HashSet remove |
-//! | `pop_back` | O(1)\* | Vector pop + HashSet remove |
+//! | `pop_back` | O(log n) | Vector pop + HashSet remove |
 //! | `get(i)` | O(log n) | Vector index |
 //! | `contains` | O(log n) | HashSet lookup |
 //! | `remove_by_value` | O(n) | Linear scan to find position |
@@ -56,9 +56,9 @@
 //! ```
 
 use alloc::vec::Vec;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{FromIterator, FusedIterator};
 use core::ops::Index;
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
@@ -70,6 +70,41 @@ use crate::hashset::GenericHashSet;
 use crate::shared_ptr::DefaultSharedPtr;
 use crate::vector::{ConsumingIter as VecConsumingIter, GenericVector, Iter as VecIter};
 
+/// Constructs a [`UniqueVector`] from a sequence of elements (duplicates ignored).
+///
+/// # Examples
+///
+/// ```
+/// # #[macro_use] extern crate pds;
+/// # use pds::UniqueVector;
+/// # fn main() {
+/// let v = unique_vector![1, 2, 1, 3];
+/// assert_eq!(v.len(), 3);
+/// assert_eq!(v.get(0), Some(&1));
+/// assert_eq!(v.get(2), Some(&3));
+/// # }
+/// ```
+#[macro_export]
+macro_rules! unique_vector {
+    () => { $crate::unique_vector::UniqueVector::new() };
+
+    ( $($x:expr),* ) => {{
+        let mut l = $crate::unique_vector::UniqueVector::new();
+        $(
+            l.push_back($x);
+        )*
+        l
+    }};
+
+    ( $($x:expr ,)* ) => {{
+        let mut l = $crate::unique_vector::UniqueVector::new();
+        $(
+            l.push_back($x);
+        )*
+        l
+    }};
+}
+
 // ─── Type aliases ─────────────────────────────────────────────────────────────
 
 /// Type alias for [`GenericUniqueVector`] with the default hasher and pointer type.
@@ -79,8 +114,7 @@ pub type UniqueVector<A> = GenericUniqueVector<A, RandomState, DefaultSharedPtr>
 /// Type alias for [`GenericUniqueVector`] using [`foldhash::fast::RandomState`] —
 /// available in `no_std` environments when the `foldhash` feature is enabled.
 #[cfg(all(not(feature = "std"), feature = "foldhash"))]
-pub type UniqueVector<A> =
-    GenericUniqueVector<A, foldhash::fast::RandomState, DefaultSharedPtr>;
+pub type UniqueVector<A> = GenericUniqueVector<A, foldhash::fast::RandomState, DefaultSharedPtr>;
 
 // ─── Struct ───────────────────────────────────────────────────────────────────
 
@@ -111,7 +145,7 @@ impl<A: Clone, S: Clone, P: SharedPointerKind, H: HashWidth> Clone
 
 #[cfg(feature = "std")]
 impl<A, P: SharedPointerKind> GenericUniqueVector<A, RandomState, P> {
-    /// Create an empty `UniqueVector`.
+    /// Creates an empty `UniqueVector`.
     #[must_use]
     pub fn new() -> Self {
         GenericUniqueVector {
@@ -123,7 +157,7 @@ impl<A, P: SharedPointerKind> GenericUniqueVector<A, RandomState, P> {
 
 #[cfg(all(not(feature = "std"), feature = "foldhash"))]
 impl<A, P: SharedPointerKind> GenericUniqueVector<A, foldhash::fast::RandomState, P> {
-    /// Create an empty `UniqueVector`.
+    /// Creates an empty `UniqueVector`.
     #[must_use]
     pub fn new() -> Self {
         GenericUniqueVector {
@@ -137,7 +171,7 @@ impl<A, S, P: SharedPointerKind, H: HashWidth> GenericUniqueVector<A, S, P, H>
 where
     S: BuildHasher,
 {
-    /// Create an empty `UniqueVector` with the given hasher.
+    /// Creates an empty `UniqueVector` with the given hasher.
     #[must_use]
     pub fn with_hasher(hasher: S) -> Self
     where
@@ -158,19 +192,23 @@ where
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    /// Return the number of elements.
+    /// Returns the number of elements.
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn len(&self) -> usize {
         self.vec.len()
     }
 
-    /// Return `true` if the vector contains no elements.
+    /// Tests whether the vector is empty.
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.vec.is_empty()
     }
 
-    /// Test whether two vectors share the same underlying allocation.
+    /// Tests whether two vectors share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of the
     /// vector — i.e. one is a clone of the other with no intervening
@@ -183,33 +221,97 @@ where
         self.vec.ptr_eq(&other.vec)
     }
 
-    /// Return `true` if `elem` is present.
+    /// Tests whether `elem` is present in the vector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let v: UniqueVector<i32> = [1, 2, 3].into();
+    /// assert!(v.contains(&2));
+    /// assert!(!v.contains(&99));
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn contains(&self, elem: &A) -> bool {
         self.set.contains(elem)
     }
 
-    /// Return a reference to the element at index `i`, or `None` if out of bounds.
+    /// Returns a reference to the element at index `i`, or `None` if out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let v: UniqueVector<i32> = [10, 20, 30].into();
+    /// assert_eq!(v.get(0), Some(&10));
+    /// assert_eq!(v.get(2), Some(&30));
+    /// assert_eq!(v.get(3), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&A> {
         self.vec.get(index)
     }
 
-    /// Return a reference to the first element, or `None` if empty.
+    /// Returns a reference to the first element, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let v: UniqueVector<i32> = [1, 2, 3].into();
+    /// assert_eq!(v.front(), Some(&1));
+    /// let empty: UniqueVector<i32> = UniqueVector::new();
+    /// assert_eq!(empty.front(), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn front(&self) -> Option<&A> {
         self.vec.get(0)
     }
 
-    /// Return a reference to the last element, or `None` if empty.
+    /// Returns a reference to the last element, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let v: UniqueVector<i32> = [1, 2, 3].into();
+    /// assert_eq!(v.back(), Some(&3));
+    /// let empty: UniqueVector<i32> = UniqueVector::new();
+    /// assert_eq!(empty.back(), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn back(&self) -> Option<&A> {
         let n = self.vec.len();
-        if n == 0 { None } else { self.vec.get(n - 1) }
+        if n == 0 {
+            None
+        } else {
+            self.vec.get(n - 1)
+        }
     }
 
-    /// Append `elem` to the back. Returns `true` if newly inserted, `false` if
+    /// Appends `elem` to the back. Returns `true` if newly inserted, `false` if
     /// already present (the vector is unchanged).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let mut v = UniqueVector::new();
+    /// assert!(v.push_back(1));
+    /// assert!(v.push_back(2));
+    /// assert!(!v.push_back(1)); // duplicate — ignored
+    /// assert_eq!(v.len(), 2);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn push_back(&mut self, elem: A) -> bool {
         if self.set.insert(elem.clone()).is_none() {
             self.vec.push_back(elem);
@@ -221,6 +323,19 @@ where
 
     /// Prepend `elem` to the front. Returns `true` if newly inserted, `false` if
     /// already present (the vector is unchanged).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let mut v = UniqueVector::new();
+    /// v.push_back(2);
+    /// assert!(v.push_front(1));
+    /// assert!(!v.push_front(2)); // duplicate — ignored
+    /// assert_eq!(v.get(0), Some(&1));
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn push_front(&mut self, elem: A) -> bool {
         if self.set.insert(elem.clone()).is_none() {
             self.vec.push_front(elem);
@@ -230,27 +345,69 @@ where
         }
     }
 
-    /// Remove and return the first element, or `None` if empty.
+    /// Removes and return the first element, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let mut v = UniqueVector::new();
+    /// v.push_back(1);
+    /// v.push_back(2);
+    /// assert_eq!(v.pop_front(), Some(1));
+    /// assert_eq!(v.pop_front(), Some(2));
+    /// assert_eq!(v.pop_front(), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn pop_front(&mut self) -> Option<A> {
         let elem = self.vec.pop_front()?;
         self.set.remove(&elem);
         Some(elem)
     }
 
-    /// Remove and return the last element, or `None` if empty.
+    /// Removes and return the last element, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let mut v = UniqueVector::new();
+    /// v.push_back(1);
+    /// v.push_back(2);
+    /// assert_eq!(v.pop_back(), Some(2));
+    /// assert_eq!(v.pop_back(), Some(1));
+    /// assert_eq!(v.pop_back(), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn pop_back(&mut self) -> Option<A> {
         let elem = self.vec.pop_back()?;
         self.set.remove(&elem);
         Some(elem)
     }
 
-    /// Remove the element at index `i` and return it.
+    /// Removes the element at index `i` and return it.
     ///
     /// This is O(log n) for the structural split/concat; the index must be in bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let mut v = UniqueVector::new();
+    /// v.push_back("a");
+    /// v.push_back("b");
+    /// v.push_back("c");
+    /// assert_eq!(v.remove(1), "b");
+    /// assert!(v.push_back("b")); // can re-insert after removal
+    /// ```
     ///
     /// # Panics
     ///
     /// Panics if `index >= len()`.
+    ///
+    /// Time: O(n)
     pub fn remove(&mut self, index: usize) -> A {
         let elem = self.vec.remove(index);
         self.set.remove(&elem);
@@ -261,24 +418,70 @@ where
     ///
     /// This is O(n) — a linear scan of the vector to find the position — followed
     /// by O(log n) removal. For hot paths prefer `pop_front` / `pop_back`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let mut v = UniqueVector::new();
+    /// v.push_back(1);
+    /// v.push_back(2);
+    /// v.push_back(3);
+    /// assert!(v.remove_by_value(&2));
+    /// assert!(!v.remove_by_value(&99)); // not present
+    /// let elems: Vec<_> = v.iter().copied().collect();
+    /// assert_eq!(elems, vec![1, 3]);
+    /// ```
+    ///
+    /// Time: O(n)
     pub fn remove_by_value(&mut self, elem: &A) -> bool {
         if !self.set.contains(elem) {
             return false;
         }
         // Linear scan to find position.
-        let pos = self.vec.iter().position(|e| e == elem).expect("set/vec invariant");
+        let pos = self
+            .vec
+            .iter()
+            .position(|e| e == elem)
+            .expect("set/vec invariant");
         self.vec.remove(pos);
         self.set.remove(elem);
         true
     }
 
-    /// Iterate over elements in insertion order.
+    /// Iterates over elements in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let v: UniqueVector<i32> = [3, 1, 2].into();
+    /// let elems: Vec<_> = v.iter().copied().collect();
+    /// assert_eq!(elems, vec![3, 1, 2]); // insertion order, not sorted
+    /// ```
+    ///
+    /// Time: O(1)
+    #[must_use]
     pub fn iter(&self) -> VecIter<'_, A, P> {
         self.vec.iter()
     }
 
-    /// Return the union: all elements from `self`, then any elements from `other`
+    /// Returns the union: all elements from `self`, then any elements from `other`
     /// not already in `self`, in `other`'s order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let a: UniqueVector<i32> = [1, 2, 3].into();
+    /// let b: UniqueVector<i32> = [3, 4, 5].into();
+    /// let u = a.union(b);
+    /// let elems: Vec<_> = u.iter().copied().collect();
+    /// // 3 is already in a, so only 4 and 5 are appended from b.
+    /// assert_eq!(elems, vec![1, 2, 3, 4, 5]);
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn union(mut self, other: Self) -> Self {
         for elem in other.vec {
@@ -287,7 +490,20 @@ where
         self
     }
 
-    /// Return elements in `self` that are not in `other`, preserving `self`'s order.
+    /// Returns elements in `self` that are not in `other`, preserving `self`'s order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let a: UniqueVector<i32> = [1, 2, 3, 4].into();
+    /// let b: UniqueVector<i32> = [2, 4].into();
+    /// let d = a.difference(&b);
+    /// let elems: Vec<_> = d.iter().copied().collect();
+    /// assert_eq!(elems, vec![1, 3]);
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn difference(self, other: &Self) -> Self
     where
@@ -296,7 +512,20 @@ where
         self.into_iter().filter(|e| !other.contains(e)).collect()
     }
 
-    /// Return elements present in both `self` and `other`, preserving `self`'s order.
+    /// Returns elements present in both `self` and `other`, preserving `self`'s order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let a: UniqueVector<i32> = [1, 2, 3, 4].into();
+    /// let b: UniqueVector<i32> = [2, 4, 5].into();
+    /// let i = a.intersection(&b);
+    /// let elems: Vec<_> = i.iter().copied().collect();
+    /// assert_eq!(elems, vec![2, 4]);
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self
     where
@@ -305,18 +534,40 @@ where
         self.into_iter().filter(|e| other.contains(e)).collect()
     }
 
-    /// Return elements in exactly one of `self` or `other`.
+    /// Returns elements in exactly one of `self` or `other`.
     ///
     /// `self`'s unique elements come first (in their original order), followed
     /// by `other`'s unique elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::UniqueVector;
+    /// let a: UniqueVector<i32> = [1, 2, 3].into();
+    /// let b: UniqueVector<i32> = [2, 3, 4].into();
+    /// let sd = a.symmetric_difference(b);
+    /// let elems: Vec<_> = sd.iter().copied().collect();
+    /// // 1 is only in a; 4 is only in b.
+    /// assert_eq!(elems, vec![1, 4]);
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn symmetric_difference(self, other: Self) -> Self
     where
         S: Default,
     {
         // Borrow both before collecting so each filter checks the original.
-        let self_only: Self = self.iter().filter(|e| !other.contains(e)).cloned().collect();
-        let other_only: Self = other.iter().filter(|e| !self.contains(e)).cloned().collect();
+        let self_only: Self = self
+            .iter()
+            .filter(|e| !other.contains(e))
+            .cloned()
+            .collect();
+        let other_only: Self = other
+            .iter()
+            .filter(|e| !self.contains(e))
+            .cloned()
+            .collect();
         self_only.union(other_only)
     }
 }
@@ -349,7 +600,23 @@ where
     }
 }
 
-// ─── PartialEq / Eq ───────────────────────────────────────────────────────────
+impl<A, S, P, H: HashWidth> Display for GenericUniqueVector<A, S, P, H>
+where
+    A: Display + Clone,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "[")?;
+        let mut sep = "";
+        for a in self.vec.iter() {
+            write!(f, "{sep}{a}")?;
+            sep = ", ";
+        }
+        write!(f, "]")
+    }
+}
+
+// ─── PartialEq / Eq ─────────────────────────────────────────────────────────
 
 impl<A, S, S2, P, P2, H: HashWidth> PartialEq<GenericUniqueVector<A, S2, P2, H>>
     for GenericUniqueVector<A, S, P, H>
@@ -362,7 +629,8 @@ where
 {
     fn eq(&self, other: &GenericUniqueVector<A, S2, P2, H>) -> bool {
         // UniqueVector is a sequence — equality is order-sensitive.
-        self.vec.len() == other.vec.len() && self.vec.iter().zip(other.vec.iter()).all(|(a, b)| a == b)
+        self.vec.len() == other.vec.len()
+            && self.vec.iter().zip(other.vec.iter()).all(|(a, b)| a == b)
     }
 }
 
@@ -468,6 +736,8 @@ impl<A: Clone, P: SharedPointerKind> DoubleEndedIterator for ConsumingIter<A, P>
 }
 
 impl<A: Clone, P: SharedPointerKind> ExactSizeIterator for ConsumingIter<A, P> {}
+
+impl<A: Clone, P: SharedPointerKind> FusedIterator for ConsumingIter<A, P> {}
 
 impl<A, S, P, H: HashWidth> IntoIterator for GenericUniqueVector<A, S, P, H>
 where
@@ -828,5 +1098,26 @@ mod test {
         assert_eq!(queue.pop_front(), Some("task-a"));
         assert_eq!(queue.pop_front(), Some("task-b"));
         assert_eq!(queue.pop_front(), Some("task-c"));
+    }
+
+    #[test]
+    fn macro_empty() {
+        let v: UniqueVector<i32> = unique_vector![];
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn macro_with_elements() {
+        let v = unique_vector![1, 2, 1, 3];
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.get(0), Some(&1));
+        assert_eq!(v.get(1), Some(&2));
+        assert_eq!(v.get(2), Some(&3));
+    }
+
+    #[test]
+    fn macro_trailing_comma() {
+        let v = unique_vector![1, 2, 3,];
+        assert_eq!(v.len(), 3);
     }
 }

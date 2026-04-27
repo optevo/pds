@@ -40,9 +40,9 @@
 
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{ExactSizeIterator, FromIterator, FusedIterator};
 use core::ops::Index;
 
 use archery::SharedPointerKind;
@@ -76,7 +76,7 @@ impl<K: Clone, V: Clone, P: SharedPointerKind> Clone for GenericOrdMultiMap<K, V
 }
 
 impl<K, V, P: SharedPointerKind> GenericOrdMultiMap<K, V, P> {
-    /// Create an empty multimap.
+    /// Creates an empty multimap.
     #[must_use]
     pub fn new() -> Self {
         GenericOrdMultiMap {
@@ -85,25 +85,63 @@ impl<K, V, P: SharedPointerKind> GenericOrdMultiMap<K, V, P> {
         }
     }
 
-    /// Test whether the multimap is empty.
+    /// Tests whether the multimap is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// assert!(mm.is_empty());
+    /// mm.insert("a", 1);
+    /// assert!(!mm.is_empty());
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
-    /// Return the number of distinct keys.
+    /// Returns the number of distinct keys.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// mm.insert("b", 3);
+    /// assert_eq!(mm.keys_len(), 2);
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn keys_len(&self) -> usize {
         self.map.len()
     }
 
-    /// Return the total number of (key, value) pairs across all keys.
+    /// Returns the total number of (key, value) pairs across all keys.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// mm.insert("b", 3);
+    /// assert_eq!(mm.len(), 3);
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn len(&self) -> usize {
         self.total
     }
 
-    /// Test whether two multimaps share the same underlying allocation.
+    /// Tests whether two multimaps share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of
     /// the multimap — i.e. one is a clone of the other with no
@@ -123,10 +161,23 @@ where
     V: Ord + Clone,
     P: SharedPointerKind,
 {
-    /// Insert a key-value pair.
+    /// Inserts a key-value pair.
     ///
     /// If the value already exists for this key, no change is made (value sets
     /// do not hold duplicates). Returns `true` if the value was newly inserted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// assert!(mm.insert("fruit", "apple"));
+    /// assert!(mm.insert("fruit", "banana")); // second value for same key
+    /// assert!(!mm.insert("fruit", "apple")); // duplicate — not inserted
+    /// assert_eq!(mm.key_count(&"fruit"), 2);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn insert(&mut self, key: K, value: V) -> bool {
         let set = self.map.entry(key).or_default();
         let prev_len = set.len();
@@ -138,10 +189,26 @@ where
         inserted
     }
 
-    /// Remove a single value for a key.
+    /// Removes a single value for a key.
     ///
     /// Returns `true` if the pair was present and removed. If the key's value
     /// set becomes empty after removal, the key is removed entirely.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// assert!(mm.remove("a", &1));
+    /// assert_eq!(mm.key_count(&"a"), 1);
+    /// // Removing the last value drops the key.
+    /// assert!(mm.remove("a", &2));
+    /// assert!(!mm.contains_key(&"a"));
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn remove<QK, QV>(&mut self, key: &QK, value: &QV) -> bool
     where
         QK: Comparable<K> + ?Sized,
@@ -165,9 +232,25 @@ where
         removed
     }
 
-    /// Remove all values for a key, returning the removed value set.
+    /// Removes all values for a key, returning the removed value set.
     ///
     /// Returns an empty set if the key is not present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// mm.insert("b", 3);
+    /// let removed = mm.remove_all("a");
+    /// assert_eq!(removed.len(), 2);
+    /// assert!(!mm.contains_key(&"a"));
+    /// assert_eq!(mm.len(), 1);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn remove_all<Q>(&mut self, key: &Q) -> GenericOrdSet<V, P>
     where
         Q: Comparable<K> + ?Sized,
@@ -184,6 +267,21 @@ where
     /// Get the sorted value set for a key.
     ///
     /// Returns an empty set if the key is not present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("a", 10);
+    /// mm.insert("a", 20);
+    /// let vals = mm.get("a");
+    /// assert_eq!(vals.len(), 2);
+    /// assert!(vals.contains(&10) && vals.contains(&20));
+    /// assert!(mm.get("missing").is_empty());
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn get<Q>(&self, key: &Q) -> GenericOrdSet<V, P>
     where
@@ -192,7 +290,20 @@ where
         self.map.get(key).cloned().unwrap_or_default()
     }
 
-    /// Test whether a specific key-value pair is present.
+    /// Tests whether a specific key-value pair is present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("a", 1);
+    /// assert!(mm.contains(&"a", &1));
+    /// assert!(!mm.contains(&"a", &99));
+    /// assert!(!mm.contains(&"z", &1));
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn contains<QK, QV>(&self, key: &QK, value: &QV) -> bool
     where
@@ -202,7 +313,19 @@ where
         self.map.get(key).is_some_and(|set| set.contains(value))
     }
 
-    /// Test whether a key is present (has at least one value).
+    /// Tests whether a key is present (has at least one value).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("a", 1);
+    /// assert!(mm.contains_key(&"a"));
+    /// assert!(!mm.contains_key(&"z"));
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
@@ -211,7 +334,20 @@ where
         self.map.contains_key(key)
     }
 
-    /// Return the number of values for a key.
+    /// Returns the number of values for a key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// assert_eq!(mm.key_count(&"a"), 2);
+    /// assert_eq!(mm.key_count(&"z"), 0); // absent key
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn key_count<Q>(&self, key: &Q) -> usize
     where
@@ -220,27 +356,82 @@ where
         self.map.get(key).map_or(0, GenericOrdSet::len)
     }
 
-    /// Iterate over all (key, value) pairs in sorted (key, value) order.
+    /// Iterates over all (key, value) pairs in sorted (key, value) order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("b", 2);
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 3);
+    /// let pairs: Vec<_> = mm.iter().map(|(&k, &v)| (k, v)).collect();
+    /// assert_eq!(pairs, vec![("a", 1), ("a", 3), ("b", 2)]);
+    /// ```
+    ///
+    /// Time: O(1) to create; O(n) to consume
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> + '_ {
         self.map
             .iter()
             .flat_map(|(k, set)| set.iter().map(move |v| (k, v)))
     }
 
-    /// Iterate over keys and their value sets in sorted key order.
+    /// Iterates over keys and their value sets in sorted key order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// mm.insert("b", 3);
+    /// let sets: Vec<_> = mm.iter_sets().map(|(&k, s)| (k, s.len())).collect();
+    /// assert_eq!(sets, vec![("a", 2), ("b", 1)]);
+    /// ```
+    ///
+    /// Time: O(1) to create; O(keys) to consume
     pub fn iter_sets(&self) -> impl Iterator<Item = (&K, &GenericOrdSet<V, P>)> + '_ {
         self.map.iter()
     }
 
-    /// Iterate over all distinct keys in sorted order.
+    /// Iterates over all distinct keys in sorted order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let mut mm = OrdMultiMap::new();
+    /// mm.insert("b", 1);
+    /// mm.insert("a", 2);
+    /// mm.insert("a", 3);
+    /// let keys: Vec<_> = mm.keys().copied().collect();
+    /// assert_eq!(keys, vec!["a", "b"]);
+    /// ```
+    ///
+    /// Time: O(1) to create; O(keys) to consume
     pub fn keys(&self) -> impl Iterator<Item = &K> + '_ {
         self.map.iter().map(|(k, _)| k)
     }
 
-    /// Return the multiset union of two multimaps.
+    /// Returns the multiset union of two multimaps.
     ///
     /// For a key present in both, the result's value set is the union of both
     /// value sets. For a key in only one map, all its values are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let a: OrdMultiMap<i32, i32> = [(1, 10), (1, 20)].into();
+    /// let b: OrdMultiMap<i32, i32> = [(1, 30), (2, 40)].into();
+    /// let u = a.union(&b);
+    /// assert_eq!(u.key_count(&1), 3); // value sets merged
+    /// assert_eq!(u.key_count(&2), 1);
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn union(&self, other: &Self) -> Self {
         let mut result = self.clone();
@@ -255,9 +446,22 @@ where
         result
     }
 
-    /// Return entries whose keys are in `self` but not in `other`.
+    /// Returns entries whose keys are in `self` but not in `other`.
     ///
     /// For keys present only in `self`, all values are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let a: OrdMultiMap<i32, i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdMultiMap<i32, i32> = [(2, 99)].into();
+    /// let d = a.difference(&b);
+    /// assert!(d.contains_key(&1));
+    /// assert!(!d.contains_key(&2));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn difference(&self, other: &Self) -> Self {
         let mut result = Self::new();
@@ -270,7 +474,20 @@ where
         result
     }
 
-    /// Return entries whose keys are in both `self` and `other`; `self`'s value sets are kept.
+    /// Returns entries whose keys are in both `self` and `other`; `self`'s value sets are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let a: OrdMultiMap<i32, i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdMultiMap<i32, i32> = [(2, 99), (3, 30)].into();
+    /// let i = a.intersection(&b);
+    /// assert!(!i.contains_key(&1));
+    /// assert!(i.contains(&2, &20)); // self's value kept
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn intersection(&self, other: &Self) -> Self {
         let mut result = Self::new();
@@ -283,9 +500,23 @@ where
         result
     }
 
-    /// Return entries whose keys are in exactly one of `self` or `other`.
+    /// Returns entries whose keys are in exactly one of `self` or `other`.
     ///
     /// Keys present in both maps (regardless of their value sets) are excluded.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdMultiMap;
+    /// let a: OrdMultiMap<i32, i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdMultiMap<i32, i32> = [(2, 99), (3, 30)].into();
+    /// let sd = a.symmetric_difference(&b);
+    /// assert!(sd.contains_key(&1));
+    /// assert!(!sd.contains_key(&2)); // in both — excluded
+    /// assert!(sd.contains_key(&3));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn symmetric_difference(&self, other: &Self) -> Self {
         let mut result = Self::new();
@@ -392,6 +623,29 @@ where
     }
 }
 
+impl<K, V, P> Display for GenericOrdMultiMap<K, V, P>
+where
+    K: Ord + Clone + Display,
+    V: Ord + Clone + Display,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (k, vals) in self.iter_sets() {
+            write!(f, "{sep}{k}: {{")?;
+            let mut inner_sep = "";
+            for v in vals.iter() {
+                write!(f, "{inner_sep}{v}")?;
+                inner_sep = ", ";
+            }
+            write!(f, "}}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
+
 impl<K, V, P> FromIterator<(K, V)> for GenericOrdMultiMap<K, V, P>
 where
     K: Ord + Clone,
@@ -477,6 +731,11 @@ where
 {
     type Output = GenericOrdSet<V, P>;
 
+    /// Returns a reference to the set of values associated with `key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index(&self, key: &Q) -> &Self::Output {
         match self.map.get(key) {
             Some(set) => set,
@@ -492,6 +751,7 @@ where
 pub struct ConsumingIter<K, V, P: SharedPointerKind> {
     outer: MapConsumingIter<K, GenericOrdSet<V, P>, P>,
     inner: Option<(K, SetConsumingIter<V, P>)>,
+    remaining: usize,
 }
 
 impl<K, V, P> Iterator for ConsumingIter<K, V, P>
@@ -506,6 +766,7 @@ where
         loop {
             if let Some((ref k, ref mut inner)) = self.inner {
                 if let Some(v) = inner.next() {
+                    self.remaining -= 1;
                     return Some((k.clone(), v));
                 }
                 self.inner = None;
@@ -514,6 +775,26 @@ where
             self.inner = Some((k, set.into_iter()));
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<K, V, P> ExactSizeIterator for ConsumingIter<K, V, P>
+where
+    K: Ord + Clone,
+    V: Ord + Clone,
+    P: SharedPointerKind,
+{
+}
+
+impl<K, V, P> FusedIterator for ConsumingIter<K, V, P>
+where
+    K: Ord + Clone,
+    V: Ord + Clone,
+    P: SharedPointerKind,
+{
 }
 
 impl<K, V, P> IntoIterator for GenericOrdMultiMap<K, V, P>
@@ -526,9 +807,11 @@ where
     type IntoIter = ConsumingIter<K, V, P>;
 
     fn into_iter(self) -> Self::IntoIter {
+        let remaining = self.total;
         ConsumingIter {
             outer: self.map.into_iter(),
             inner: None,
+            remaining,
         }
     }
 }

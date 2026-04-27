@@ -48,7 +48,7 @@ pub struct Atom<T> {
 }
 
 impl<T> Atom<T> {
-    /// Create a new `Atom` holding the given value.
+    /// Creates a new `Atom` holding the given value.
     pub fn new(value: T) -> Self {
         Atom {
             inner: ArcSwap::from_pointee(value),
@@ -85,7 +85,7 @@ impl<T> Atom<T> {
         self.inner.rcu(|old| f(old));
     }
 
-    /// Swap the current value with a new one, returning the old value.
+    /// Swaps the current value with a new one, returning the old value.
     pub fn swap(&self, value: T) -> Arc<T> {
         self.inner.swap(Arc::new(value))
     }

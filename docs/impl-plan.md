@@ -59,6 +59,43 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-27] DEC-038 perf improvements: ptr_eq fast-paths, OrdTrie merge-walk, InsertionOrderMap bulk load.**
+  Three performance improvements from the DEC-038 investigation:
+  (1) `Trie` (`src/trie.rs`): added `ptr_eq` fast-paths to all four set operations
+  (`union`, `difference`, `intersection`, `symmetric_difference`). O(1) short-circuit
+  for structurally-shared tries. Root `value` handled separately from children in each
+  fast-path (ptr_eq checks only the children pointer).
+  (2) `OrdTrie` (`src/ord_trie.rs`): replaced flatten-and-rebuild with full merge-walk
+  in all four set operations. Recursive descent through both OrdTrie structures
+  simultaneously; ptr_eq short-circuit at each level; empty-node pruning after
+  difference/intersection. symmetric_difference uses a two-pass approach with sorted
+  `in_both: Vec<K>` and binary_search to find "only in other" keys without a second
+  mutable borrow.
+  (3) `InsertionOrderMap::from_iter` (`src/insertion_order_map.rs`): replaced O(n log n)
+  sequential insert loop with O(n avg) two-pass bulk load. Pass 1 deduplicates via HAMT
+  index (sequential counter assignment). Pass 2 builds the `entries` OrdMap via
+  `GenericOrdMap::from_sorted_iter` — a new O(n) bottom-up B+ tree constructor
+  (`build_sorted` in `src/nodes/btree.rs`). All `test.sh` checks pass (fmt, cargo test
+  × 3 feature variants, clippy -D warnings, cargo doc, cargo audit).
+
+- **[2026-04-27] Documentation and coverage pass.**
+  Completed `# Examples` doc blocks across all 14 derived collection types. Audited
+  `# Panics` sections, `#[must_use]` annotations, and iterator trait coverage
+  (`FusedIterator`, `ExactSizeIterator`). Added `ExactSizeIterator` to `HashMultiMap`
+  and `OrdMultiMap` `ConsumingIter` with `remaining` counter. Ran `cargo llvm-cov` and
+  added targeted tests to `vector/focus.rs` (coverage 82.8% → 96.2%), covering
+  `FocusMut::Single/Full` paths, `pair()`, `triplet()`, `unmut()`, all panic branches,
+  and all unsafe raw pointer paths. Fixed `FocusMut::narrow` bounds-check bug
+  (`r.start > self.len()` → `r.end > self.len()`). Added Miri-targeted tests for all
+  unsafe code paths in focus.rs — none marked `#[cfg_attr(miri, ignore)]`. Added
+  `Send`/`Sync` static assertions for all 20 collection types. Fixed README feature
+  flag descriptions for `proptest`/`quickcheck`/`arbitrary` (were listing only 12 types
+  as "all collection types"). Extended proptest/quickcheck/arbitrary coverage to all
+  20 collection types — added Ord-backed derived types (OrdBag, OrdMultiMap, OrdBiMap,
+  OrdSymMap, OrdTrie, OrdInsertionOrderMap, OrdInsertionOrderSet) and UniqueVector to
+  all three feature modules. Updated lib.rs and README feature tables accordingly.
+  1126 tests pass.
+
 - **[2026-04-27] API gap fill + content hash rationalisation + doc/test consistency pass.**
   Added `HashSet::get`, `HashSet::extract`, `OrdSet::extract`, `OrdMap::remove_min`,
   `OrdMap::remove_max`, `Vector::partition`. Added `ptr_eq` to all 14 derived types
@@ -2611,28 +2648,17 @@ comment explaining what it checks.
 
 ---
 
-### R.8 Extend proptest / quickcheck / arbitrary to newer collection types (LOW) — DONE [2026-04-26]
+### R.8 Extend proptest / quickcheck / arbitrary to all collection types (LOW) — DONE [2026-04-27]
 
-**What:** `proptest`, `quickcheck`, and `arbitrary` feature implementations exist only for the
-five original types (Vector, OrdMap, OrdSet, HashMap, HashSet). The seven newer types
-(Bag, HashMultiMap, BiMap, SymMap, InsertionOrderMap, InsertionOrderSet, Trie) are
-uncovered. The directives table requires all three features for all collection types.
+**What:** Extended `proptest`, `quickcheck`, and `arbitrary` to cover all 20 collection types.
 
-- `src/proptest.rs` — add strategy functions for each newer type
-- `src/quickcheck.rs` — add `quickcheck::Arbitrary` impls
-- `src/arbitrary.rs` — add `arbitrary::Arbitrary` impls
+Phase 1 [2026-04-26]: Added the 7 Hash-backed derived types (Bag, HashMultiMap, BiMap, SymMap,
+InsertionOrderMap, InsertionOrderSet, Trie).
 
-**Why:** Feature flag descriptions in lib.rs and README previously (incorrectly) claimed
-"all datatypes". Fixed to say "5 legacy types" with a "not yet covered" note. This item
-closes the gap.
+Phase 2 [2026-04-27]: Added the 7 Ord-backed derived types (OrdBag, OrdMultiMap, OrdBiMap,
+OrdSymMap, OrdTrie, OrdInsertionOrderMap, OrdInsertionOrderSet) and UniqueVector.
 
-**Complexity:** Low–medium per type. Each needs a strategy (proptest: compose from existing
-element strategies; quickcheck: generate random elements and insert).
-
-**Prerequisites:** None.
-
-**Acceptance:** All three features compile and test against all 11 collection types.
-Descriptions in lib.rs and README updated to "all collection types".
+README updated to "all 20 collection types" for all three feature flags.
 
 ---
 

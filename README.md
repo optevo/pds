@@ -7,6 +7,24 @@ Forked from [imbl](https://github.com/jneem/imbl) (itself a fork of
 performance over compatibility, Merkle hashing for O(1) equality checks,
 SIMD-accelerated HAMT nodes, and no_std support.
 
+## Installation
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+pds = "1.0"
+```
+
+Optional features can be enabled as needed:
+
+```toml
+[dependencies]
+pds = { version = "1.0", features = ["serde", "rayon"] }
+```
+
+See [Feature flags](#feature-flags) for the full list.
+
 ## Collections
 
 All collections use structural sharing: cloning is O(1) and modified copies
@@ -47,12 +65,100 @@ share unchanged subtrees with the original.
 | `OrdInsertionOrderMap<K, V>` | 2× B+ tree | `Clone + Ord` | Insertion-ordered map — `Ord`-only, O(log n) delete |
 | `OrdInsertionOrderSet<A>` | 2× B+ tree | `Clone + Ord` | Insertion-ordered set — `Ord`-only, O(log n) delete |
 | `HashMultiMap<K, V>` | SIMD HAMT | `Clone + Hash + Eq` | Key → set of values multimap |
-| `InsertionOrderMap<K, V>` | SIMD HAMT + B+ tree | `Clone + Hash + Eq` | Map that iterates in insertion order |
-| `InsertionOrderSet<A>` | SIMD HAMT + B+ tree | `Clone + Hash + Eq` | Set that iterates in insertion order |
+| `InsertionOrderMap<K, V>` | SIMD HAMT + B+ tree | `Clone + Hash + Eq` | Map that iterates in insertion order — O(log n) per-op (B+ tree bottleneck, not O(1) like a plain hash map) |
+| `InsertionOrderSet<A>` | SIMD HAMT + B+ tree | `Clone + Hash + Eq` | Set that iterates in insertion order — O(log n) per-op (B+ tree bottleneck, not O(1) like a plain hash set) |
 | `BiMap<K, V>` | 2× SIMD HAMT | `Clone + Hash + Eq` | Bidirectional map — bijection between two types |
 | `SymMap<A>` | 2× SIMD HAMT | `Clone + Hash + Eq` | Symmetric bidirectional map with O(1) swap |
 | `Trie<K, V>` | HAMT of HAMTs | `Clone + Hash + Eq` | Persistent prefix tree — paths to values |
 | `UniqueVector<A>` | RRB tree + SIMD HAMT | `Clone + Hash + Eq` | Persistent sequence with uniqueness — dedup queue/stack with O(log n) index access |
+
+All collection types implement `Display` for human-readable output.
+`Debug` is also implemented on all types for use in format strings and test assertions.
+
+## pds vs the standard library
+
+The standard library provides `HashMap`, `BTreeMap`, and `Vec` as mutable, owned
+containers. Every `clone()` allocates fresh memory and copies every element — O(n)
+in both time and space. pds collections use structural sharing: clone is always O(1),
+and a modification touches only the path from the root to the changed node.
+
+### Maps
+
+| Operation | `std::HashMap` | `pds::HashMap` | `std::BTreeMap` | `pds::OrdMap` |
+|-----------|:--------------:|:--------------:|:---------------:|:-------------:|
+| `clone()` | O(n) | **O(1)** | O(n) | **O(1)** |
+| Lookup | **O(1) avg** | O(log n) | O(log n) | O(log n) |
+| Insert | **O(1) avg** | O(log n) | O(log n) | O(log n) |
+| Remove | **O(1) avg** | O(log n) | O(log n) | O(log n) |
+| Iterate | O(n) | O(n) | O(n) | O(n) |
+| Equality | O(n) | **O(1)†** | O(n) | **O(1)‡** |
+
+† Merkle hash fast-path — same-lineage maps with equal length and equal Merkle hash compare in O(1).  
+‡ Cached content hash (`ord-hash` feature, on by default) — O(1) when the hash is valid.
+
+The trade-off is clone cost versus point-lookup speed. `std::HashMap` wins on random
+lookups (roughly 2× faster than `pds::HashMap`). pds wins on any operation that involves
+copying: every clone that would cost O(n) with a standard map becomes O(1).
+
+When a single thread owns a map and mutates it in a tight loop with no snapshotting,
+`std::HashMap` is the right tool. When you need snapshots, undo/redo, versioning, or
+shared state between threads — pds collections win.
+
+### Vectors
+
+| Operation | `std::Vec` | `pds::Vector` |
+|-----------|:----------:|:-------------:|
+| `clone()` | O(n) | **O(1)** |
+| Push (back) | **O(1) avg** | O(1) avg |
+| Random access | **O(1)** | O(log n) |
+| Insert (middle) | O(n) | **O(log n)** |
+| Split | O(n) | **O(log n)** |
+| Concat | O(n) | **O(log n)** |
+
+`std::Vec` is unbeatable for purely sequential workloads: appending and reading by
+index in a tight loop. `pds::Vector` trades a constant factor on random access (the
+RRB tree depth) for dramatically cheaper structural operations — split and concat are
+O(log n) rather than O(n), and clone is O(1). Use `pds::Vector` when you need to branch
+on a sequence: taking a snapshot before a speculative edit, passing an independent view
+to another thread, or producing multiple output variants from a single input.
+
+### Multi-threading
+
+Rust's ownership model prevents data races at compile time. pds extends this advantage:
+because clone is O(1), you can hand a complete, independent snapshot to another thread
+with no synchronisation overhead.
+
+With a standard library map:
+
+```rust
+// Every reader must acquire the lock — even for read-only access.
+let shared: Arc<Mutex<std::collections::HashMap<K, V>>> = ...;
+let guard = shared.lock().unwrap();
+let value = guard.get(&key);
+```
+
+With a pds map:
+
+```rust
+// Clone the current snapshot in O(1) — no lock held during processing.
+let snapshot: pds::HashMap<K, V> = current_state.clone();
+let value = snapshot.get(&key);
+```
+
+Because each modification produces a new root without touching the old one, multiple
+threads can hold snapshots at different points in time — all sharing structure, all
+independent, none blocking the others. Common patterns:
+
+- **Worker pools** — distribute independent snapshots to workers; merge results back
+  with `par_union`.
+- **Speculative execution** — clone before a tentative operation; discard the clone on
+  rollback, keep it on commit.
+- **Event sourcing** — each state transition produces a new snapshot; prior states are
+  retained cheaply because unchanged subtrees are shared.
+- **Read scale-out** — any number of readers hold the latest snapshot with zero
+  contention; the writer atomically publishes a new root.
+
+---
 
 ## Choosing the right map
 
@@ -350,11 +456,11 @@ parallel set operations.
 |---------|:-------:|-------------|
 | `std` | Yes | Enables `std`-dependent type aliases (`HashMap`, `HashSet`, etc.), `From<std::collections::*>` conversions, and `Mutex`-based locking. Disable for `no_std + alloc` environments. |
 | `triomphe` | Yes | Use `triomphe::Arc` as the default shared pointer — no weak count, 8 bytes smaller per node, one fewer atomic op per clone/drop. |
-| `proptest` | No | Proptest strategies for `Vector`, `OrdMap`, `OrdSet`, `HashMap`, `HashSet`. Newer types (Bag, HashMultiMap, etc.) not yet covered. |
-| `quickcheck` | No | `Arbitrary` implementations for `Vector`, `OrdMap`, `OrdSet`, `HashMap`, `HashSet`. Newer types not yet covered. |
-| `rayon` | No | Parallel iterators and parallel set operations for all collection types. See "Parallel support" below for full coverage. |
+| `proptest` | No | Proptest strategies for all 20 collection types. |
+| `quickcheck` | No | `Arbitrary` implementations for all 20 collection types. |
+| `rayon` | No | Parallel iterators, parallel set operations (`par_union`, `par_intersection`, `par_difference`, `par_symmetric_difference`), and parallel transform operations (`par_filter`, `par_map_values`, `par_map_values_with_key`) for all eligible collection types. See "Parallel support" below for full coverage. |
 | `serde` | No | `Serialize` / `Deserialize` for all collection types |
-| `arbitrary` | No | `Arbitrary` implementations for fuzzing (`Vector`, `OrdMap`, `OrdSet`, `HashMap`, `HashSet`). Newer types not yet covered. |
+| `arbitrary` | No | `Arbitrary` implementations for fuzzing — all 20 collection types. |
 | `foldhash` | No | Enables `HashMap`/`HashSet`/etc. type aliases in `no_std` via `foldhash::fast::RandomState` |
 | `atom` | No | Thread-safe atomic state holder via `arc-swap` (requires `std`) |
 | `hash-intern` | No | Hash consing / node interning for HAMT collections via `InternPool` — deduplicates identical subtrees for memory savings and O(1) pointer equality |

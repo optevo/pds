@@ -1,0 +1,66 @@
+# cargo-deny configuration for pds
+# Run: cargo deny check
+# Install: add cargo-deny to flake.nix packages
+
+[graph]
+# Only check the default feature set plus common optional features
+# (all-features would pull in dev-only crates which are acceptable)
+targets = []
+
+# --- Advisories ---
+
+[advisories]
+# Deny crates with known security advisories of these types
+version = 2
+deny = ["unsound", "unmaintained", "yanked"]
+
+# --- Licences ---
+
+[licenses]
+version = 2
+# Crates must use one of these licences
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MPL-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Zlib",
+    "OpenSSL",
+]
+
+# --- Bans ---
+
+[bans]
+# Deny multiple versions of the same crate unless explicitly allowed below.
+# Duplicates inflate compile times and binary size.
+multiple-versions = "deny"
+
+# Crates that commonly appear at multiple versions due to ecosystem churn —
+# deny.toml skipping these avoids noisy false positives during ecosystem
+# version transitions.
+skip = [
+    # proc-macro ecosystem often lags on syn/quote major bumps
+    { name = "syn", reason = "proc-macro ecosystem version skew is common" },
+    { name = "quote", reason = "proc-macro ecosystem version skew is common" },
+    { name = "proc-macro2", reason = "proc-macro ecosystem version skew is common" },
+    # rand crates split versions during 0.8 → 0.9 transition
+    { name = "rand", reason = "rand 0.8/0.9 split during ecosystem transition" },
+    { name = "rand_core", reason = "rand 0.8/0.9 split during ecosystem transition" },
+    { name = "getrandom", reason = "rand ecosystem version skew" },
+    # criterion still pulls in an older version of some crates
+    { name = "itertools", reason = "criterion uses an older version" },
+]
+
+# --- Sources ---
+
+[sources]
+# Only allow crates from crates.io; no git or path dependencies in the
+# published dependency graph.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -36,7 +36,7 @@
 //! `FromIterator` / `Extend` impls instead.
 
 use alloc::vec::Vec;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::FromIterator;
 #[cfg(feature = "std")]
@@ -48,6 +48,40 @@ use equivalent::Equivalent;
 use crate::hash_width::HashWidth;
 use crate::insertion_order_map::{ConsumingIter as MapConsumingIter, GenericInsertionOrderMap};
 use crate::shared_ptr::DefaultSharedPtr;
+
+/// Constructs an [`InsertionOrderSet`] from a sequence of elements.
+///
+/// # Examples
+///
+/// ```
+/// # #[macro_use] extern crate pds;
+/// # use pds::InsertionOrderSet;
+/// # fn main() {
+/// let s = insertion_order_set!["c", "a", "b"];
+/// let elems: Vec<_> = s.iter().collect();
+/// assert_eq!(elems, vec![&"c", &"a", &"b"]);
+/// # }
+/// ```
+#[macro_export]
+macro_rules! insertion_order_set {
+    () => { $crate::insertion_order_set::InsertionOrderSet::new() };
+
+    ( $($x:expr),* ) => {{
+        let mut l = $crate::insertion_order_set::InsertionOrderSet::new();
+        $(
+            l.insert($x);
+        )*
+        l
+    }};
+
+    ( $($x:expr ,)* ) => {{
+        let mut l = $crate::insertion_order_set::InsertionOrderSet::new();
+        $(
+            l.insert($x);
+        )*
+        l
+    }};
+}
 
 /// Type alias for [`GenericInsertionOrderSet`] with default hasher and pointer type.
 #[cfg(feature = "std")]
@@ -92,7 +126,7 @@ impl<A, P> GenericInsertionOrderSet<A, RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty insertion-ordered set.
+    /// Creates an empty insertion-ordered set.
     #[must_use]
     pub fn new() -> Self {
         GenericInsertionOrderSet {
@@ -106,7 +140,7 @@ impl<A, P> GenericInsertionOrderSet<A, foldhash::fast::RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty insertion-ordered set (no_std + foldhash).
+    /// Creates an empty insertion-ordered set (no_std + foldhash).
     #[must_use]
     pub fn new() -> Self {
         GenericInsertionOrderSet {
@@ -121,19 +155,44 @@ impl<A, S, P, H: HashWidth> GenericInsertionOrderSet<A, S, P, H>
 where
     P: SharedPointerKind,
 {
-    /// Test whether the set is empty.
+    /// Tests whether the set is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let mut set = InsertionOrderSet::new();
+    /// assert!(set.is_empty());
+    /// set.insert(1);
+    /// assert!(!set.is_empty());
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
-    /// Return the number of elements.
+    /// Returns the number of elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let mut set = InsertionOrderSet::new();
+    /// assert_eq!(set.len(), 0);
+    /// set.insert("a");
+    /// set.insert("b");
+    /// assert_eq!(set.len(), 2);
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Test whether two sets share the same underlying allocation.
+    /// Tests whether two sets share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of the
     /// set — i.e. one is a clone of the other with no intervening
@@ -155,7 +214,19 @@ where
     S: BuildHasher + Clone,
     P: SharedPointerKind,
 {
-    /// Test whether an element is present.
+    /// Tests whether an element is present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let mut set = InsertionOrderSet::new();
+    /// set.insert(42);
+    /// assert!(set.contains(&42));
+    /// assert!(!set.contains(&99));
+    /// ```
+    ///
+    /// Time: O(1) avg
     #[must_use]
     pub fn contains<Q>(&self, elem: &Q) -> bool
     where
@@ -164,18 +235,44 @@ where
         self.map.contains_key(elem)
     }
 
-    /// Insert an element.
+    /// Inserts an element.
     ///
     /// Returns `true` if the element was newly inserted, `false` if it was
     /// already present (the set is unchanged).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let mut set = InsertionOrderSet::new();
+    /// assert!(set.insert("a"));  // newly inserted
+    /// assert!(!set.insert("a")); // already present — no change
+    /// assert_eq!(set.len(), 1);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn insert(&mut self, elem: A) -> bool {
         self.map.insert(elem, ()).is_none()
     }
 
-    /// Remove an element.
+    /// Removes an element.
     ///
     /// Returns `true` if the element was present and has been removed,
     /// `false` if it was not present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let mut set = InsertionOrderSet::new();
+    /// set.insert("a");
+    /// set.insert("b");
+    /// assert!(set.remove("a"));
+    /// assert!(!set.contains("a"));
+    /// assert!(!set.remove("z")); // not present
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn remove<Q>(&mut self, elem: &Q) -> bool
     where
         Q: Hash + Equivalent<A> + ?Sized,
@@ -183,48 +280,144 @@ where
         self.map.remove(elem).is_some()
     }
 
-    /// Return a reference to the first element in insertion order, or `None` if empty.
+    /// Returns a reference to the first element in insertion order, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let mut set = InsertionOrderSet::new();
+    /// set.insert("b");
+    /// set.insert("a");
+    /// assert_eq!(set.front(), Some(&"b")); // first inserted
+    /// ```
+    ///
+    /// Time: O(log n)
+    #[must_use]
     pub fn front(&self) -> Option<&A> {
         self.map.front().map(|(a, _)| a)
     }
 
-    /// Return a reference to the last element in insertion order, or `None` if empty.
+    /// Returns a reference to the last element in insertion order, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let mut set = InsertionOrderSet::new();
+    /// set.insert("b");
+    /// set.insert("a");
+    /// assert_eq!(set.back(), Some(&"a")); // last inserted
+    /// ```
+    ///
+    /// Time: O(log n)
+    #[must_use]
     pub fn back(&self) -> Option<&A> {
         self.map.back().map(|(a, _)| a)
     }
 
-    /// Remove and return the first element in insertion order (FIFO dequeue).
+    /// Removes and return the first element in insertion order (FIFO dequeue).
     ///
     /// Returns `None` if the set is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let mut set = InsertionOrderSet::new();
+    /// set.insert(1i32);
+    /// set.insert(2);
+    /// assert_eq!(set.pop_front(), Some(1));
+    /// assert_eq!(set.pop_front(), Some(2));
+    /// assert_eq!(set.pop_front(), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn pop_front(&mut self) -> Option<A> {
         self.map.pop_front().map(|(a, _)| a)
     }
 
-    /// Remove and return the last element in insertion order (LIFO dequeue).
+    /// Removes and return the last element in insertion order (LIFO dequeue).
     ///
     /// Returns `None` if the set is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let mut set = InsertionOrderSet::new();
+    /// set.insert(1i32);
+    /// set.insert(2);
+    /// assert_eq!(set.pop_back(), Some(2));
+    /// assert_eq!(set.pop_back(), Some(1));
+    /// assert_eq!(set.pop_back(), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn pop_back(&mut self) -> Option<A> {
         self.map.pop_back().map(|(a, _)| a)
     }
 
-    /// Iterate over elements in insertion order.
+    /// Iterates over elements in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let mut set = InsertionOrderSet::new();
+    /// set.insert("c");
+    /// set.insert("a");
+    /// set.insert("b");
+    /// let elems: Vec<_> = set.iter().collect();
+    /// assert_eq!(elems, vec![&"c", &"a", &"b"]);
+    /// ```
+    ///
+    /// Time: O(1) to create; O(n) to consume
     pub fn iter(&self) -> impl Iterator<Item = &A> {
         self.map.iter().map(|(a, _)| a)
     }
 
-    /// Return the union of two sets.
+    /// Returns the union of two sets.
     ///
     /// All elements from both sets are included. Elements already present in
     /// `self` keep their position; new elements from `other` are appended in
     /// `other`'s insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let a: InsertionOrderSet<i32> = [1, 2].into();
+    /// let b: InsertionOrderSet<i32> = [2, 3].into();
+    /// let u = a.union(b);
+    /// let elems: Vec<_> = u.iter().copied().collect();
+    /// assert_eq!(elems, vec![1, 2, 3]); // 2 not duplicated
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn union(mut self, other: Self) -> Self {
         self.extend(other);
         self
     }
 
-    /// Return the symmetric difference of two sets — elements that are in
+    /// Returns the symmetric difference of two sets — elements that are in
     /// exactly one of the two sets.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let a: InsertionOrderSet<i32> = [1, 2, 3].into();
+    /// let b: InsertionOrderSet<i32> = [2, 4].into();
+    /// let sd = a.symmetric_difference(b);
+    /// assert!(sd.contains(&1));
+    /// assert!(!sd.contains(&2));
+    /// assert!(sd.contains(&3));
+    /// assert!(sd.contains(&4));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn symmetric_difference(mut self, other: Self) -> Self {
         for elem in other {
@@ -242,13 +435,39 @@ where
     S: BuildHasher + Clone + Default,
     P: SharedPointerKind,
 {
-    /// Return elements in `self` that are not in `other` (set difference A \ B).
+    /// Returns elements in `self` that are not in `other` (set difference A \ B).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let a: InsertionOrderSet<i32> = [1, 2, 3].into();
+    /// let b: InsertionOrderSet<i32> = [2].into();
+    /// let d = a.difference(&b);
+    /// let elems: Vec<_> = d.iter().copied().collect();
+    /// assert_eq!(elems, vec![1, 3]);
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
         self.into_iter().filter(|a| !other.contains(a)).collect()
     }
 
-    /// Return elements present in both sets; elements keep their position from `self`.
+    /// Returns elements present in both sets; elements keep their position from `self`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let a: InsertionOrderSet<i32> = [1, 2, 3].into();
+    /// let b: InsertionOrderSet<i32> = [2, 3, 4].into();
+    /// let i = a.intersection(&b);
+    /// let elems: Vec<_> = i.iter().copied().collect();
+    /// assert_eq!(elems, vec![2, 3]);
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
         self.into_iter().filter(|a| other.contains(a)).collect()
@@ -328,6 +547,22 @@ where
 }
 
 // --- FromIterator ---
+impl<A, S, P, H: HashWidth> Display for GenericInsertionOrderSet<A, S, P, H>
+where
+    A: Display + Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for a in self.iter() {
+            write!(f, "{sep}{a}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
 
 impl<A, S, P, H: HashWidth> FromIterator<A> for GenericInsertionOrderSet<A, S, P, H>
 where
@@ -841,5 +1076,27 @@ mod test {
         assert_eq!(queue.len(), 3);
         let drained: Vec<_> = core::iter::from_fn(|| queue.pop_front()).collect();
         assert_eq!(drained, vec!["node-1", "node-2", "node-3"]);
+    }
+
+    #[test]
+    fn macro_empty() {
+        let s: InsertionOrderSet<&str> = insertion_order_set![];
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn macro_with_elements() {
+        let s = insertion_order_set!["c", "a", "b"];
+        assert_eq!(s.len(), 3);
+        assert!(s.contains(&"a"));
+        // Elements must iterate in insertion order.
+        let elems: Vec<_> = s.iter().collect();
+        assert_eq!(elems, vec![&"c", &"a", &"b"]);
+    }
+
+    #[test]
+    fn macro_trailing_comma() {
+        let s = insertion_order_set!["x", "y", "z",];
+        assert_eq!(s.len(), 3);
     }
 }

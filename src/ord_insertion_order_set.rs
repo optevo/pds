@@ -29,15 +29,51 @@
 //! ```
 
 use alloc::vec::Vec;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{FromIterator, FusedIterator};
 
 use archery::SharedPointerKind;
 use equivalent::Comparable;
 
-use crate::ord_insertion_order_map::{ConsumingIter as MapConsumingIter, GenericOrdInsertionOrderMap};
+use crate::ord_insertion_order_map::{
+    ConsumingIter as MapConsumingIter, GenericOrdInsertionOrderMap,
+};
 use crate::shared_ptr::DefaultSharedPtr;
+
+/// Constructs an [`OrdInsertionOrderSet`] from a sequence of elements.
+///
+/// # Examples
+///
+/// ```
+/// # #[macro_use] extern crate pds;
+/// # use pds::OrdInsertionOrderSet;
+/// # fn main() {
+/// let s = ord_insertion_order_set!["c", "a", "b"];
+/// let elems: Vec<_> = s.iter().collect();
+/// assert_eq!(elems, vec![&"c", &"a", &"b"]);
+/// # }
+/// ```
+#[macro_export]
+macro_rules! ord_insertion_order_set {
+    () => { $crate::ord_insertion_order_set::OrdInsertionOrderSet::new() };
+
+    ( $($x:expr),* ) => {{
+        let mut l = $crate::ord_insertion_order_set::OrdInsertionOrderSet::new();
+        $(
+            l.insert($x);
+        )*
+        l
+    }};
+
+    ( $($x:expr ,)* ) => {{
+        let mut l = $crate::ord_insertion_order_set::OrdInsertionOrderSet::new();
+        $(
+            l.insert($x);
+        )*
+        l
+    }};
+}
 
 /// Type alias for [`GenericOrdInsertionOrderSet`] with the default pointer type.
 pub type OrdInsertionOrderSet<A> = GenericOrdInsertionOrderSet<A, DefaultSharedPtr>;
@@ -64,7 +100,7 @@ impl<A: Clone, P: SharedPointerKind> Clone for GenericOrdInsertionOrderSet<A, P>
 }
 
 impl<A, P: SharedPointerKind> GenericOrdInsertionOrderSet<A, P> {
-    /// Create an empty OrdInsertionOrderSet.
+    /// Creates an empty OrdInsertionOrderSet.
     #[must_use]
     pub fn new() -> Self {
         GenericOrdInsertionOrderSet {
@@ -72,19 +108,23 @@ impl<A, P: SharedPointerKind> GenericOrdInsertionOrderSet<A, P> {
         }
     }
 
-    /// Test whether the set is empty.
+    /// Tests whether the set is empty.
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
-    /// Return the number of elements.
+    /// Returns the number of elements.
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Test whether two sets share the same underlying allocation.
+    /// Tests whether two sets share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of the
     /// set — i.e. one is a clone of the other with no intervening
@@ -99,14 +139,38 @@ impl<A, P: SharedPointerKind> GenericOrdInsertionOrderSet<A, P> {
 }
 
 impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdInsertionOrderSet<A, P> {
-    /// Insert an element. Does nothing if already present.
+    /// Inserts an element. Does nothing if already present.
     ///
     /// Returns `true` if the element was newly inserted, `false` if it already existed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let mut set = OrdInsertionOrderSet::new();
+    /// assert!(set.insert("a"));
+    /// assert!(!set.insert("a")); // duplicate — ignored
+    /// assert_eq!(set.len(), 1);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn insert(&mut self, value: A) -> bool {
         self.map.insert(value, ()).is_none()
     }
 
-    /// Test whether an element is present.
+    /// Tests whether an element is present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let mut set = OrdInsertionOrderSet::new();
+    /// set.insert("a");
+    /// assert!(set.contains(&"a"));
+    /// assert!(!set.contains(&"z"));
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn contains<Q>(&self, value: &Q) -> bool
     where
@@ -115,7 +179,20 @@ impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdInsertionOrderSet<A, P> {
         self.map.contains_key(value)
     }
 
-    /// Remove an element. Returns `true` if it was present.
+    /// Removes an element. Returns `true` if it was present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let mut set = OrdInsertionOrderSet::new();
+    /// set.insert("a");
+    /// assert!(set.remove(&"a"));
+    /// assert!(!set.remove(&"a")); // already removed
+    /// assert!(set.is_empty());
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn remove<Q>(&mut self, value: &Q) -> bool
     where
         Q: Comparable<A> + ?Sized,
@@ -123,39 +200,120 @@ impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdInsertionOrderSet<A, P> {
         self.map.remove(value).is_some()
     }
 
-    /// Return a reference to the first element in insertion order, or `None` if empty.
+    /// Returns a reference to the first element in insertion order, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let mut set = OrdInsertionOrderSet::new();
+    /// set.insert("b");
+    /// set.insert("a");
+    /// assert_eq!(set.front(), Some(&"b")); // insertion order, not sorted
+    /// ```
+    ///
+    /// Time: O(log n)
+    #[must_use]
     pub fn front(&self) -> Option<&A> {
         self.map.front().map(|(a, _)| a)
     }
 
-    /// Return a reference to the last element in insertion order, or `None` if empty.
+    /// Returns a reference to the last element in insertion order, or `None` if empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let mut set = OrdInsertionOrderSet::new();
+    /// set.insert("b");
+    /// set.insert("a");
+    /// assert_eq!(set.back(), Some(&"a")); // last inserted
+    /// ```
+    ///
+    /// Time: O(log n)
+    #[must_use]
     pub fn back(&self) -> Option<&A> {
         self.map.back().map(|(a, _)| a)
     }
 
-    /// Remove and return the first element in insertion order (FIFO dequeue).
+    /// Removes and return the first element in insertion order (FIFO dequeue).
     ///
     /// Returns `None` if the set is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let mut set = OrdInsertionOrderSet::new();
+    /// set.insert(1i32);
+    /// set.insert(2);
+    /// assert_eq!(set.pop_front(), Some(1));
+    /// assert_eq!(set.pop_front(), Some(2));
+    /// assert_eq!(set.pop_front(), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn pop_front(&mut self) -> Option<A> {
         self.map.pop_front().map(|(a, _)| a)
     }
 
-    /// Remove and return the last element in insertion order (LIFO dequeue).
+    /// Removes and return the last element in insertion order (LIFO dequeue).
     ///
     /// Returns `None` if the set is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let mut set = OrdInsertionOrderSet::new();
+    /// set.insert(1i32);
+    /// set.insert(2);
+    /// assert_eq!(set.pop_back(), Some(2));
+    /// assert_eq!(set.pop_back(), Some(1));
+    /// assert_eq!(set.pop_back(), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn pop_back(&mut self) -> Option<A> {
         self.map.pop_back().map(|(a, _)| a)
     }
 
-    /// Iterate over elements in insertion order.
+    /// Iterates over elements in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let mut set = OrdInsertionOrderSet::new();
+    /// set.insert("c");
+    /// set.insert("a");
+    /// set.insert("b");
+    /// let elems: Vec<_> = set.iter().collect();
+    /// assert_eq!(elems, vec![&"c", &"a", &"b"]); // insertion order, not sorted
+    /// ```
+    ///
+    /// Time: O(1) to create; O(n) to consume
     pub fn iter(&self) -> impl Iterator<Item = &A> {
         self.map.keys()
     }
 
-    /// Return the union of two sets.
+    /// Returns the union of two sets.
     ///
     /// New elements from `other` are appended in `other`'s insertion order
     /// after all of `self`'s elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let a: OrdInsertionOrderSet<i32> = [1, 2].into();
+    /// let b: OrdInsertionOrderSet<i32> = [2, 3].into();
+    /// let u = a.union(b);
+    /// let elems: Vec<_> = u.iter().copied().collect();
+    /// assert_eq!(elems, vec![1, 2, 3]); // 2 not duplicated
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn union(self, other: Self) -> Self {
         GenericOrdInsertionOrderSet {
@@ -163,7 +321,20 @@ impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdInsertionOrderSet<A, P> {
         }
     }
 
-    /// Return elements in `self` but not in `other`.
+    /// Returns elements in `self` but not in `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let a: OrdInsertionOrderSet<i32> = [1, 2, 3].into();
+    /// let b: OrdInsertionOrderSet<i32> = [2, 3].into();
+    /// let d = a.difference(&b);
+    /// let elems: Vec<_> = d.iter().copied().collect();
+    /// assert_eq!(elems, vec![1]);
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
         GenericOrdInsertionOrderSet {
@@ -171,7 +342,20 @@ impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdInsertionOrderSet<A, P> {
         }
     }
 
-    /// Return elements in both `self` and `other`.
+    /// Returns elements in both `self` and `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let a: OrdInsertionOrderSet<i32> = [1, 2, 3].into();
+    /// let b: OrdInsertionOrderSet<i32> = [2, 3, 4].into();
+    /// let i = a.intersection(&b);
+    /// let elems: Vec<_> = i.iter().copied().collect();
+    /// assert_eq!(elems, vec![2, 3]);
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
         GenericOrdInsertionOrderSet {
@@ -179,7 +363,20 @@ impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdInsertionOrderSet<A, P> {
         }
     }
 
-    /// Return elements in exactly one of `self` or `other`.
+    /// Returns elements in exactly one of `self` or `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdInsertionOrderSet;
+    /// let a: OrdInsertionOrderSet<i32> = [1, 2].into();
+    /// let b: OrdInsertionOrderSet<i32> = [2, 3].into();
+    /// let sd = a.symmetric_difference(&b);
+    /// let elems: Vec<_> = sd.iter().copied().collect();
+    /// assert_eq!(elems, vec![1, 3]);
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn symmetric_difference(self, other: &Self) -> Self {
         GenericOrdInsertionOrderSet {
@@ -221,6 +418,18 @@ impl<A: Ord + Clone + Debug, P: SharedPointerKind> Debug for GenericOrdInsertion
     }
 }
 
+impl<A: Ord + Clone + Display, P: SharedPointerKind> Display for GenericOrdInsertionOrderSet<A, P> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for a in self.iter() {
+            write!(f, "{sep}{a}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
+
 impl<A: Ord + Clone, P: SharedPointerKind> FromIterator<A> for GenericOrdInsertionOrderSet<A, P> {
     fn from_iter<I: IntoIterator<Item = A>>(iter: I) -> Self {
         let mut set = Self::new();
@@ -245,9 +454,7 @@ impl<A: Ord + Clone, const N: usize, P: SharedPointerKind> From<[A; N]>
     }
 }
 
-impl<'a, A: Ord + Clone, P: SharedPointerKind> From<&'a [A]>
-    for GenericOrdInsertionOrderSet<A, P>
-{
+impl<'a, A: Ord + Clone, P: SharedPointerKind> From<&'a [A]> for GenericOrdInsertionOrderSet<A, P> {
     fn from(slice: &'a [A]) -> Self {
         slice.iter().cloned().collect()
     }
@@ -289,6 +496,8 @@ impl<A: Clone, P: SharedPointerKind> Iterator for ConsumingIter<A, P> {
 }
 
 impl<A: Clone, P: SharedPointerKind> ExactSizeIterator for ConsumingIter<A, P> {}
+
+impl<A: Clone, P: SharedPointerKind> FusedIterator for ConsumingIter<A, P> {}
 
 impl<A: Ord + Clone, P: SharedPointerKind> IntoIterator for GenericOrdInsertionOrderSet<A, P> {
     type Item = A;
@@ -605,5 +814,27 @@ mod test {
         assert_eq!(queue.len(), 3);
         let drained: Vec<_> = core::iter::from_fn(|| queue.pop_front()).collect();
         assert_eq!(drained, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn macro_empty() {
+        let s: OrdInsertionOrderSet<i32> = ord_insertion_order_set![];
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn macro_with_elements() {
+        let s = ord_insertion_order_set!["c", "a", "b"];
+        assert_eq!(s.len(), 3);
+        assert!(s.contains(&"a"));
+        // Elements must iterate in insertion order.
+        let elems: Vec<_> = s.iter().collect();
+        assert_eq!(elems, vec![&"c", &"a", &"b"]);
+    }
+
+    #[test]
+    fn macro_trailing_comma() {
+        let s = ord_insertion_order_set!["x", "y", "z",];
+        assert_eq!(s.len(), 3);
     }
 }

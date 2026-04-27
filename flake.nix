@@ -33,7 +33,9 @@
               stableToolchain
               pkgs.sccache
               pkgs.cargo-audit
+              pkgs.cargo-deny
               pkgs.cargo-llvm-cov
+              pkgs.cargo-semver-checks
               pkgs.samply           # CPU profiling — `samply record cargo bench ...`
               pkgs.cargo-flamegraph # Flamegraph generation from perf/dtrace data
             ];

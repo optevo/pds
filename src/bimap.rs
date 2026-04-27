@@ -28,9 +28,9 @@
 //! ```
 
 use alloc::vec::Vec;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{FromIterator, FusedIterator};
 use core::ops::Index;
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
@@ -77,7 +77,7 @@ impl<K, V, P> GenericBiMap<K, V, RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty BiMap.
+    /// Creates an empty BiMap.
     #[must_use]
     pub fn new() -> Self {
         GenericBiMap {
@@ -92,7 +92,7 @@ impl<K, V, P> GenericBiMap<K, V, foldhash::fast::RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty BiMap (no_std + foldhash).
+    /// Creates an empty BiMap (no_std + foldhash).
     #[must_use]
     pub fn new() -> Self {
         GenericBiMap {
@@ -106,19 +106,44 @@ impl<K, V, S, P, H: HashWidth> GenericBiMap<K, V, S, P, H>
 where
     P: SharedPointerKind,
 {
-    /// Test whether the bimap is empty.
+    /// Tests whether the bimap is empty.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// assert!(bm.is_empty());
+    /// bm.insert("alice", 1);
+    /// assert!(!bm.is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.forward.is_empty()
     }
 
-    /// Return the number of key-value pairs.
+    /// Returns the number of key-value pairs.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// assert_eq!(bm.len(), 0);
+    /// bm.insert("alice", 1);
+    /// bm.insert("bob", 2);
+    /// assert_eq!(bm.len(), 2);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.forward.len()
     }
 
-    /// Test whether two bimaps share the same underlying allocation.
+    /// Tests whether two bimaps share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of
     /// the bimap — i.e. one is a clone of the other with no intervening
@@ -139,7 +164,7 @@ where
     S: BuildHasher + Clone + Default,
     P: SharedPointerKind,
 {
-    /// Insert a key-value pair, maintaining the bijection invariant.
+    /// Inserts a key-value pair, maintaining the bijection invariant.
     ///
     /// If `key` already maps to a value, the old value's backward entry is
     /// removed. If `value` already maps to a key, the old key's forward entry
@@ -148,6 +173,28 @@ where
     /// Returns `None` if neither `key` nor `value` was previously present.
     /// Returns `Some((old_key, old_value))` if an existing mapping was displaced
     /// (either or both may differ from the inserted pair).
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// // First insert: no displacement.
+    /// assert_eq!(bm.insert("alice", 1), None);
+    ///
+    /// // Re-inserting the same key displaces the old value.
+    /// assert_eq!(bm.insert("alice", 2), Some((Some(1), None)));
+    /// assert_eq!(bm.get_by_key(&"alice"), Some(&2));
+    /// assert_eq!(bm.get_by_value(&1), None);
+    ///
+    /// // Inserting with a value already in use displaces the old key.
+    /// bm.insert("bob", 3);
+    /// assert_eq!(bm.insert("carol", 3), Some((None, Some("bob"))));
+    /// assert_eq!(bm.get_by_value(&3), Some(&"carol"));
+    /// assert_eq!(bm.get_by_key(&"bob"), None);
+    /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<(Option<V>, Option<K>)> {
         let old_value = self.forward.remove(&key);
         let old_key = self.backward.remove(&value);
@@ -171,6 +218,18 @@ where
     }
 
     /// Look up a value by its key.
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert_eq!(bm.get_by_key(&"alice"), Some(&1));
+    /// assert_eq!(bm.get_by_key(&"bob"), None);
+    /// ```
     #[must_use]
     pub fn get_by_key<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -180,6 +239,18 @@ where
     }
 
     /// Look up a key by its value.
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert_eq!(bm.get_by_value(&1), Some(&"alice"));
+    /// assert_eq!(bm.get_by_value(&99), None);
+    /// ```
     #[must_use]
     pub fn get_by_value<Q>(&self, value: &Q) -> Option<&K>
     where
@@ -188,7 +259,19 @@ where
         self.backward.get(value)
     }
 
-    /// Test whether a key is present.
+    /// Tests whether a key is present.
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert!(bm.contains_key(&"alice"));
+    /// assert!(!bm.contains_key(&"bob"));
+    /// ```
     #[must_use]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
@@ -197,7 +280,19 @@ where
         self.forward.contains_key(key)
     }
 
-    /// Test whether a value is present.
+    /// Tests whether a value is present.
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert!(bm.contains_value(&1));
+    /// assert!(!bm.contains_value(&99));
+    /// ```
     #[must_use]
     pub fn contains_value<Q>(&self, value: &Q) -> bool
     where
@@ -206,7 +301,20 @@ where
         self.backward.contains_key(value)
     }
 
-    /// Remove a pair by key. Returns the removed value, if present.
+    /// Removes a pair by key. Returns the removed value, if present.
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert_eq!(bm.remove_by_key(&"alice"), Some(1));
+    /// assert!(bm.is_empty());
+    /// assert_eq!(bm.remove_by_key(&"missing"), None);
+    /// ```
     pub fn remove_by_key<Q>(&mut self, key: &Q) -> Option<V>
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -219,7 +327,20 @@ where
         }
     }
 
-    /// Remove a pair by value. Returns the removed key, if present.
+    /// Removes a pair by value. Returns the removed key, if present.
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert_eq!(bm.remove_by_value(&1), Some("alice"));
+    /// assert!(bm.is_empty());
+    /// assert_eq!(bm.remove_by_value(&99), None);
+    /// ```
     pub fn remove_by_value<Q>(&mut self, value: &Q) -> Option<K>
     where
         Q: Hash + Equivalent<V> + ?Sized,
@@ -232,32 +353,109 @@ where
         }
     }
 
-    /// Iterate over all key-value pairs (forward direction).
+    /// Iterates over all key-value pairs (forward direction).
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// bm.insert("alice", 1);
+    /// bm.insert("bob", 2);
+    /// let mut pairs: Vec<_> = bm.iter().map(|(&k, &v)| (k, v)).collect();
+    /// pairs.sort();
+    /// assert_eq!(pairs, vec![("alice", 1), ("bob", 2)]);
+    /// ```
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.forward.iter()
     }
 
-    /// Iterate over all keys.
+    /// Iterates over all keys.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// bm.insert("alice", 1);
+    /// bm.insert("bob", 2);
+    /// let mut keys: Vec<_> = bm.keys().copied().collect();
+    /// keys.sort();
+    /// assert_eq!(keys, vec!["alice", "bob"]);
+    /// ```
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         self.forward.keys()
     }
 
-    /// Iterate over all values.
+    /// Iterates over all values.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut bm: BiMap<&str, i32> = BiMap::new();
+    /// bm.insert("alice", 1);
+    /// bm.insert("bob", 2);
+    /// let mut values: Vec<_> = bm.values().copied().collect();
+    /// values.sort();
+    /// assert_eq!(values, vec![1, 2]);
+    /// ```
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.forward.values()
     }
 
-    /// Return the union of two bimaps; entries from `other` overwrite entries in `self`.
+    /// Returns the union of two bimaps; entries from `other` overwrite entries in `self`.
     ///
     /// For conflicting keys or values, `other`'s mapping wins. The bijection
     /// invariant is maintained by the underlying [`insert`][Self::insert] logic.
+    ///
+    /// Time: O(n) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut a: BiMap<&str, i32> = BiMap::new();
+    /// a.insert("alice", 1);
+    /// a.insert("bob", 2);
+    /// let mut b: BiMap<&str, i32> = BiMap::new();
+    /// b.insert("bob", 99); // conflict — b wins
+    /// b.insert("carol", 3);
+    /// let c = a.union(b);
+    /// assert_eq!(c.len(), 3);
+    /// assert_eq!(c.get_by_key(&"bob"), Some(&99));
+    /// assert_eq!(c.get_by_key(&"carol"), Some(&3));
+    /// ```
     #[must_use]
     pub fn union(mut self, other: Self) -> Self {
         self.extend(other);
         self
     }
 
-    /// Return entries whose keys are in `self` but not in `other`.
+    /// Returns entries whose keys are in `self` but not in `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut a: BiMap<&str, i32> = BiMap::new();
+    /// a.insert("alice", 1);
+    /// a.insert("bob", 2);
+    /// let mut b: BiMap<&str, i32> = BiMap::new();
+    /// b.insert("alice", 1);
+    /// let d = a.difference(&b);
+    /// // "alice" is in both — excluded. Only "bob" remains.
+    /// assert!(!d.contains_key(&"alice"));
+    /// assert_eq!(d.get_by_key(&"bob"), Some(&2));
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
         self.into_iter()
@@ -265,7 +463,24 @@ where
             .collect()
     }
 
-    /// Return entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    /// Returns entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut a: BiMap<&str, i32> = BiMap::new();
+    /// a.insert("alice", 1);
+    /// a.insert("bob", 2);
+    /// let mut b: BiMap<&str, i32> = BiMap::new();
+    /// b.insert("alice", 99);
+    /// let i = a.intersection(&b);
+    /// // Only "alice" is in both; self's value (1) is kept.
+    /// assert_eq!(i.get_by_key(&"alice"), Some(&1));
+    /// assert!(!i.contains_key(&"bob"));
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
         self.into_iter()
@@ -273,7 +488,26 @@ where
             .collect()
     }
 
-    /// Return entries whose keys are in exactly one of `self` or `other`.
+    /// Returns entries whose keys are in exactly one of `self` or `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::BiMap;
+    /// let mut a: BiMap<&str, i32> = BiMap::new();
+    /// a.insert("alice", 1);
+    /// a.insert("bob", 2);
+    /// let mut b: BiMap<&str, i32> = BiMap::new();
+    /// b.insert("alice", 1);
+    /// b.insert("carol", 3);
+    /// let sd = a.symmetric_difference(&b);
+    /// // "alice" is in both — excluded. "bob" and "carol" are each unique to one map.
+    /// assert!(!sd.contains_key(&"alice"));
+    /// assert!(sd.contains_key(&"bob"));
+    /// assert!(sd.contains_key(&"carol"));
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn symmetric_difference(self, other: &Self) -> Self {
         // Clone self before consuming it — O(1) via structural sharing — so we can
@@ -363,6 +597,24 @@ where
     }
 }
 
+impl<K, V, S, P, H: HashWidth> Display for GenericBiMap<K, V, S, P, H>
+where
+    K: Display + Hash + Eq + Clone,
+    V: Display + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (k, v) in self.iter() {
+            write!(f, "{sep}{k} <=> {v}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
+
 impl<K, V, S, P, H: HashWidth> FromIterator<(K, V)> for GenericBiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
@@ -445,6 +697,11 @@ where
 {
     type Output = V;
 
+    /// Returns a reference to the value mapped to `key` (forward direction).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index(&self, key: &Q) -> &Self::Output {
         // Access forward map directly to avoid the S: Default bound on get_by_key.
         match self.forward.get(key) {
@@ -491,6 +748,14 @@ where
 }
 
 impl<K, V, P, H: HashWidth> ExactSizeIterator for ConsumingIter<K, V, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    P: SharedPointerKind,
+{
+}
+
+impl<K, V, P, H: HashWidth> FusedIterator for ConsumingIter<K, V, P, H>
 where
     K: Hash + Eq + Clone,
     V: Hash + Eq + Clone,

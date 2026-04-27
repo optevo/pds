@@ -26,9 +26,9 @@
 //! ```
 
 use alloc::vec::Vec;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{FromIterator, FusedIterator};
 use core::ops::Index;
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
@@ -83,7 +83,7 @@ impl<A, P> GenericSymMap<A, RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty SymMap.
+    /// Creates an empty SymMap.
     #[must_use]
     pub fn new() -> Self {
         GenericSymMap {
@@ -98,7 +98,7 @@ impl<A, P> GenericSymMap<A, foldhash::fast::RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty SymMap (no_std + foldhash).
+    /// Creates an empty SymMap (no_std + foldhash).
     #[must_use]
     pub fn new() -> Self {
         GenericSymMap {
@@ -112,19 +112,44 @@ impl<A, S, P, H: HashWidth> GenericSymMap<A, S, P, H>
 where
     P: SharedPointerKind,
 {
-    /// Test whether the symmap is empty.
+    /// Tests whether the symmap is empty.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::SymMap;
+    /// let mut sm: SymMap<&str> = SymMap::new();
+    /// assert!(sm.is_empty());
+    /// sm.insert("hello", "hola");
+    /// assert!(!sm.is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.forward.is_empty()
     }
 
-    /// Return the number of pairs.
+    /// Returns the number of pairs.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::SymMap;
+    /// let mut sm: SymMap<&str> = SymMap::new();
+    /// assert_eq!(sm.len(), 0);
+    /// sm.insert("hello", "hola");
+    /// sm.insert("goodbye", "adiós");
+    /// assert_eq!(sm.len(), 2);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.forward.len()
     }
 
-    /// Test whether two symmaps share the same underlying allocation.
+    /// Tests whether two symmaps share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of
     /// the symmap — i.e. one is a clone of the other with no
@@ -137,10 +162,23 @@ where
         self.forward.ptr_eq(&other.forward)
     }
 
-    /// Swap the forward and backward maps in O(1).
+    /// Swaps the forward and backward maps in O(1).
     ///
     /// After swapping, what was the forward direction becomes backward and
     /// vice versa. This is a zero-cost operation — it moves two pointers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::{SymMap, Direction};
+    /// let mut sm: SymMap<&str> = SymMap::new();
+    /// sm.insert("hello", "hola");
+    /// let sm = sm.swap();
+    /// // "hola" is now the forward key.
+    /// assert_eq!(sm.get(Direction::Forward, &"hola"), Some(&"hello"));
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn swap(self) -> Self {
         GenericSymMap {
@@ -156,10 +194,24 @@ where
     S: BuildHasher + Clone + Default,
     P: SharedPointerKind,
 {
-    /// Insert a pair, maintaining the bijection invariant.
+    /// Inserts a pair, maintaining the bijection invariant.
     ///
     /// Establishes `a` → `b` in the forward direction and `b` → `a` in the
     /// backward direction. Any existing mappings that conflict are removed.
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::{SymMap, Direction};
+    /// let mut sm: SymMap<&str> = SymMap::new();
+    /// sm.insert("hello", "hola");
+    ///
+    /// // Both directions are established automatically.
+    /// assert_eq!(sm.get(Direction::Forward, &"hello"), Some(&"hola"));
+    /// assert_eq!(sm.get(Direction::Backward, &"hola"), Some(&"hello"));
+    /// ```
     pub fn insert(&mut self, a: A, b: A) {
         // Remove conflicting cross-references.
         if let Some(old_b) = self.forward.remove(&a) {
@@ -174,6 +226,19 @@ where
     }
 
     /// Look up a value in the given direction.
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::{SymMap, Direction};
+    /// let mut sm: SymMap<&str> = SymMap::new();
+    /// sm.insert("hello", "hola");
+    /// assert_eq!(sm.get(Direction::Forward, &"hello"), Some(&"hola"));
+    /// assert_eq!(sm.get(Direction::Backward, &"hola"), Some(&"hello"));
+    /// assert_eq!(sm.get(Direction::Forward, &"missing"), None);
+    /// ```
     #[must_use]
     pub fn get<Q>(&self, dir: Direction, key: &Q) -> Option<&A>
     where
@@ -185,7 +250,20 @@ where
         }
     }
 
-    /// Test whether a key exists in the given direction.
+    /// Tests whether a key exists in the given direction.
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::{SymMap, Direction};
+    /// let mut sm: SymMap<&str> = SymMap::new();
+    /// sm.insert("hello", "hola");
+    /// assert!(sm.contains(Direction::Forward, &"hello"));
+    /// assert!(sm.contains(Direction::Backward, &"hola"));
+    /// assert!(!sm.contains(Direction::Forward, &"hola"));
+    /// ```
     #[must_use]
     pub fn contains<Q>(&self, dir: Direction, key: &Q) -> bool
     where
@@ -197,9 +275,28 @@ where
         }
     }
 
-    /// Remove a pair by looking up the key in the given direction.
+    /// Removes a pair by looking up the key in the given direction.
     ///
     /// Returns the other half of the pair, if it was present.
+    ///
+    /// Time: O(1) avg
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::{SymMap, Direction};
+    /// let mut sm: SymMap<&str> = SymMap::new();
+    /// sm.insert("hello", "hola");
+    ///
+    /// // Remove via the forward key; returns the partner value.
+    /// assert_eq!(sm.remove(Direction::Forward, &"hello"), Some("hola"));
+    /// assert!(sm.is_empty());
+    ///
+    /// sm.insert("goodbye", "adiós");
+    /// // Remove via the backward key; returns the partner key.
+    /// assert_eq!(sm.remove(Direction::Backward, &"adiós"), Some("goodbye"));
+    /// assert!(sm.is_empty());
+    /// ```
     pub fn remove<Q>(&mut self, dir: Direction, key: &Q) -> Option<A>
     where
         Q: Hash + Equivalent<A> + ?Sized,
@@ -224,12 +321,52 @@ where
         }
     }
 
-    /// Iterate over all pairs (forward direction: left → right).
+    /// Iterates over all pairs (forward direction: left → right).
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::SymMap;
+    /// let mut sm: SymMap<&str> = SymMap::new();
+    /// sm.insert("hello", "hola");
+    /// sm.insert("goodbye", "adiós");
+    /// let mut pairs: Vec<_> = sm.iter().map(|(&a, &b)| (a, b)).collect();
+    /// pairs.sort();
+    /// assert_eq!(pairs, vec![("goodbye", "adiós"), ("hello", "hola")]);
+    /// ```
     pub fn iter(&self) -> impl Iterator<Item = (&A, &A)> {
         self.forward.iter()
     }
 
-    /// Iterate over all pairs in the given direction.
+    /// Iterates over all pairs in the given direction.
+    ///
+    /// [`Direction::Forward`] yields pairs as originally inserted (left → right);
+    /// [`Direction::Backward`] yields them in reverse (right → left).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::{SymMap, Direction};
+    /// let mut sm: SymMap<&str> = SymMap::new();
+    /// sm.insert("hello", "hola");
+    /// sm.insert("goodbye", "adiós");
+    /// let mut fwd: Vec<_> = sm.iter_direction(Direction::Forward)
+    ///     .map(|(&a, &b)| (a, b))
+    ///     .collect();
+    /// fwd.sort();
+    /// assert_eq!(fwd, vec![("goodbye", "adiós"), ("hello", "hola")]);
+    ///
+    /// let mut bwd: Vec<_> = sm.iter_direction(Direction::Backward)
+    ///     .map(|(&a, &b)| (a, b))
+    ///     .collect();
+    /// bwd.sort();
+    /// // Backward direction: original right side becomes the key.
+    /// assert_eq!(bwd, vec![("adiós", "goodbye"), ("hola", "hello")]);
+    /// ```
+    ///
+    /// Time: O(1)
     pub fn iter_direction(&self, dir: Direction) -> impl Iterator<Item = (&A, &A)> {
         match dir {
             Direction::Forward => IterDirection::Forward(self.forward.iter()),
@@ -237,17 +374,49 @@ where
         }
     }
 
-    /// Return the union of two symmaps; entries from `other` overwrite entries in `self`.
+    /// Returns the union of two symmaps; entries from `other` overwrite entries in `self`.
     ///
     /// For conflicting pairs, `other`'s mapping wins. The symmetric invariant
     /// is maintained by the underlying [`insert`][Self::insert] logic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::{SymMap, Direction};
+    /// let mut a: SymMap<&str> = SymMap::new();
+    /// a.insert("hello", "hola");
+    /// let mut b: SymMap<&str> = SymMap::new();
+    /// b.insert("goodbye", "adiós");
+    /// let u = a.union(b);
+    /// assert_eq!(u.get(Direction::Forward, &"hello"), Some(&"hola"));
+    /// assert_eq!(u.get(Direction::Forward, &"goodbye"), Some(&"adiós"));
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn union(mut self, other: Self) -> Self {
         self.extend(other);
         self
     }
 
-    /// Return entries whose forward keys are in `self` but not in `other`.
+    /// Returns entries whose forward keys are in `self` but not in `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::{SymMap, Direction};
+    /// let mut a: SymMap<&str> = SymMap::new();
+    /// a.insert("hello", "hola");
+    /// a.insert("goodbye", "adiós");
+    /// let mut b: SymMap<&str> = SymMap::new();
+    /// b.insert("hello", "hola");
+    /// let d = a.difference(&b);
+    /// // "hello" is in both, so only "goodbye" survives.
+    /// assert!(!d.contains(Direction::Forward, &"hello"));
+    /// assert_eq!(d.get(Direction::Forward, &"goodbye"), Some(&"adiós"));
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
         self.into_iter()
@@ -255,7 +424,24 @@ where
             .collect()
     }
 
-    /// Return entries whose forward keys are in both `self` and `other`; `self`'s values are kept.
+    /// Returns entries whose forward keys are in both `self` and `other`; `self`'s values are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::{SymMap, Direction};
+    /// let mut a: SymMap<&str> = SymMap::new();
+    /// a.insert("hello", "hola");
+    /// a.insert("goodbye", "adiós");
+    /// let mut b: SymMap<&str> = SymMap::new();
+    /// b.insert("hello", "salut");
+    /// let i = a.intersection(&b);
+    /// // Only "hello" is in both; self's value ("hola") is kept.
+    /// assert_eq!(i.get(Direction::Forward, &"hello"), Some(&"hola"));
+    /// assert!(!i.contains(Direction::Forward, &"goodbye"));
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
         self.into_iter()
@@ -263,7 +449,26 @@ where
             .collect()
     }
 
-    /// Return entries whose forward keys are in exactly one of `self` or `other`.
+    /// Returns entries whose forward keys are in exactly one of `self` or `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::{SymMap, Direction};
+    /// let mut a: SymMap<&str> = SymMap::new();
+    /// a.insert("hello", "hola");
+    /// a.insert("goodbye", "adiós");
+    /// let mut b: SymMap<&str> = SymMap::new();
+    /// b.insert("hello", "hola");
+    /// b.insert("thanks", "gracias");
+    /// let sd = a.symmetric_difference(&b);
+    /// // "hello" is in both — excluded. "goodbye" and "thanks" are each in only one.
+    /// assert!(!sd.contains(Direction::Forward, &"hello"));
+    /// assert!(sd.contains(Direction::Forward, &"goodbye"));
+    /// assert!(sd.contains(Direction::Forward, &"thanks"));
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn symmetric_difference(self, other: &Self) -> Self {
         // Clone self before consuming it — O(1) via structural sharing — so we can
@@ -378,6 +583,23 @@ where
     }
 }
 
+impl<A, S, P, H: HashWidth> Display for GenericSymMap<A, S, P, H>
+where
+    A: Display + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (a, b) in self.iter() {
+            write!(f, "{sep}{a} <-> {b}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
+
 impl<A, S, P, H: HashWidth> FromIterator<(A, A)> for GenericSymMap<A, S, P, H>
 where
     A: Hash + Eq + Clone,
@@ -454,6 +676,11 @@ where
 {
     type Output = A;
 
+    /// Returns the value mapped to `key` (forward direction).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index(&self, key: &Q) -> &Self::Output {
         // Access forward map directly to avoid the S: Default bound on get().
         match self.forward.get(key) {
@@ -498,6 +725,13 @@ where
 }
 
 impl<A, P, H: HashWidth> ExactSizeIterator for ConsumingIter<A, P, H>
+where
+    A: Hash + Eq + Clone,
+    P: SharedPointerKind,
+{
+}
+
+impl<A, P, H: HashWidth> FusedIterator for ConsumingIter<A, P, H>
 where
     A: Hash + Eq + Clone,
     P: SharedPointerKind,

@@ -39,9 +39,9 @@
 
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{FromIterator, FusedIterator};
 use core::ops::{Index, IndexMut};
 
 use archery::SharedPointerKind;
@@ -82,7 +82,7 @@ impl<K: Clone, V: Clone, P: SharedPointerKind> Clone for GenericOrdTrie<K, V, P>
 }
 
 impl<K, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
-    /// Create an empty trie.
+    /// Creates an empty trie.
     #[must_use]
     pub fn new() -> Self {
         GenericOrdTrie {
@@ -91,30 +91,73 @@ impl<K, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
         }
     }
 
-    /// Test whether this trie is empty (no values at any depth).
+    /// Tests whether this trie is empty (no values at any depth).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdTrie;
+    /// let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+    /// assert!(trie.is_empty());
+    ///
+    /// trie.insert(&["a"], 1);
+    /// assert!(!trie.is_empty());
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.value.is_none() && self.children.is_empty()
     }
 
-    /// Get the value at this node (the root / empty path).
+    /// Returns the value at this node (the root / empty path).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdTrie;
+    /// let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+    /// assert_eq!(trie.value(), None);
+    ///
+    /// trie.insert(&[], 42);
+    /// assert_eq!(trie.value(), Some(&42));
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn value(&self) -> Option<&V> {
         self.value.as_ref()
     }
 
-    /// Get a mutable reference to the value at this node.
+    /// Returns a mutable reference to the value at this node.
+    ///
+    /// Time: O(1)
+    #[must_use]
     pub fn value_mut(&mut self) -> Option<&mut V> {
         self.value.as_mut()
     }
 
-    /// Return the number of direct children.
+    /// Returns the number of direct children.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdTrie;
+    /// let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+    /// assert_eq!(trie.child_count(), 0);
+    ///
+    /// trie.insert(&["a", "x"], 1);
+    /// trie.insert(&["b", "y"], 2);
+    /// assert_eq!(trie.child_count(), 2);
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn child_count(&self) -> usize {
         self.children.len()
     }
 
-    /// Test whether two tries share the same underlying allocation.
+    /// Tests whether two tries share the same underlying allocation.
     ///
     /// Returns `true` if the root-level children map of `self` and
     /// `other` are structurally shared (same pointer). This is always
@@ -130,7 +173,22 @@ impl<K, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
 }
 
 impl<K: Ord, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
-    /// Get a reference to the subtrie at the given path.
+    /// Returns a reference to the subtrie at the given path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdTrie;
+    /// let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+    /// trie.insert(&["usr", "bin"], 1);
+    /// trie.insert(&["usr", "lib"], 2);
+    ///
+    /// let sub = trie.subtrie(&["usr"]).unwrap();
+    /// assert_eq!(sub.get(&["bin"]), Some(&1));
+    /// assert!(trie.subtrie(&["etc"]).is_none());
+    /// ```
+    ///
+    /// Time: O(d) (d = path length)
     #[must_use]
     pub fn subtrie<Q>(&self, path: &[Q]) -> Option<&Self>
     where
@@ -143,7 +201,21 @@ impl<K: Ord, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
         Some(node)
     }
 
-    /// Get the value at the given path.
+    /// Returns the value at the given path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdTrie;
+    /// let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+    /// trie.insert(&["etc", "hosts"], 1);
+    ///
+    /// assert_eq!(trie.get(&["etc", "hosts"]), Some(&1));
+    /// assert_eq!(trie.get(&["etc"]), None); // no value at interior node
+    /// assert_eq!(trie.get(&["missing"]), None);
+    /// ```
+    ///
+    /// Time: O(d)
     #[must_use]
     pub fn get<Q>(&self, path: &[Q]) -> Option<&V>
     where
@@ -152,7 +224,21 @@ impl<K: Ord, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
         self.subtrie(path)?.value()
     }
 
-    /// Test whether a value exists at the given path.
+    /// Tests whether a value exists at the given path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdTrie;
+    /// let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+    /// trie.insert(&["a", "b"], 1);
+    ///
+    /// assert!(trie.contains_path(&["a", "b"]));
+    /// assert!(!trie.contains_path(&["a"])); // interior node has no value
+    /// assert!(!trie.contains_path(&["z"]));
+    /// ```
+    ///
+    /// Time: O(d)
     #[must_use]
     pub fn contains_path<Q>(&self, path: &[Q]) -> bool
     where
@@ -161,17 +247,48 @@ impl<K: Ord, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
         self.get(path).is_some()
     }
 
-    /// Iterate over all (path, value) pairs in sorted lexicographic path order.
+    /// Iterates over all (path, value) pairs in sorted lexicographic path order.
     ///
     /// Paths are returned as `Vec<&K>` segments. Because children at every level
     /// are stored in a sorted [`OrdMap`][crate::OrdMap], the traversal order is
     /// deterministic and lexicographic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdTrie;
+    /// let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+    /// trie.insert(&["b"], 2);
+    /// trie.insert(&["a"], 1);
+    ///
+    /// // Iteration is in sorted lexicographic order.
+    /// let values: Vec<i32> = trie.iter().map(|(_, v)| *v).collect();
+    /// assert_eq!(values, vec![1, 2]);
+    /// ```
+    ///
+    /// Time: O(1)
+    #[must_use]
     pub fn iter(&self) -> OrdTrieIter<'_, K, V, P> {
         let stack = alloc::vec![(alloc::vec::Vec::new(), self)];
         OrdTrieIter { stack }
     }
 
-    /// Return the number of values stored in the trie (at all depths).
+    /// Returns the number of values stored in the trie (at all depths).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdTrie;
+    /// let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+    /// assert_eq!(trie.len(), 0);
+    ///
+    /// trie.insert(&["a"], 1);
+    /// trie.insert(&["a", "b"], 2); // interior node can also hold a value
+    /// // Note: len() performs a full traversal — O(n).
+    /// assert_eq!(trie.len(), 2);
+    /// ```
+    ///
+    /// Time: O(n)
     #[must_use]
     pub fn len(&self) -> usize {
         let own = usize::from(self.value.is_some());
@@ -182,8 +299,25 @@ impl<K: Ord, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
             .sum::<usize>()
     }
 
-    /// Iterate over all paths that share the given prefix, returning
+    /// Iterates over all paths that share the given prefix, returning
     /// (remaining_path, value) pairs in sorted order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdTrie;
+    /// let mut trie: OrdTrie<&str, i32> = OrdTrie::new();
+    /// trie.insert(&["usr", "bin", "rustc"], 1);
+    /// trie.insert(&["usr", "lib", "libc"], 2);
+    /// trie.insert(&["etc", "hosts"], 3);
+    ///
+    /// let count = trie.iter_prefix(&["usr"]).unwrap().count();
+    /// assert_eq!(count, 2);
+    /// assert!(trie.iter_prefix(&["nonexistent"]).is_none());
+    /// ```
+    ///
+    /// Time: O(d)
+    #[must_use]
     pub fn iter_prefix<'a, Q>(&'a self, prefix: &[Q]) -> Option<OrdTrieIter<'a, K, V, P>>
     where
         Q: Comparable<K>,
@@ -194,7 +328,9 @@ impl<K: Ord, V, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
 }
 
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
-    /// Get a mutable reference to the value at the given path.
+    /// Returns a mutable reference to the value at the given path.
+    ///
+    /// Time: O(d) (d = path length)
     #[must_use]
     pub fn get_mut(&mut self, path: &[K]) -> Option<&mut V> {
         if path.is_empty() {
@@ -205,7 +341,9 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
             .and_then(|child| child.get_mut(&path[1..]))
     }
 
-    /// Insert a value at the given path, returning the previous value.
+    /// Inserts a value at the given path, returning the previous value.
+    ///
+    /// Time: O(d)
     pub fn insert(&mut self, path: &[K], value: V) -> Option<V> {
         if path.is_empty() {
             return self.value.replace(value);
@@ -220,10 +358,12 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
         child.insert(&path[1..], value)
     }
 
-    /// Remove the value at the given path, returning it if present.
+    /// Removes the value at the given path, returning it if present.
     ///
     /// Does not remove empty interior nodes — the trie structure is preserved.
     /// Use [`remove_and_prune`][Self::remove_and_prune] to clean up empty subtrees.
+    ///
+    /// Time: O(d)
     pub fn remove<Q>(&mut self, path: &[Q]) -> Option<V>
     where
         Q: Comparable<K>,
@@ -235,7 +375,7 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
         child.remove(&path[1..])
     }
 
-    /// Remove a direct child by key, returning it if present.
+    /// Removes a direct child by key, returning it if present.
     fn remove_child<Q>(&mut self, key: &Q) -> Option<GenericOrdTrie<K, V, P>>
     where
         Q: Comparable<K>,
@@ -243,10 +383,12 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
         self.children.remove(key)
     }
 
-    /// Remove the value at the given path and prune empty nodes.
+    /// Removes the value at the given path and prune empty nodes.
     ///
     /// After removing the value, walks back up the path and removes any nodes
     /// that have no value and no children.
+    ///
+    /// Time: O(d)
     pub fn remove_and_prune<Q>(&mut self, path: &[Q]) -> Option<V>
     where
         Q: Comparable<K>,
@@ -276,7 +418,9 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
         result
     }
 
-    /// Remove all empty interior nodes (nodes with no value and no children).
+    /// Removes all empty interior nodes (nodes with no value and no children).
+    ///
+    /// Time: O(n)
     pub fn prune(&mut self) {
         // Recurse first so children are pruned bottom-up.
         for (_, child) in self.children.iter_mut() {
@@ -292,46 +436,168 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> GenericOrdTrie<K, V, P> {
         }
     }
 
-    /// Return the union of two tries; when a path exists in both, `other`'s value wins.
+    /// Returns the union of two tries; when a path exists in both, `other`'s value wins.
+    ///
+    /// Uses a recursive merge-walk: descends both trie structures simultaneously,
+    /// merging children node-by-node rather than flattening and rebuilding.
+    /// Subtrees shared between `self` and `other` (via structural sharing) are
+    /// detected with a pointer check and short-circuited in O(1).
+    ///
+    /// Time: O(N_a + N_b) nodes visited, where N_a and N_b are the total node
+    /// counts of the two tries. Shared subtrees cost O(1) regardless of their size.
     #[must_use]
-    pub fn union(mut self, other: Self) -> Self {
-        for (path, value) in other {
-            self.insert(&path, value);
+    pub fn union(self, other: Self) -> Self {
+        // Fast-path: shared children pointer — subtrees are identical.
+        // Only the root value needs merging; skip descending into children.
+        if self.ptr_eq(&other) {
+            let mut r = self;
+            if other.value.is_some() {
+                r.value = other.value;
+            }
+            return r;
         }
-        self
+        // Merge root: other wins.
+        let value = other.value.or(self.value);
+        // Merge children: for each child key in other, either merge with self's child
+        // (if it exists) or adopt the whole subtree directly.
+        let mut children = self.children;
+        for (key, other_child) in other.children {
+            let merged = if let Some(self_child) = children.remove(&key) {
+                self_child.union(other_child)
+            } else {
+                other_child
+            };
+            children.insert(key, merged);
+        }
+        GenericOrdTrie { value, children }
     }
 
-    /// Return entries whose paths are in `self` but not in `other`.
+    /// Returns entries whose paths are in `self` but not in `other`.
+    ///
+    /// Uses a recursive merge-walk: descends both structures simultaneously.
+    /// Children of `self` not present in `other` are adopted wholesale (O(1)).
+    /// Children shared via structural sharing are short-circuited in O(1).
+    /// Empty subtrees produced by the difference are pruned.
+    ///
+    /// Time: O(N_a + N_b) nodes visited. Shared subtrees cost O(1).
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
-        self.into_iter()
-            .filter(|(path, _)| !other.contains_path(path.as_slice()))
-            .collect()
+        // Fast-path: shared children — all non-root paths cancel.
+        // Root survives only if self has it and other doesn't.
+        if self.ptr_eq(other) {
+            let mut r = Self::new();
+            if other.value.is_none() {
+                r.value = self.value;
+            }
+            return r;
+        }
+        let value = if other.value.is_some() {
+            None
+        } else {
+            self.value
+        };
+        let mut children = GenericOrdMap::new();
+        for (key, self_child) in self.children {
+            let merged = if let Some(other_child) = other.children.get(&key) {
+                self_child.difference(other_child)
+            } else {
+                // Key not in other — entire subtree survives unchanged.
+                self_child
+            };
+            if !merged.is_empty() {
+                children.insert(key, merged);
+            }
+        }
+        GenericOrdTrie { value, children }
     }
 
-    /// Return entries whose paths are in both `self` and `other`; `self`'s values are kept.
+    /// Returns entries whose paths are in both `self` and `other`; `self`'s values are kept.
+    ///
+    /// Uses a recursive merge-walk. Children of `self` absent from `other` are
+    /// discarded in O(1). Shared subtrees are short-circuited in O(1) (only the
+    /// root value needs adjusting). Empty subtrees are pruned.
+    ///
+    /// Time: O(N_a + N_b) nodes visited. Shared subtrees cost O(1).
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
-        self.into_iter()
-            .filter(|(path, _)| other.contains_path(path.as_slice()))
-            .collect()
+        // Fast-path: shared children — all non-root paths survive.
+        // Root survives only if both have it; we keep self's value.
+        if self.ptr_eq(other) {
+            let mut r = self;
+            if other.value.is_none() {
+                r.value = None;
+            }
+            return r;
+        }
+        let value = if other.value.is_some() {
+            self.value
+        } else {
+            None
+        };
+        let mut children = GenericOrdMap::new();
+        for (key, self_child) in self.children {
+            if let Some(other_child) = other.children.get(&key) {
+                let merged = self_child.intersection(other_child);
+                if !merged.is_empty() {
+                    children.insert(key, merged);
+                }
+            }
+            // Key not in other — entire subtree is excluded.
+        }
+        GenericOrdTrie { value, children }
     }
 
-    /// Return entries whose paths are in exactly one of `self` or `other`.
+    /// Returns entries whose paths are in exactly one of `self` or `other`.
+    ///
+    /// Uses a recursive merge-walk. Shared subtrees are short-circuited in O(1)
+    /// (all non-root paths cancel, only the root value is compared).
+    /// Children in exactly one operand are adopted wholesale. Empty subtrees
+    /// produced by the operation are pruned.
+    ///
+    /// Time: O(N_a + N_b) nodes visited. Shared subtrees cost O(1).
     #[must_use]
     pub fn symmetric_difference(self, other: &Self) -> Self {
-        // Clone self — O(1) via structural sharing — to check membership after consuming.
-        let self_clone = self.clone();
-        let self_diff: Self = self
-            .into_iter()
-            .filter(|(path, _)| !other.contains_path(path.as_slice()))
-            .collect();
-        let other_diff: Self = other
-            .clone()
-            .into_iter()
-            .filter(|(path, _)| !self_clone.contains_path(path.as_slice()))
-            .collect();
-        self_diff.union(other_diff)
+        // Fast-path: shared children — all non-root paths cancel.
+        // Root survives only if exactly one operand has it.
+        if self.ptr_eq(other) {
+            let mut r = Self::new();
+            if self.value.is_some() != other.value.is_some() {
+                r.value = self.value.or_else(|| other.value.clone());
+            }
+            return r;
+        }
+        let value = if self.value.is_some() != other.value.is_some() {
+            self.value.or_else(|| other.value.clone())
+        } else {
+            None
+        };
+        // Keys seen in self.children while processing, used to identify keys
+        // that are only in other.children (binary search; in_both is sorted
+        // because we fill it from an ordered OrdMap iterator).
+        let mut in_both: Vec<K> = Vec::new();
+        let mut children = GenericOrdMap::new();
+        // Pass 1: consume self.children.
+        for (key, self_child) in self.children {
+            if let Some(other_child) = other.children.get(&key) {
+                let merged = self_child.symmetric_difference(other_child);
+                if !merged.is_empty() {
+                    children.insert(key.clone(), merged);
+                }
+                in_both.push(key);
+            } else {
+                // Only in self — entire subtree survives.
+                children.insert(key, self_child);
+            }
+        }
+        // Pass 2: add children only in other (not encountered in pass 1).
+        // in_both is sorted (OrdMap iteration order = key order), so binary
+        // search is correct here.
+        for (key, other_child) in &other.children {
+            if in_both.binary_search(key).is_err() {
+                children.insert(key.clone(), other_child.clone());
+            }
+        }
+        GenericOrdTrie { value, children }
     }
 }
 
@@ -387,6 +653,26 @@ impl<K: Ord + Clone + Debug, V: Debug + Clone, P: SharedPointerKind> Debug
     }
 }
 
+impl<K: Ord + Clone + Display, V: Display + Clone, P: SharedPointerKind> Display
+    for GenericOrdTrie<K, V, P>
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (path, v) in self.iter() {
+            write!(f, "{sep}")?;
+            let mut path_sep = "";
+            for k in &path {
+                write!(f, "{path_sep}{k}")?;
+                path_sep = "/";
+            }
+            write!(f, ": {v}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
+
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Extend<(Vec<K>, V)>
     for GenericOrdTrie<K, V, P>
 {
@@ -439,10 +725,14 @@ impl<'a, K: Ord + Clone, V: Clone, P: SharedPointerKind> From<&'a Vec<(Vec<K>, V
     }
 }
 
-/// Index by path, panicking if the path has no associated value.
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Index<&[K]> for GenericOrdTrie<K, V, P> {
     type Output = V;
 
+    /// Returns a reference to the value at `path`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `path` has no associated value in the trie.
     fn index(&self, path: &[K]) -> &Self::Output {
         match self.get(path) {
             Some(v) => v,
@@ -451,8 +741,12 @@ impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> Index<&[K]> for GenericOrdT
     }
 }
 
-/// Index mutably by path, panicking if the path has no associated value.
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> IndexMut<&[K]> for GenericOrdTrie<K, V, P> {
+    /// Returns a mutable reference to the value at `path`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `path` has no associated value in the trie.
     fn index_mut(&mut self, path: &[K]) -> &mut Self::Output {
         match self.get_mut(path) {
             Some(v) => v,
@@ -487,6 +781,8 @@ impl<'a, K: Ord, V, P: SharedPointerKind> Iterator for OrdTrieIter<'a, K, V, P> 
     }
 }
 
+impl<'a, K: Ord, V, P: SharedPointerKind> FusedIterator for OrdTrieIter<'a, K, V, P> {}
+
 impl<'a, K: Ord, V, P: SharedPointerKind> IntoIterator for &'a GenericOrdTrie<K, V, P> {
     type Item = (Vec<&'a K>, &'a V);
     type IntoIter = OrdTrieIter<'a, K, V, P>;
@@ -514,6 +810,10 @@ impl<K, V> Iterator for OrdTrieConsumingIter<K, V> {
         self.inner.size_hint()
     }
 }
+
+impl<K, V> ExactSizeIterator for OrdTrieConsumingIter<K, V> {}
+
+impl<K, V> FusedIterator for OrdTrieConsumingIter<K, V> {}
 
 impl<K: Ord + Clone, V: Clone, P: SharedPointerKind> IntoIterator for GenericOrdTrie<K, V, P> {
     type Item = (Vec<K>, V);
@@ -650,11 +950,14 @@ mod test {
             .iter()
             .map(|(path, v)| (path.into_iter().copied().collect(), *v))
             .collect();
-        assert_eq!(pairs, vec![
-            (vec!["etc", "hosts"], 3),
-            (vec!["usr", "bin"], 1),
-            (vec!["usr", "lib"], 2),
-        ]);
+        assert_eq!(
+            pairs,
+            vec![
+                (vec!["etc", "hosts"], 3),
+                (vec!["usr", "bin"], 1),
+                (vec!["usr", "lib"], 2),
+            ]
+        );
     }
 
     #[test]
@@ -664,13 +967,15 @@ mod test {
         trie.insert(&["usr", "lib", "libc"], 2);
         trie.insert(&["etc", "hosts"], 3);
 
-        let result: Vec<(Vec<&str>, i32)> = trie.iter_prefix(&["usr"]).unwrap()
+        let result: Vec<(Vec<&str>, i32)> = trie
+            .iter_prefix(&["usr"])
+            .unwrap()
             .map(|(path, v)| (path.into_iter().copied().collect(), *v))
             .collect();
-        assert_eq!(result, vec![
-            (vec!["bin", "rustc"], 1),
-            (vec!["lib", "libc"], 2),
-        ]);
+        assert_eq!(
+            result,
+            vec![(vec!["bin", "rustc"], 1), (vec!["lib", "libc"], 2),]
+        );
     }
 
     #[test]
@@ -736,20 +1041,14 @@ mod test {
 
     #[test]
     fn from_vec() {
-        let trie: OrdTrie<&str, i32> = OrdTrie::from(vec![
-            (vec!["a"], 1),
-            (vec!["b"], 2),
-        ]);
+        let trie: OrdTrie<&str, i32> = OrdTrie::from(vec![(vec!["a"], 1), (vec!["b"], 2)]);
         assert_eq!(trie.get(&["a"]), Some(&1));
         assert_eq!(trie.get(&["b"]), Some(&2));
     }
 
     #[test]
     fn from_array() {
-        let trie: OrdTrie<&str, i32> = OrdTrie::from([
-            (vec!["a"], 1),
-            (vec!["b"], 2),
-        ]);
+        let trie: OrdTrie<&str, i32> = OrdTrie::from([(vec!["a"], 1), (vec!["b"], 2)]);
         assert_eq!(trie.len(), 2);
     }
 
@@ -769,12 +1068,7 @@ mod test {
 
     #[test]
     fn from_iterator() {
-        let trie: OrdTrie<&str, i32> = vec![
-            (vec!["a"], 1),
-            (vec!["b"], 2),
-        ]
-        .into_iter()
-        .collect();
+        let trie: OrdTrie<&str, i32> = vec![(vec!["a"], 1), (vec!["b"], 2)].into_iter().collect();
         assert_eq!(trie.len(), 2);
     }
 
@@ -792,10 +1086,7 @@ mod test {
         trie.insert(&["a"], 1);
 
         let pairs: Vec<_> = trie.into_iter().collect();
-        assert_eq!(pairs, vec![
-            (vec!["a"], 1),
-            (vec!["b"], 2),
-        ]);
+        assert_eq!(pairs, vec![(vec!["a"], 1), (vec!["b"], 2),]);
     }
 
     #[test]

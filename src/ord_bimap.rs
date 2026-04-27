@@ -39,9 +39,9 @@
 
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{FromIterator, FusedIterator};
 use core::ops::Index;
 
 use archery::SharedPointerKind;
@@ -77,7 +77,7 @@ impl<K: Clone, V: Clone, P: SharedPointerKind> Clone for GenericOrdBiMap<K, V, P
 }
 
 impl<K, V, P: SharedPointerKind> GenericOrdBiMap<K, V, P> {
-    /// Create an empty OrdBiMap.
+    /// Creates an empty OrdBiMap.
     #[must_use]
     pub fn new() -> Self {
         GenericOrdBiMap {
@@ -86,19 +86,44 @@ impl<K, V, P: SharedPointerKind> GenericOrdBiMap<K, V, P> {
         }
     }
 
-    /// Test whether the bimap is empty.
+    /// Tests whether the bimap is empty.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<&str, i32> = OrdBiMap::new();
+    /// assert!(bm.is_empty());
+    /// bm.insert("alice", 1);
+    /// assert!(!bm.is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.forward.is_empty()
     }
 
-    /// Return the number of key-value pairs.
+    /// Returns the number of key-value pairs.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<&str, i32> = OrdBiMap::new();
+    /// assert_eq!(bm.len(), 0);
+    /// bm.insert("alice", 1);
+    /// bm.insert("bob", 2);
+    /// assert_eq!(bm.len(), 2);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.forward.len()
     }
 
-    /// Test whether two bimaps share the same underlying allocation.
+    /// Tests whether two bimaps share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of
     /// the bimap — i.e. one is a clone of the other with no intervening
@@ -113,22 +138,77 @@ impl<K, V, P: SharedPointerKind> GenericOrdBiMap<K, V, P> {
 }
 
 impl<K: Ord, V: Ord, P: SharedPointerKind> GenericOrdBiMap<K, V, P> {
-    /// Iterate over all key-value pairs in sorted key order.
+    /// Iterates over all key-value pairs in sorted key order.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<&str, i32> = OrdBiMap::new();
+    /// bm.insert("charlie", 3);
+    /// bm.insert("alice", 1);
+    /// bm.insert("bob", 2);
+    /// let pairs: Vec<_> = bm.iter().map(|(&k, &v)| (k, v)).collect();
+    /// assert_eq!(pairs, vec![("alice", 1), ("bob", 2), ("charlie", 3)]);
+    /// ```
+    #[must_use]
     pub fn iter(&self) -> MapIter<'_, K, V, P> {
         self.forward.iter()
     }
 
-    /// Iterate over all keys in sorted order.
+    /// Iterates over all keys in sorted order.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<i32, i32> = OrdBiMap::new();
+    /// bm.insert(3, 30);
+    /// bm.insert(1, 10);
+    /// bm.insert(2, 20);
+    /// let keys: Vec<_> = bm.keys().copied().collect();
+    /// assert_eq!(keys, vec![1, 2, 3]);
+    /// ```
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         self.forward.keys()
     }
 
-    /// Iterate over all values in sorted key order.
+    /// Iterates over all values in sorted key order.
+    ///
+    /// Time: O(1)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<i32, i32> = OrdBiMap::new();
+    /// bm.insert(3, 30);
+    /// bm.insert(1, 10);
+    /// bm.insert(2, 20);
+    /// let values: Vec<_> = bm.values().copied().collect();
+    /// assert_eq!(values, vec![10, 20, 30]);
+    /// ```
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.forward.values()
     }
 
     /// Look up a value by its key.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<&str, i32> = OrdBiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert_eq!(bm.get_by_key(&"alice"), Some(&1));
+    /// assert_eq!(bm.get_by_key(&"bob"), None);
+    /// ```
     #[must_use]
     pub fn get_by_key<Q>(&self, key: &Q) -> Option<&V>
     where
@@ -138,6 +218,18 @@ impl<K: Ord, V: Ord, P: SharedPointerKind> GenericOrdBiMap<K, V, P> {
     }
 
     /// Look up a key by its value.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<&str, i32> = OrdBiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert_eq!(bm.get_by_value(&1), Some(&"alice"));
+    /// assert_eq!(bm.get_by_value(&99), None);
+    /// ```
     #[must_use]
     pub fn get_by_value<Q>(&self, value: &Q) -> Option<&K>
     where
@@ -146,7 +238,19 @@ impl<K: Ord, V: Ord, P: SharedPointerKind> GenericOrdBiMap<K, V, P> {
         self.backward.get(value)
     }
 
-    /// Test whether a key is present.
+    /// Tests whether a key is present.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<&str, i32> = OrdBiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert!(bm.contains_key(&"alice"));
+    /// assert!(!bm.contains_key(&"bob"));
+    /// ```
     #[must_use]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
@@ -155,7 +259,19 @@ impl<K: Ord, V: Ord, P: SharedPointerKind> GenericOrdBiMap<K, V, P> {
         self.forward.contains_key(key)
     }
 
-    /// Test whether a value is present.
+    /// Tests whether a value is present.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<&str, i32> = OrdBiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert!(bm.contains_value(&1));
+    /// assert!(!bm.contains_value(&99));
+    /// ```
     #[must_use]
     pub fn contains_value<Q>(&self, value: &Q) -> bool
     where
@@ -166,7 +282,7 @@ impl<K: Ord, V: Ord, P: SharedPointerKind> GenericOrdBiMap<K, V, P> {
 }
 
 impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> GenericOrdBiMap<K, V, P> {
-    /// Insert a key-value pair, maintaining the bijection invariant.
+    /// Inserts a key-value pair, maintaining the bijection invariant.
     ///
     /// If `key` already maps to a value, the old value's backward entry is
     /// removed. If `value` already maps to a key, the old key's forward entry
@@ -174,6 +290,28 @@ impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> GenericOrdBiMap<K, V,
     ///
     /// Returns `None` if neither `key` nor `value` was previously present.
     /// Returns `Some((old_value, old_key))` if an existing mapping was displaced.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<&str, i32> = OrdBiMap::new();
+    /// // First insert: no displacement.
+    /// assert_eq!(bm.insert("alice", 1), None);
+    ///
+    /// // Re-inserting the same key displaces the old value.
+    /// assert_eq!(bm.insert("alice", 2), Some((Some(1), None)));
+    /// assert_eq!(bm.get_by_key(&"alice"), Some(&2));
+    /// assert_eq!(bm.get_by_value(&1), None);
+    ///
+    /// // Inserting with a value already in use displaces the old key.
+    /// bm.insert("bob", 3);
+    /// assert_eq!(bm.insert("carol", 3), Some((None, Some("bob"))));
+    /// assert_eq!(bm.get_by_value(&3), Some(&"carol"));
+    /// assert_eq!(bm.get_by_key(&"bob"), None);
+    /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<(Option<V>, Option<K>)> {
         let old_value = self.forward.remove(&key);
         let old_key = self.backward.remove(&value);
@@ -196,7 +334,20 @@ impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> GenericOrdBiMap<K, V,
         }
     }
 
-    /// Remove a pair by key. Returns the removed value, if present.
+    /// Removes a pair by key. Returns the removed value, if present.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<&str, i32> = OrdBiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert_eq!(bm.remove_by_key(&"alice"), Some(1));
+    /// assert!(bm.is_empty());
+    /// assert_eq!(bm.remove_by_key(&"missing"), None);
+    /// ```
     pub fn remove_by_key<Q>(&mut self, key: &Q) -> Option<V>
     where
         Q: Comparable<K> + ?Sized,
@@ -209,7 +360,20 @@ impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> GenericOrdBiMap<K, V,
         }
     }
 
-    /// Remove a pair by value. Returns the removed key, if present.
+    /// Removes a pair by value. Returns the removed key, if present.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let mut bm: OrdBiMap<&str, i32> = OrdBiMap::new();
+    /// bm.insert("alice", 1);
+    /// assert_eq!(bm.remove_by_value(&1), Some("alice"));
+    /// assert!(bm.is_empty());
+    /// assert_eq!(bm.remove_by_value(&99), None);
+    /// ```
     pub fn remove_by_value<Q>(&mut self, value: &Q) -> Option<K>
     where
         Q: Comparable<V> + ?Sized,
@@ -222,17 +386,45 @@ impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> GenericOrdBiMap<K, V,
         }
     }
 
-    /// Return the union of two bimaps; entries from `other` overwrite entries in `self`.
+    /// Returns the union of two bimaps; entries from `other` overwrite entries in `self`.
     ///
     /// For conflicting keys or values, `other`'s mapping wins. The bijection
     /// invariant is maintained by the underlying [`insert`][Self::insert] logic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let a: OrdBiMap<i32, i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdBiMap<i32, i32> = [(2, 99), (3, 30)].into();
+    /// let u = a.union(b);
+    /// // key 2 is overwritten by b's value (99).
+    /// assert_eq!(u.get_by_key(&1), Some(&10));
+    /// assert_eq!(u.get_by_key(&2), Some(&99));
+    /// assert_eq!(u.get_by_key(&3), Some(&30));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn union(mut self, other: Self) -> Self {
         self.extend(other);
         self
     }
 
-    /// Return entries whose keys are in `self` but not in `other`.
+    /// Returns entries whose keys are in `self` but not in `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let a: OrdBiMap<i32, i32> = [(1, 10), (2, 20), (3, 30)].into();
+    /// let b: OrdBiMap<i32, i32> = [(2, 20)].into();
+    /// let d = a.difference(&b);
+    /// let pairs: Vec<_> = d.iter().map(|(&k, &v)| (k, v)).collect();
+    /// assert_eq!(pairs, vec![(1, 10), (3, 30)]);
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
         self.into_iter()
@@ -240,7 +432,21 @@ impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> GenericOrdBiMap<K, V,
             .collect()
     }
 
-    /// Return entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    /// Returns entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let a: OrdBiMap<i32, i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdBiMap<i32, i32> = [(2, 99), (3, 30)].into();
+    /// let i = a.intersection(&b);
+    /// // Only key 2 is in both; self's value (20) is kept.
+    /// let pairs: Vec<_> = i.iter().map(|(&k, &v)| (k, v)).collect();
+    /// assert_eq!(pairs, vec![(2, 20)]);
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
         self.into_iter()
@@ -248,7 +454,21 @@ impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> GenericOrdBiMap<K, V,
             .collect()
     }
 
-    /// Return entries whose keys are in exactly one of `self` or `other`.
+    /// Returns entries whose keys are in exactly one of `self` or `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdBiMap;
+    /// let a: OrdBiMap<i32, i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdBiMap<i32, i32> = [(2, 20), (3, 30)].into();
+    /// let sd = a.symmetric_difference(&b);
+    /// // key 2 is in both — excluded. Keys 1 and 3 are each unique to one map.
+    /// let pairs: Vec<_> = sd.iter().map(|(&k, &v)| (k, v)).collect();
+    /// assert_eq!(pairs, vec![(1, 10), (3, 30)]);
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn symmetric_difference(self, other: &Self) -> Self {
         // Clone self — O(1) via structural sharing — to check membership after consuming.
@@ -317,6 +537,20 @@ impl<K: Ord + Clone + Debug, V: Ord + Clone + Debug, P: SharedPointerKind> Debug
     }
 }
 
+impl<K: Ord + Clone + Display, V: Ord + Clone + Display, P: SharedPointerKind> Display
+    for GenericOrdBiMap<K, V, P>
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (k, v) in self.iter() {
+            write!(f, "{sep}{k} <=> {v}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
+
 impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> FromIterator<(K, V)>
     for GenericOrdBiMap<K, V, P>
 {
@@ -372,6 +606,11 @@ where
 {
     type Output = V;
 
+    /// Returns a reference to the value mapped to `key` (forward direction).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index(&self, key: &Q) -> &Self::Output {
         match self.forward.get(key) {
             Some(v) => v,
@@ -408,6 +647,11 @@ impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> Iterator for Consumin
 }
 
 impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> ExactSizeIterator
+    for ConsumingIter<K, V, P>
+{
+}
+
+impl<K: Ord + Clone, V: Ord + Clone, P: SharedPointerKind> FusedIterator
     for ConsumingIter<K, V, P>
 {
 }

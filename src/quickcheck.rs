@@ -1,13 +1,14 @@
 #[cfg(any(feature = "std", feature = "foldhash"))]
 use crate::hash_width::HashWidth;
 use crate::{
-    shared_ptr::SharedPointerKind, GenericHashMap, GenericHashSet, GenericOrdMap, GenericOrdSet,
-    GenericVector,
+    shared_ptr::SharedPointerKind, GenericHashMap, GenericHashSet, GenericOrdBag, GenericOrdBiMap,
+    GenericOrdInsertionOrderMap, GenericOrdInsertionOrderSet, GenericOrdMap, GenericOrdMultiMap,
+    GenericOrdSet, GenericOrdSymMap, GenericOrdTrie, GenericVector,
 };
 #[cfg(any(feature = "std", feature = "foldhash"))]
 use crate::{
     GenericBag, GenericBiMap, GenericHashMultiMap, GenericInsertionOrderMap,
-    GenericInsertionOrderSet, GenericSymMap, GenericTrie,
+    GenericInsertionOrderSet, GenericSymMap, GenericTrie, GenericUniqueVector,
 };
 use ::quickcheck::{Arbitrary, Gen};
 use core::hash::{BuildHasher, Hash};
@@ -149,5 +150,85 @@ where
 {
     fn arbitrary(g: &mut Gen) -> Self {
         GenericTrie::from_iter(Vec::<(Vec<K>, V)>::arbitrary(g))
+    }
+}
+
+impl<A: Ord + Clone + Arbitrary + Sync, P: SharedPointerKind + 'static> Arbitrary
+    for GenericOrdBag<A, P>
+{
+    fn arbitrary(g: &mut Gen) -> Self {
+        GenericOrdBag::from_iter(Vec::<A>::arbitrary(g))
+    }
+}
+
+impl<
+        K: Ord + Clone + Arbitrary + Sync,
+        V: Ord + Clone + Arbitrary + Sync,
+        P: SharedPointerKind + 'static,
+    > Arbitrary for GenericOrdMultiMap<K, V, P>
+{
+    fn arbitrary(g: &mut Gen) -> Self {
+        GenericOrdMultiMap::from_iter(Vec::<(K, V)>::arbitrary(g))
+    }
+}
+
+impl<
+        K: Ord + Clone + Arbitrary + Sync,
+        V: Ord + Clone + Arbitrary + Sync,
+        P: SharedPointerKind + 'static,
+    > Arbitrary for GenericOrdBiMap<K, V, P>
+{
+    fn arbitrary(g: &mut Gen) -> Self {
+        GenericOrdBiMap::from_iter(Vec::<(K, V)>::arbitrary(g))
+    }
+}
+
+impl<A: Ord + Clone + Arbitrary + Sync, P: SharedPointerKind + 'static> Arbitrary
+    for GenericOrdSymMap<A, P>
+{
+    fn arbitrary(g: &mut Gen) -> Self {
+        GenericOrdSymMap::from_iter(Vec::<(A, A)>::arbitrary(g))
+    }
+}
+
+impl<
+        K: Ord + Clone + Arbitrary + Sync,
+        V: Clone + Arbitrary + Sync,
+        P: SharedPointerKind + 'static,
+    > Arbitrary for GenericOrdTrie<K, V, P>
+{
+    fn arbitrary(g: &mut Gen) -> Self {
+        GenericOrdTrie::from_iter(Vec::<(Vec<K>, V)>::arbitrary(g))
+    }
+}
+
+impl<
+        K: Ord + Clone + Arbitrary + Sync,
+        V: Clone + Arbitrary + Sync,
+        P: SharedPointerKind + 'static,
+    > Arbitrary for GenericOrdInsertionOrderMap<K, V, P>
+{
+    fn arbitrary(g: &mut Gen) -> Self {
+        GenericOrdInsertionOrderMap::from_iter(Vec::<(K, V)>::arbitrary(g))
+    }
+}
+
+impl<A: Ord + Clone + Arbitrary + Sync, P: SharedPointerKind + 'static> Arbitrary
+    for GenericOrdInsertionOrderSet<A, P>
+{
+    fn arbitrary(g: &mut Gen) -> Self {
+        GenericOrdInsertionOrderSet::from_iter(Vec::<A>::arbitrary(g))
+    }
+}
+
+#[cfg(any(feature = "std", feature = "foldhash"))]
+impl<A, S, P, H: HashWidth> Arbitrary for GenericUniqueVector<A, S, P, H>
+where
+    A: Hash + Eq + Clone + Arbitrary + Sync,
+    S: BuildHasher + Clone + Default + Send + Sync + 'static,
+    P: SharedPointerKind + 'static,
+{
+    fn arbitrary(g: &mut Gen) -> Self {
+        GenericUniqueVector::from_iter(Vec::<A>::arbitrary(g))
     }
 }

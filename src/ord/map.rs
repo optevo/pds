@@ -39,7 +39,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::cmp::Ordering;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator};
 use core::mem;
@@ -52,13 +52,13 @@ use equivalent::Comparable;
 
 use crate::hashmap::GenericHashMap;
 use crate::nodes::btree::{
-    ConsumingIter as NodeConsumingIter, Cursor, InsertAction, Iter as NodeIter,
+    build_sorted, ConsumingIter as NodeConsumingIter, Cursor, InsertAction, Iter as NodeIter,
     IterMut as NodeIterMut, Node,
 };
 use crate::ordset::GenericOrdSet;
 use crate::shared_ptr::DefaultSharedPtr;
 
-/// Construct a map from a sequence of key/value pairs.
+/// Constructs a map from a sequence of key/value pairs.
 ///
 /// # Examples
 ///
@@ -141,7 +141,7 @@ pub struct GenericOrdMap<K, V, P: SharedPointerKind> {
 }
 
 impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
-    /// Construct an empty map.
+    /// Constructs an empty map.
     #[inline]
     #[must_use]
     pub fn new() -> Self {
@@ -153,7 +153,7 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
         }
     }
 
-    /// Construct a map with a single mapping.
+    /// Constructs a map with a single mapping.
     ///
     /// # Examples
     ///
@@ -177,7 +177,7 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
         }
     }
 
-    /// Test whether a map is empty.
+    /// Tests whether a map is empty.
     ///
     /// Time: O(1)
     ///
@@ -199,7 +199,7 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
         self.len() == 0
     }
 
-    /// Test whether two maps refer to the same content in memory.
+    /// Tests whether two maps refer to the same content in memory.
     ///
     /// This is true if the two sides are references to the same map,
     /// or if the two maps refer to the same root node.
@@ -208,6 +208,7 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
     /// if you're comparing a map to a fresh clone of itself.
     ///
     /// Time: O(1)
+    #[must_use]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         match (&self.root, &other.root) {
             (Some(a), Some(b)) => a.ptr_eq(b),
@@ -216,7 +217,7 @@ impl<K, V, P: SharedPointerKind> GenericOrdMap<K, V, P> {
         }
     }
 
-    /// Get the size of a map.
+    /// Returns the size of the map.
     ///
     /// Time: O(1)
     ///
@@ -275,7 +276,7 @@ where
     K: Ord,
     P: SharedPointerKind,
 {
-    /// Get the largest key in a map, along with its value. If the map
+    /// Returns the largest key in the map, along with its value. If the map
     /// is empty, return `None`.
     ///
     /// Time: O(log n)
@@ -296,7 +297,7 @@ where
         self.root.as_ref().and_then(|root| root.max())
     }
 
-    /// Get the smallest key in a map, along with its value. If the
+    /// Returns the smallest key in the map, along with its value. If the
     /// map is empty, return `None`.
     ///
     /// Time: O(log n)
@@ -317,7 +318,7 @@ where
         self.root.as_ref().and_then(|root| root.min())
     }
 
-    /// Get an iterator over the key/value pairs of a map.
+    /// Returns an iterator over the key/value pairs.
     #[must_use]
     pub fn iter(&self) -> Iter<'_, K, V, P> {
         Iter {
@@ -325,7 +326,7 @@ where
         }
     }
 
-    /// Create an iterator over a range of key/value pairs.
+    /// Creates an iterator over a range of key/value pairs.
     #[must_use]
     pub fn range<R, Q>(&self, range: R) -> RangedIter<'_, K, V, P>
     where
@@ -337,19 +338,19 @@ where
         }
     }
 
-    /// Get an iterator over a map's keys.
+    /// Returns an iterator over the keys.
     #[must_use]
     pub fn keys(&self) -> Keys<'_, K, V, P> {
         Keys { it: self.iter() }
     }
 
-    /// Get an iterator over a map's values.
+    /// Returns an iterator over the values.
     #[must_use]
     pub fn values(&self) -> Values<'_, K, V, P> {
         Values { it: self.iter() }
     }
 
-    /// Get an iterator over the differences between this map and
+    /// Returns an iterator over the differences between this map and
     /// another, i.e. the set of entries to add, update, or remove to
     /// this map in order to make it equal to the other map.
     ///
@@ -375,7 +376,7 @@ where
         diff
     }
 
-    /// Get the value for a key from a map.
+    /// Returns a reference to the value for a key.
     ///
     /// Time: O(log n)
     ///
@@ -400,7 +401,7 @@ where
             .and_then(|r| r.lookup(key).map(|(_, v)| v))
     }
 
-    /// Get the key/value pair for a key from a map.
+    /// Returns the key/value pair for a key.
     ///
     /// Time: O(log n)
     ///
@@ -425,7 +426,7 @@ where
             .and_then(|r| r.lookup(key).map(|(k, v)| (k, v)))
     }
 
-    /// Get a reference to the closest smaller entry in a map
+    /// Returns a reference to the closest smaller entry in the map
     /// to a given key.
     ///
     /// If the map contains the given key, this is returned.
@@ -450,7 +451,7 @@ where
             .next_back()
     }
 
-    /// Get a reference to the closest larger entry in a map
+    /// Returns a reference to the closest larger entry in the map
     /// to a given key.
     ///
     /// If the map contains the given key, this is returned.
@@ -475,7 +476,7 @@ where
             .next()
     }
 
-    /// Get a reference to the closest strictly smaller entry in a map
+    /// Returns a reference to the closest strictly smaller entry in the map
     /// to a given key.
     ///
     /// Unlike [`get_prev`][Self::get_prev], this never returns the entry
@@ -499,7 +500,7 @@ where
             .next_back()
     }
 
-    /// Get a reference to the closest strictly larger entry in a map
+    /// Returns a reference to the closest strictly larger entry in the map
     /// to a given key.
     ///
     /// Unlike [`get_next`][Self::get_next], this never returns the entry
@@ -548,7 +549,7 @@ where
         self.get(k).is_some()
     }
 
-    /// Test whether a map is a submap of another map, meaning that
+    /// Tests whether a map is a submap of another map, meaning that
     /// all keys in our map must also be in the other map, with the
     /// same values.
     ///
@@ -566,7 +567,7 @@ where
             .all(|(k, v)| other.borrow().get(k).map(|ov| cmp(v, ov)).unwrap_or(false))
     }
 
-    /// Test whether a map is a proper submap of another map, meaning
+    /// Tests whether a map is a proper submap of another map, meaning
     /// that all keys in our map must also be in the other map, with
     /// the same values. To be a proper submap, ours must also contain
     /// fewer keys than the other map.
@@ -584,7 +585,7 @@ where
         self.len() != other.borrow().len() && self.is_submap_by(other, cmp)
     }
 
-    /// Test whether a map is a submap of another map, meaning that
+    /// Tests whether a map is a submap of another map, meaning that
     /// all keys in our map must also be in the other map, with the
     /// same values.
     ///
@@ -608,7 +609,7 @@ where
         self.is_submap_by(other.borrow(), PartialEq::eq)
     }
 
-    /// Test whether a map is a proper submap of another map, meaning
+    /// Tests whether a map is a proper submap of another map, meaning
     /// that all keys in our map must also be in the other map, with
     /// the same values. To be a proper submap, ours must also contain
     /// fewer keys than the other map.
@@ -653,7 +654,7 @@ where
         assert_eq!(size, self.size);
     }
 
-    /// Check whether two maps share no keys.
+    /// Tests whether two maps share no keys.
     ///
     /// Uses a simultaneous traversal of both maps in key order,
     /// returning `false` at the first shared key. O(n + m) time.
@@ -687,7 +688,7 @@ where
         }
     }
 
-    /// Merge two maps with different value types using three closures:
+    /// Merges two maps with different value types using three closures:
     /// one for keys present only in `self`, one for keys in both maps,
     /// and one for keys present only in `other`.
     ///
@@ -786,7 +787,7 @@ where
     V: Clone,
     P: SharedPointerKind,
 {
-    /// Get a mutable reference to the value for a key from a map.
+    /// Returns a mutable reference to the value for a key.
     ///
     /// Time: O(log n)
     ///
@@ -817,7 +818,7 @@ where
         root.lookup_mut(key).map(|(_, v)| v)
     }
 
-    /// Get the key/value pair for a key from a map.
+    /// Returns the key/value pair for a key, with a mutable reference to the value.
     ///
     /// Time: O(log n)
     ///
@@ -840,7 +841,7 @@ where
         self.root.as_mut()?.lookup_mut(key)
     }
 
-    /// Get a mutable iterator over the key/value pairs of a map.
+    /// Returns a mutable iterator over the key/value pairs.
     ///
     /// Each node on the path is made exclusive via copy-on-write, so
     /// iterating mutably over a shared map will clone the tree structure
@@ -857,6 +858,7 @@ where
     /// }
     /// assert_eq!(ordmap![1 => 11, 2 => 22, 3 => 33], map);
     /// ```
+    #[must_use]
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V, P> {
         // Conservative: caller may mutate values via the iterator; invalidate
         // regardless of whether any entry is actually changed.
@@ -867,7 +869,7 @@ where
         }
     }
 
-    /// Get the closest smaller entry in a map to a given key
+    /// Returns the closest smaller entry in the map to a given key
     /// as a mutable reference.
     ///
     /// If the map contains the given key, this is returned.
@@ -896,7 +898,7 @@ where
         root.lookup_mut(prev.borrow())
     }
 
-    /// Get the closest larger entry in a map to a given key
+    /// Returns the closest larger entry in the map to a given key
     /// as a mutable reference.
     ///
     /// If the map contains the given key, this is returned.
@@ -925,7 +927,7 @@ where
         root.lookup_mut(next.borrow())
     }
 
-    /// Get the closest strictly smaller entry in a map to a given key
+    /// Returns the closest strictly smaller entry in the map to a given key
     /// as a mutable reference.
     ///
     /// Unlike [`get_prev_mut`][Self::get_prev_mut], this never returns the
@@ -952,7 +954,7 @@ where
         root.lookup_mut(prev.borrow())
     }
 
-    /// Get the closest strictly larger entry in a map to a given key
+    /// Returns the closest strictly larger entry in the map to a given key
     /// as a mutable reference.
     ///
     /// Unlike [`get_next_mut`][Self::get_next_mut], this never returns the
@@ -979,7 +981,7 @@ where
         root.lookup_mut(next.borrow())
     }
 
-    /// Insert a key/value mapping into a map.
+    /// Inserts a key/value mapping into a map.
     ///
     /// This is a copy-on-write operation, so that the parts of the
     /// map's structure which are shared with other maps will be
@@ -1010,7 +1012,7 @@ where
         self.insert_key_value(key, value).map(|(_, v)| v)
     }
 
-    /// Insert a key/value mapping into a map.
+    /// Inserts a key/value mapping into a map.
     ///
     /// This is a copy-on-write operation, so that the parts of the
     /// map's structure which are shared with other maps will be
@@ -1035,7 +1037,7 @@ where
         None
     }
 
-    /// Remove a key/value mapping from a map if it exists.
+    /// Removes a key/value mapping from a map if it exists.
     ///
     /// Time: O(log n)
     ///
@@ -1059,7 +1061,7 @@ where
         self.remove_with_key(k).map(|(_, v)| v)
     }
 
-    /// Remove a key/value pair from a map, if it exists, and return
+    /// Removes a key/value pair from a map, if it exists, and return
     /// the removed key and value.
     ///
     /// Time: O(log n)
@@ -1084,7 +1086,7 @@ where
         removed
     }
 
-    /// Apply a diff to produce a new map.
+    /// Applies a diff to produce a new map.
     ///
     /// Takes any iterator of [`DiffItem`] values (such as from
     /// [`diff`][GenericOrdMap::diff]) and applies each change —
@@ -1124,7 +1126,7 @@ where
         out
     }
 
-    /// Split a map into two maps, where the first contains entries
+    /// Splits a map into two maps, where the first contains entries
     /// that satisfy the predicate and the second contains entries
     /// that do not.
     ///
@@ -1205,7 +1207,7 @@ where
         result
     }
 
-    /// Remove all entries from a map that do not satisfy the given
+    /// Removes all entries from a map that do not satisfy the given
     /// predicate.
     ///
     /// Time: O(n log n)
@@ -1255,7 +1257,7 @@ where
         out
     }
 
-    /// Remove all entries whose keys are in the given set.
+    /// Removes all entries whose keys are in the given set.
     ///
     /// Time: O(m log n) where m = keys.len(), n = self.len()
     ///
@@ -1279,7 +1281,7 @@ where
         out
     }
 
-    /// Construct a new map by inserting a key/value mapping into a
+    /// Constructs a new map by inserting a key/value mapping into a
     /// map.
     ///
     /// If the map already has a mapping for the given key, the
@@ -1305,7 +1307,7 @@ where
         out
     }
 
-    /// Construct a new map by inserting a key/value mapping into a
+    /// Constructs a new map by inserting a key/value mapping into a
     /// map.
     ///
     /// If the map already has a mapping for the given key, we call
@@ -1321,7 +1323,7 @@ where
         self.update_with_key(k, v, |_, v1, v2| f(v1, v2))
     }
 
-    /// Construct a new map by inserting a key/value mapping into a
+    /// Constructs a new map by inserting a key/value mapping into a
     /// map.
     ///
     /// If the map already has a mapping for the given key, we call
@@ -1343,7 +1345,7 @@ where
         }
     }
 
-    /// Construct a new map by inserting a key/value mapping into a
+    /// Constructs a new map by inserting a key/value mapping into a
     /// map, returning the old value for the key as well as the new
     /// map.
     ///
@@ -1392,7 +1394,7 @@ where
         }
     }
 
-    /// Remove a key/value pair from a map, if it exists.
+    /// Removes a key/value pair from a map, if it exists.
     ///
     /// Time: O(log n)
     #[must_use]
@@ -1405,7 +1407,7 @@ where
             .unwrap_or_else(|| self.clone())
     }
 
-    /// Remove a key/value pair from a map, if it exists, and return
+    /// Removes a key/value pair from a map, if it exists, and return
     /// the removed value as well as the updated list.
     ///
     /// Time: O(log n)
@@ -1417,7 +1419,7 @@ where
         self.extract_with_key(k).map(|(_, v, m)| (v, m))
     }
 
-    /// Remove a key/value pair from a map, if it exists, and return
+    /// Removes a key/value pair from a map, if it exists, and return
     /// the removed key and value as well as the updated list.
     ///
     /// Time: O(log n)
@@ -1431,7 +1433,7 @@ where
         result.map(|(k, v)| (k, v, out))
     }
 
-    /// Construct the union of two maps, keeping the values in the
+    /// Constructs the union of two maps, keeping the values in the
     /// current map when keys exist in both maps.
     ///
     /// Time: O(n log n)
@@ -1453,7 +1455,7 @@ where
         // code isn't quite symmetric, because we need to keep values that are present in `self`.
         if self.len() >= other.len() {
             for (k, v) in other {
-                self.entry(k).or_insert(v);
+                let _ = self.entry(k).or_insert(v);
             }
             self
         } else {
@@ -1464,7 +1466,7 @@ where
         }
     }
 
-    /// Construct the union of two maps, using a function to decide
+    /// Constructs the union of two maps, using a function to decide
     /// what to do with the value when a key is in both maps.
     ///
     /// The function is called when a value exists in both maps, and
@@ -1482,7 +1484,7 @@ where
         self.union_with_key(other, |_, v1, v2| f(v1, v2))
     }
 
-    /// Construct the union of two maps, using a function to decide
+    /// Constructs the union of two maps, using a function to decide
     /// what to do with the value when a key is in both maps.
     ///
     /// The function is called when a value exists in both maps, and
@@ -1538,7 +1540,7 @@ where
         self
     }
 
-    /// Construct the union of a sequence of maps, selecting the value
+    /// Constructs the union of a sequence of maps, selecting the value
     /// of the leftmost when a key appears in more than one map.
     ///
     /// Time: O(n log n)
@@ -1561,7 +1563,7 @@ where
         i.into_iter().fold(Self::default(), Self::union)
     }
 
-    /// Construct the union of a sequence of maps, using a function to
+    /// Constructs the union of a sequence of maps, using a function to
     /// decide what to do with the value when a key is in more than
     /// one map.
     ///
@@ -1581,7 +1583,7 @@ where
             .fold(Self::default(), |a, b| a.union_with(b, &f))
     }
 
-    /// Construct the union of a sequence of maps, using a function to
+    /// Constructs the union of a sequence of maps, using a function to
     /// decide what to do with the value when a key is in more than
     /// one map.
     ///
@@ -1602,7 +1604,7 @@ where
             .fold(Self::default(), |a, b| a.union_with_key(b, &f))
     }
 
-    /// Construct the symmetric difference between two maps by discarding keys
+    /// Constructs the symmetric difference between two maps by discarding keys
     /// which occur in both maps.
     ///
     /// Time: O(n log n)
@@ -1623,7 +1625,7 @@ where
         self.symmetric_difference_with_key(other, |_, _, _| None)
     }
 
-    /// Construct the symmetric difference between two maps by using a function
+    /// Constructs the symmetric difference between two maps by using a function
     /// to decide what to do if a key occurs in both.
     ///
     /// Time: O(n log n)
@@ -1636,7 +1638,7 @@ where
         self.symmetric_difference_with_key(other, |_, a, b| f(a, b))
     }
 
-    /// Construct the symmetric difference between two maps by using a function
+    /// Constructs the symmetric difference between two maps by using a function
     /// to decide what to do if a key occurs in both. The function
     /// receives the key as well as both values.
     ///
@@ -1676,7 +1678,7 @@ where
         out.union(self)
     }
 
-    /// Construct the relative complement between two maps by discarding keys
+    /// Constructs the relative complement between two maps by discarding keys
     /// which occur in `other`.
     ///
     /// Time: O(m log n) where m is the size of the other map
@@ -1700,7 +1702,7 @@ where
         self
     }
 
-    /// Construct the intersection of two maps, keeping the values
+    /// Constructs the intersection of two maps, keeping the values
     /// from the current map.
     ///
     /// Time: O(n log n)
@@ -1721,7 +1723,7 @@ where
         self.intersection_with_key(other, |_, v, _| v)
     }
 
-    /// Construct the intersection of two maps, calling a function
+    /// Constructs the intersection of two maps, calling a function
     /// with both values for each key and using the result as the
     /// value for the key.
     ///
@@ -1743,7 +1745,7 @@ where
         self.intersection_with_key(other, |_, v1, v2| f(v1, v2))
     }
 
-    /// Construct the intersection of two maps, calling a function
+    /// Constructs the intersection of two maps, calling a function
     /// with the key and both values for each key and using the result
     /// as the value for the key.
     ///
@@ -1788,7 +1790,7 @@ where
         out
     }
 
-    /// Split a map into two, with the left hand map containing keys
+    /// Splits a map into two, with the left hand map containing keys
     /// which are smaller than `split`, and the right hand map
     /// containing keys which are larger than `split`.
     ///
@@ -1802,7 +1804,7 @@ where
         (l, r)
     }
 
-    /// Split a map into two, with the left hand map containing keys
+    /// Splits a map into two, with the left hand map containing keys
     /// which are smaller than `split`, and the right hand map
     /// containing keys which are larger than `split`.
     ///
@@ -1823,7 +1825,7 @@ where
         )
     }
 
-    /// Split a map at `key` in O(log n), consuming it.
+    /// Splits a map at `key` in O(log n), consuming it.
     ///
     /// Returns `(left, exact_value, right)` where every key in `left` is strictly
     /// less than `key`, every key in `right` is strictly greater, and `exact_value`
@@ -1903,7 +1905,7 @@ where
         }
     }
 
-    /// Construct a map with only the `n` smallest keys from a given
+    /// Constructs a map with only the `n` smallest keys from a given
     /// map.
     #[must_use]
     pub fn take(&self, n: usize) -> Self {
@@ -1913,7 +1915,7 @@ where
             .collect()
     }
 
-    /// Construct a map with the `n` smallest keys removed from a
+    /// Constructs a map with the `n` smallest keys removed from a
     /// given map.
     #[must_use]
     pub fn skip(&self, n: usize) -> Self {
@@ -1923,7 +1925,7 @@ where
             .collect()
     }
 
-    /// Remove the smallest key from a map, and return its value as
+    /// Removes the smallest key from a map, and return its value as
     /// well as the updated map.
     #[must_use]
     pub fn without_min(&self) -> (Option<V>, Self) {
@@ -1931,7 +1933,7 @@ where
         (pop.map(|(_, v)| v), next)
     }
 
-    /// Remove the smallest key from a map, and return that key, its
+    /// Removes the smallest key from a map, and return that key, its
     /// value as well as the updated map.
     #[must_use]
     pub fn without_min_with_key(&self) -> (Option<(K, V)>, Self) {
@@ -1944,7 +1946,7 @@ where
         }
     }
 
-    /// Remove the largest key from a map, and return its value as
+    /// Removes the largest key from a map, and return its value as
     /// well as the updated map.
     #[must_use]
     pub fn without_max(&self) -> (Option<V>, Self) {
@@ -1952,7 +1954,7 @@ where
         (pop.map(|(_, v)| v), next)
     }
 
-    /// Remove the largest key from a map, and return that key, its
+    /// Removes the largest key from a map, and return that key, its
     /// value as well as the updated map.
     #[must_use]
     pub fn without_max_with_key(&self) -> (Option<(K, V)>, Self) {
@@ -1965,7 +1967,7 @@ where
         }
     }
 
-    /// Remove the smallest key from the map in place, returning the
+    /// Removes the smallest key from the map in place, returning the
     /// key-value pair, or `None` if the map is empty.
     ///
     /// Time: O(log n)
@@ -1974,7 +1976,7 @@ where
         self.remove_with_key(&min_key)
     }
 
-    /// Remove the largest key from the map in place, returning the
+    /// Removes the largest key from the map in place, returning the
     /// key-value pair, or `None` if the map is empty.
     ///
     /// Time: O(log n)
@@ -1983,7 +1985,7 @@ where
         self.remove_with_key(&max_key)
     }
 
-    /// Get the [`Entry`][Entry] for a key in the map for in-place manipulation.
+    /// Returns the [`Entry`][Entry] for a key for in-place manipulation.
     ///
     /// Time: O(log n)
     ///
@@ -1996,6 +1998,30 @@ where
             Entry::Vacant(VacantEntry { map: self, key })
         }
     }
+
+    /// Builds a map from a pre-sorted, deduplicated iterator of `(K, V)` pairs in O(n).
+    ///
+    /// The caller **must** guarantee that the iterator yields items in strictly
+    /// ascending key order with no duplicate keys. Violating this produces a
+    /// map with broken invariants.
+    ///
+    /// Uses a bottom-up B+ tree construction, building leaves first and then
+    /// branch levels bottom-up — O(n) total instead of O(n log n) for n
+    /// individual insertions.
+    ///
+    /// Time: O(n)
+    pub(crate) fn from_sorted_iter<I>(iter: I) -> Self
+    where
+        I: Iterator<Item = (K, V)>,
+    {
+        let (root, size) = build_sorted::<K, V, P, I>(iter);
+        GenericOrdMap {
+            size,
+            root,
+            #[cfg(feature = "ord-hash")]
+            content_hash_cache: AtomicU64::new(0),
+        }
+    }
 }
 
 // Methods that need K: Clone but not V: Clone
@@ -2004,7 +2030,7 @@ where
     K: Ord + Clone,
     P: SharedPointerKind,
 {
-    /// Construct a new map with the same keys but values transformed
+    /// Constructs a new map with the same keys but values transformed
     /// by the given function.
     ///
     /// Time: O(n log n)
@@ -2027,7 +2053,7 @@ where
         self.iter().map(|(k, v)| (k.clone(), f(v))).collect()
     }
 
-    /// Construct a new map with the same keys but values transformed
+    /// Constructs a new map with the same keys but values transformed
     /// by the given function, which also receives the key.
     ///
     /// Time: O(n log n)
@@ -2050,7 +2076,7 @@ where
         self.iter().map(|(k, v)| (k.clone(), f(k, v))).collect()
     }
 
-    /// Construct a new map with the same keys but values transformed
+    /// Constructs a new map with the same keys but values transformed
     /// by a fallible function. Returns the first error encountered.
     ///
     /// Time: O(n log n)
@@ -2164,7 +2190,7 @@ where
     V: Clone,
     P: SharedPointerKind,
 {
-    /// Construct a new map with keys transformed by the given
+    /// Constructs a new map with keys transformed by the given
     /// function, keeping the values. If the function maps two
     /// different keys to the same new key, later entries (in key
     /// order) overwrite earlier ones.
@@ -2189,7 +2215,7 @@ where
         self.iter().map(|(k, v)| (f(k), v.clone())).collect()
     }
 
-    /// Construct a new map with keys transformed by a monotonically
+    /// Constructs a new map with keys transformed by a monotonically
     /// increasing function, keeping the values. The function must
     /// preserve key ordering: if `a < b`, then `f(a) < f(b)`.
     ///
@@ -2254,15 +2280,17 @@ where
     V: Clone,
     P: SharedPointerKind,
 {
-    /// Insert the default value provided if there was no value
+    /// Inserts the default value provided if there was no value
     /// already, and return a mutable reference to the value.
+    #[must_use]
     pub fn or_insert(self, default: V) -> &'a mut V {
         self.or_insert_with(|| default)
     }
 
-    /// Insert the default value from the provided function if there
+    /// Inserts the default value from the provided function if there
     /// was no value already, and return a mutable reference to the
     /// value.
+    #[must_use]
     pub fn or_insert_with<F>(self, default: F) -> &'a mut V
     where
         F: FnOnce() -> V,
@@ -2273,8 +2301,9 @@ where
         }
     }
 
-    /// Insert a default value if there was no value already, and
+    /// Inserts a default value if there was no value already, and
     /// return a mutable reference to the value.
+    #[must_use]
     pub fn or_default(self) -> &'a mut V
     where
         V: Default,
@@ -2283,7 +2312,7 @@ where
         self.or_insert_with(Default::default)
     }
 
-    /// Get the key for this entry.
+    /// Returns the key for this entry.
     #[must_use]
     pub fn key(&self) -> &K {
         match self {
@@ -2324,26 +2353,27 @@ where
     V: 'a + Clone,
     P: SharedPointerKind,
 {
-    /// Get the key for this entry.
+    /// Returns the key for this entry.
     #[must_use]
     pub fn key(&self) -> &K {
         &self.key
     }
 
-    /// Remove this entry from the map and return the removed mapping.
+    /// Removes this entry from the map and return the removed mapping.
+    #[must_use]
     pub fn remove_entry(self) -> (K, V) {
         self.map
             .remove_with_key(&self.key)
             .expect("ordmap::OccupiedEntry::remove_entry: key has vanished!")
     }
 
-    /// Get the current value.
+    /// Returns the current value.
     #[must_use]
     pub fn get(&self) -> &V {
         self.map.get(&self.key).unwrap()
     }
 
-    /// Get a mutable reference to the current value.
+    /// Returns a mutable reference to the current value.
     #[must_use]
     pub fn get_mut(&mut self) -> &mut V {
         self.map.get_mut(&self.key).unwrap()
@@ -2360,7 +2390,7 @@ where
         mem::replace(self.get_mut(), value)
     }
 
-    /// Remove this entry from the map and return the removed value.
+    /// Removes this entry from the map and return the removed value.
     pub fn remove(self) -> V {
         self.remove_entry().1
     }
@@ -2383,7 +2413,7 @@ where
     V: 'a + Clone,
     P: SharedPointerKind,
 {
-    /// Get the key for this entry.
+    /// Returns the key for this entry.
     #[must_use]
     pub fn key(&self) -> &K {
         &self.key
@@ -2395,7 +2425,7 @@ where
         self.key
     }
 
-    /// Insert a value into this entry.
+    /// Inserts a value into this entry.
     pub fn insert(self, value: V) -> &'a mut V {
         self.map.insert(self.key.clone(), value);
         // TODO insert_mut ought to return this reference
@@ -2512,7 +2542,9 @@ where
     V: Hash,
     P: SharedPointerKind,
 {
-    /// Return a content hash of this map.
+    /// Returns a content hash of this map.
+    ///
+    /// Only available with the `ord-hash` feature (enabled by default).
     ///
     /// The hash is order-independent: two maps with the same key/value pairs
     /// produce the same value regardless of insertion history. It is computed
@@ -2523,14 +2555,16 @@ where
     /// equal maps with probability ≥ 1 − 2⁻⁶⁴; different hashes mean definitely
     /// unequal. The cache is invalidated (reset to 0) on every mutation.
     ///
-    /// The hash is deterministic for any given compilation (uses `DefaultHasher`
-    /// with fixed keys `k0 = 0, k1 = 0` in current `std`). It is **not**
-    /// guaranteed stable across Rust versions and is not a cryptographic hash.
+    /// Uses [`std::collections::hash_map::DefaultHasher`] internally. The result
+    /// is deterministic within a single compilation but is **not** guaranteed
+    /// stable across Rust versions and is not comparable across different binaries.
+    /// It is not a cryptographic hash.
     ///
     /// Returns a non-zero `u64`. A computed hash of `0` is stored as `1`
     /// (the sentinel `0` means "not yet cached").
     ///
     /// Time: O(n) first call; O(1) thereafter.
+    #[must_use]
     pub fn content_hash(&self) -> u64 {
         let cached = self.content_hash_cache.load(AtomicOrdering::Relaxed);
         if cached != 0 {
@@ -2588,6 +2622,11 @@ where
 {
     type Output = V;
 
+    /// Returns a reference to the value associated with `key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index(&self, key: &Q) -> &Self::Output {
         match self.get(key) {
             None => panic!("OrdMap::index: invalid key"),
@@ -2603,6 +2642,11 @@ where
     V: Clone,
     P: SharedPointerKind,
 {
+    /// Returns a mutable reference to the value associated with `key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index_mut(&mut self, key: &Q) -> &mut Self::Output {
         match self.get_mut(key) {
             None => panic!("OrdMap::index: invalid key"),
@@ -2623,6 +2667,23 @@ where
             d.entry(k, v);
         }
         d.finish()
+    }
+}
+
+impl<K, V, P> Display for GenericOrdMap<K, V, P>
+where
+    K: Ord + Display,
+    V: Display,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (k, v) in self {
+            write!(f, "{sep}{k}: {v}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
     }
 }
 

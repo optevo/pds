@@ -67,7 +67,7 @@ use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::cmp::Ordering;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{Hash, Hasher};
 use core::iter::Sum;
 use core::iter::{FromIterator, FusedIterator};
@@ -95,7 +95,7 @@ pub use self::focus::{Focus, FocusMut};
 #[cfg(any(test, feature = "rayon"))]
 pub mod rayon;
 
-/// Construct a vector from a sequence of elements.
+/// Constructs a vector from a sequence of elements.
 ///
 /// # Examples
 ///
@@ -172,7 +172,7 @@ pub type Vector<A> = GenericVector<A, DefaultSharedPtr>;
 /// | `from_iter` | O(n) | O(n) | O(n) |
 ///
 /// **Bold** = asymptotically better than the std alternative.
-/// \* = amortised. † = requires [`recompute_merkle`][Self::recompute_merkle]
+/// \* = amortised. † = requires [`content_hash`][Self::content_hash]
 /// (costs O(k log n) where k = modified nodes since last computation).
 ///
 /// The key advantage is that `clone`, `split`, and `append` are dramatically
@@ -180,10 +180,10 @@ pub type Vector<A> = GenericVector<A, DefaultSharedPtr>;
 /// other (or share a common ancestor) share their tree nodes in memory —
 /// only modified paths are copied.
 ///
-/// ## Merkle Hashing
+/// ## Content Hashing
 ///
-/// Each internal RRB node maintains a lazy Merkle hash. When you call
-/// [`recompute_merkle`][Self::recompute_merkle], only modified subtrees are
+/// Each internal RRB node maintains a lazy content hash. When you call
+/// [`content_hash`][Self::content_hash], only modified subtrees are
 /// re-hashed — cached subtrees return instantly. This gives O(k log n) cost
 /// where k is the number of nodes modified since the last computation.
 ///
@@ -328,7 +328,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Construct an empty vector.
+    /// Constructs an empty vector.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -338,7 +338,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Get the length of a vector.
+    /// Get the size of a vector.
     ///
     /// Time: O(1)
     ///
@@ -360,7 +360,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Test whether a vector is empty.
+    /// Tests whether a vector is empty.
     ///
     /// Time: O(1)
     ///
@@ -379,7 +379,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         self.len() == 0
     }
 
-    /// Test whether a vector is currently inlined.
+    /// Tests whether a vector is currently inlined.
     ///
     /// Vectors small enough that their contents could be stored entirely inside
     /// the space of `std::mem::size_of::<GenericVector<A, P>>()` bytes are stored inline on
@@ -400,18 +400,15 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         matches!(self.vector, Inline(_))
     }
 
-    /// Test whether two vectors refer to the same content in memory.
+    /// Tests whether two vectors refer to the same content in memory.
     ///
-    /// This uses the following rules to determine equality:
-    /// * If the two sides are references to the same vector, return true.
-    /// * If the two sides are single chunk vectors pointing to the same chunk, return true.
-    /// * If the two sides are full trees pointing to the same chunks, return true.
+    /// This is true if both sides reference the same underlying chunks
+    /// (single-chunk vectors) or tree nodes (full RRB trees). Returns
+    /// `true` when comparing a vector to itself or to a fresh clone.
     ///
-    /// This would return true if you're comparing a vector to itself, or
-    /// if you're comparing a vector to a fresh clone of itself. The exception to this is
-    /// if you've cloned an inline array (ie. an array with so few elements they can fit
-    /// inside the space a `Vector` allocates for its pointers, so there are no heap allocations
-    /// to compare).
+    /// **Exception:** inline arrays (too small to heap-allocate) are
+    /// always stack-copied on clone, so two independent inline vectors
+    /// with identical content will return `false` even if equal.
     ///
     /// Time: O(1)
     #[must_use]
@@ -441,7 +438,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Compute the positional diff between two vectors.
+    /// Computes the positional diff between two vectors.
     ///
     /// Returns an iterator of [`DiffItem`] values describing the
     /// element-by-element differences between `self` (old) and `other`
@@ -504,7 +501,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         Chunks::new(self)
     }
 
-    /// Construct a [`Focus`][Focus] for a vector.
+    /// Constructs a [`Focus`][Focus] for a vector.
     ///
     /// Time: O(1)
     ///
@@ -650,7 +647,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         None
     }
 
-    /// Test if a given element is in the vector.
+    /// Tests whether a given element is in the vector.
     ///
     /// Searches the vector for the first occurrence of a given value,
     /// and returns `true` if it's there. If it's nowhere to be found
@@ -765,7 +762,7 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         self.binary_search_by(|k| f(k).cmp(b))
     }
 
-    /// Construct a vector with a single value.
+    /// Constructs a vector with a single value.
     ///
     /// # Examples
     ///
@@ -918,7 +915,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Construct a [`FocusMut`][FocusMut] for a vector.
+    /// Constructs a [`FocusMut`][FocusMut] for a vector.
     ///
     /// Time: O(1)
     ///
@@ -956,7 +953,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         ChunksMut::new(self)
     }
 
-    /// Create a new vector with the value at index `index` updated.
+    /// Creates a new vector with the value at index `index` updated.
     ///
     /// Panics if the index is out of bounds.
     ///
@@ -988,7 +985,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         replace(&mut self[index], value)
     }
 
-    /// Swap the elements at indices `i` and `j`.
+    /// Swaps the elements at indices `i` and `j`.
     ///
     /// Time: O(log n)
     pub fn swap(&mut self, i: usize, j: usize) {
@@ -1004,7 +1001,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Push a value to the front of a vector.
+    /// Pushes a value to the front of a vector.
     ///
     /// Time: O(1)* amortised
     ///
@@ -1033,7 +1030,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Push a value to the back of a vector.
+    /// Pushes a value to the back of a vector.
     ///
     /// Time: O(1)*
     ///
@@ -1059,7 +1056,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Apply a diff to produce a new vector.
+    /// Applies a diff to produce a new vector.
     ///
     /// Takes any iterator of [`DiffItem`] values (such as from
     /// [`diff`][GenericVector::diff]) and applies each change —
@@ -1107,7 +1104,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         out
     }
 
-    /// Apply a function at a single index, returning a new vector
+    /// Applies a function at a single index, returning a new vector
     /// with the element at that index replaced by the function's
     /// result. Avoids the get-transform-set pattern.
     ///
@@ -1137,7 +1134,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         out
     }
 
-    /// Split a vector into non-overlapping fixed-size chunks. The
+    /// Splits a vector into non-overlapping fixed-size chunks. The
     /// last chunk may contain fewer than `chunk_size` elements.
     ///
     /// Time: O(n log n)
@@ -1279,7 +1276,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         result
     }
 
-    /// Remove the first element from a vector and return it.
+    /// Removes the first element from a vector and return it.
     ///
     /// Time: O(1)*
     ///
@@ -1304,7 +1301,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Remove the last element from a vector and return it.
+    /// Removes the last element from a vector and return it.
     ///
     /// Time: O(1)*
     ///
@@ -1330,7 +1327,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Append the vector `other` to the end of the current vector.
+    /// Appends the vector `other` to the end of the current vector.
     ///
     /// Time: O(log n)
     ///
@@ -1460,7 +1457,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
 
     /// Retain only the elements specified by the predicate.
     ///
-    /// Remove all elements for which the provided function `f`
+    /// Removes all elements for which the provided function `f`
     /// returns false from the vector.
     ///
     /// Time: O(n)
@@ -1485,7 +1482,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Split the vector into two vectors based on a predicate.
+    /// Splits the vector into two vectors based on a predicate.
     ///
     /// Returns `(matching, non_matching)` where `matching` contains all
     /// elements for which `f` returned `true`, and `non_matching`
@@ -1510,9 +1507,9 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         (matching, non_matching)
     }
 
-    /// Split a vector at a given index.
+    /// Splits a vector at a given index.
     ///
-    /// Split a vector at a given index, consuming the vector and
+    /// Splits a vector at a given index, consuming the vector and
     /// returning a pair of the left hand side and the right hand side
     /// of the split.
     ///
@@ -1527,14 +1524,15 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// assert_eq!(vector![1, 2, 3], left);
     /// assert_eq!(vector![7, 8, 9], right);
     /// ```
+    #[must_use]
     pub fn split_at(mut self, index: usize) -> (Self, Self) {
         let right = self.split_off(index);
         (self, right)
     }
 
-    /// Split a vector at a given index.
+    /// Splits a vector at a given index.
     ///
-    /// Split a vector at a given index, leaving the left hand side in
+    /// Splits a vector at a given index, leaving the left hand side in
     /// the current vector and returning a new vector containing the
     /// right hand side.
     ///
@@ -1672,7 +1670,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Construct a vector with `count` elements removed from the
+    /// Constructs a vector with `count` elements removed from the
     /// start of the current vector.
     ///
     /// Time: O(log n)
@@ -1688,7 +1686,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Construct a vector of the first `count` elements from the
+    /// Constructs a vector of the first `count` elements from the
     /// current vector.
     ///
     /// Time: O(log n)
@@ -1715,7 +1713,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
 
     /// Extract a slice from a vector.
     ///
-    /// Remove the elements from `start_index` until `end_index` in
+    /// Removes the elements from `start_index` until `end_index` in
     /// the current vector and return the removed slice as a new
     /// vector.
     ///
@@ -1735,9 +1733,9 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         middle
     }
 
-    /// Insert an element into a vector.
+    /// Inserts an element into a vector.
     ///
-    /// Insert an element at position `index`, shifting all elements
+    /// Inserts an element at position `index`, shifting all elements
     /// after it to the right.
     ///
     /// ## Performance Note
@@ -1783,9 +1781,9 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Remove an element from a vector.
+    /// Removes an element from a vector.
     ///
-    /// Remove the element from position 'index', shifting all
+    /// Removes the element from position 'index', shifting all
     /// elements after it to the left, and return the removed element.
     ///
     /// ## Performance Note
@@ -1821,9 +1819,9 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Insert an element into a sorted vector.
+    /// Inserts an element into a sorted vector.
     ///
-    /// Insert an element into a vector in sorted order, assuming the vector is
+    /// Inserts an element into a vector in sorted order, assuming the vector is
     /// already in sorted order.
     ///
     /// Time: O(log n)
@@ -1846,9 +1844,9 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Insert an element into a sorted vector using a comparator function.
+    /// Inserts an element into a sorted vector using a comparator function.
     ///
-    /// Insert an element into a vector in sorted order using the given
+    /// Inserts an element into a vector in sorted order using the given
     /// comparator function, assuming the vector is already in sorted order.
     ///
     /// Note that the ordering used to sort the vector must logically match
@@ -1881,7 +1879,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Insert an element into a sorted vector where the comparison function
+    /// Inserts an element into a sorted vector where the comparison function
     /// delegates to the Ord implementation for values calculated by a user-
     /// provided function defined on the item type.
     ///
@@ -1926,7 +1924,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Sort a vector.
+    /// Sorts a vector.
     ///
     /// Time: O(n log n)
     ///
@@ -1945,7 +1943,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         self.sort_by(Ord::cmp)
     }
 
-    /// Sort a vector using a comparator function.
+    /// Sorts a vector using a comparator function.
     ///
     /// Time: O(n log n)
     ///
@@ -1967,7 +1965,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Sort a vector using the default comparator, in parallel.
+    /// Sorts a vector using the default comparator, in parallel.
     ///
     /// This is the parallel equivalent of [`sort`][sort]. It collects
     /// elements into a contiguous buffer, sorts in parallel using rayon,
@@ -1996,7 +1994,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         self.par_sort_by(Ord::cmp)
     }
 
-    /// Sort a vector using a comparator function, in parallel.
+    /// Sorts a vector using a comparator function, in parallel.
     ///
     /// This is the parallel equivalent of [`sort_by`][sort_by]. It
     /// collects elements into a contiguous buffer, sorts in parallel
@@ -2230,7 +2228,9 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
     /// Whether the cached content hash is current.
     ///
     /// Returns `false` after any mutation. The next call to
-    /// [`content_hash`][GenericVector::content_hash] will recompute it.
+    /// [`content_hash`][Self::content_hash] will recompute it.
+    ///
+    /// Time: O(1)
     #[inline]
     #[must_use]
     pub fn content_hash_valid(&self) -> bool {
@@ -2287,18 +2287,26 @@ impl<A: Clone + Hash, P: SharedPointerKind> GenericVector<A, P> {
         self.merkle_valid = true;
     }
 
-    /// Return the content hash of this vector, recomputing if necessary.
+    /// Returns the content hash of this vector, recomputing if necessary.
     ///
     /// The hash is position-sensitive: `[a, b]` and `[b, a]` produce
-    /// different values. It is invalidated by any mutation and
-    /// recomputed lazily on the next call.
+    /// different values. It is invalidated by any mutation and recomputed
+    /// lazily on the next call.
+    ///
+    /// Takes `&mut self` because the cached value is stored in a plain
+    /// `bool` flag that requires write access to update (unlike the
+    /// `AtomicU64` cache used by [`HashSet`][crate::HashSet] and
+    /// [`OrdMap`][crate::OrdMap]).
     ///
     /// When both operands have a valid content hash, `PartialEq`
-    /// returns directly from the hash comparison in O(1).
+    /// returns directly from the hash comparison in O(1). Use
+    /// [`content_hash_valid`][Self::content_hash_valid] to check
+    /// without triggering a recompute.
     ///
     /// Time: O(k log n) amortised where k is the number of nodes
     /// modified since the last call; O(1) when nothing has changed.
     #[inline]
+    #[must_use]
     pub fn content_hash(&mut self) -> u64 {
         self.recompute_merkle();
         self.merkle_hash
@@ -2316,6 +2324,18 @@ impl<A: Debug, P: SharedPointerKind> Debug for GenericVector<A, P> {
         //     }
         //     Single(_) => write!(f, "nowt"),
         // }
+    }
+}
+
+impl<A: Clone + Display, P: SharedPointerKind> Display for GenericVector<A, P> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "[")?;
+        let mut sep = "";
+        for a in self {
+            write!(f, "{sep}{a}")?;
+            sep = ", ";
+        }
+        write!(f, "]")
     }
 }
 
@@ -2421,7 +2441,11 @@ impl<A: Clone, P: SharedPointerKind> Extend<A> for GenericVector<A, P> {
 
 impl<A, P: SharedPointerKind> Index<usize> for GenericVector<A, P> {
     type Output = A;
-    /// Get a reference to the value at index `index` in the vector.
+    /// Returns a reference to the element at position `index`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of bounds (`index >= self.len()`).
     ///
     /// Time: O(log n)
     fn index(&self, index: usize) -> &Self::Output {
@@ -2437,8 +2461,11 @@ impl<A, P: SharedPointerKind> Index<usize> for GenericVector<A, P> {
 }
 
 impl<A: Clone, P: SharedPointerKind> IndexMut<usize> for GenericVector<A, P> {
-    /// Get a mutable reference to the value at index `index` in the
-    /// vector.
+    /// Returns a mutable reference to the element at position `index`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of bounds (`index >= self.len()`).
     ///
     /// Time: O(log n)
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
@@ -2477,7 +2504,7 @@ impl<A: Clone, P: SharedPointerKind> IntoIterator for GenericVector<A, P> {
 }
 
 impl<A: Clone, P: SharedPointerKind> FromIterator<A> for GenericVector<A, P> {
-    /// Create a vector from an iterator.
+    /// Creates a vector from an iterator.
     ///
     /// Time: O(n)
     fn from_iter<I>(iter: I) -> Self
@@ -2520,7 +2547,7 @@ impl<A: Clone, P: SharedPointerKind> From<&[A]> for GenericVector<A, P> {
 }
 
 impl<A: Clone, P: SharedPointerKind> From<Vec<A>> for GenericVector<A, P> {
-    /// Create a vector from a [`std::vec::Vec`][vec].
+    /// Creates a vector from a [`std::vec::Vec`][vec].
     ///
     /// Time: O(n)
     ///
@@ -2531,7 +2558,7 @@ impl<A: Clone, P: SharedPointerKind> From<Vec<A>> for GenericVector<A, P> {
 }
 
 impl<A: Clone, P: SharedPointerKind> From<&Vec<A>> for GenericVector<A, P> {
-    /// Create a vector from a [`std::vec::Vec`][vec].
+    /// Creates a vector from a [`std::vec::Vec`][vec].
     ///
     /// Time: O(n)
     ///
@@ -2698,7 +2725,7 @@ impl<'a, A, P: SharedPointerKind> DoubleEndedIterator for IterMut<'a, A, P>
 where
     A: 'a + Clone,
 {
-    /// Remove and return an element from the back of the iterator.
+    /// Removes and return an element from the back of the iterator.
     ///
     /// Time: O(1)*
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -2744,7 +2771,7 @@ impl<A: Clone, P: SharedPointerKind> Iterator for ConsumingIter<A, P> {
 }
 
 impl<A: Clone, P: SharedPointerKind> DoubleEndedIterator for ConsumingIter<A, P> {
-    /// Remove and return an element from the back of the iterator.
+    /// Removes and return an element from the back of the iterator.
     ///
     /// Time: O(1)*
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -2797,7 +2824,7 @@ impl<'a, A, P: SharedPointerKind + 'a> Iterator for Chunks<'a, A, P> {
 }
 
 impl<'a, A, P: SharedPointerKind + 'a> DoubleEndedIterator for Chunks<'a, A, P> {
-    /// Remove and return an element from the back of the iterator.
+    /// Removes and return an element from the back of the iterator.
     ///
     /// Time: O(1)*
     fn next_back(&mut self) -> Option<Self::Item> {
@@ -2857,7 +2884,7 @@ impl<'a, A: Clone, P: SharedPointerKind> Iterator for ChunksMut<'a, A, P> {
 }
 
 impl<'a, A: Clone, P: SharedPointerKind> DoubleEndedIterator for ChunksMut<'a, A, P> {
-    /// Remove and return an element from the back of the iterator.
+    /// Removes and return an element from the back of the iterator.
     ///
     /// Time: O(1)*
     fn next_back(&mut self) -> Option<Self::Item> {

@@ -35,9 +35,9 @@
 
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{FromIterator, FusedIterator};
 use core::ops::Index;
 
 use archery::SharedPointerKind;
@@ -75,7 +75,7 @@ impl<A: Clone, P: SharedPointerKind> Clone for GenericOrdSymMap<A, P> {
 }
 
 impl<A, P: SharedPointerKind> GenericOrdSymMap<A, P> {
-    /// Create an empty OrdSymMap.
+    /// Creates an empty OrdSymMap.
     #[must_use]
     pub fn new() -> Self {
         GenericOrdSymMap {
@@ -84,21 +84,35 @@ impl<A, P: SharedPointerKind> GenericOrdSymMap<A, P> {
         }
     }
 
-    /// Test whether the map is empty.
+    /// Tests whether the map is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.forward.is_empty()
     }
 
-    /// Return the number of pairs.
+    /// Returns the number of pairs.
     #[must_use]
     pub fn len(&self) -> usize {
         self.forward.len()
     }
 
-    /// Swap the forward and backward maps in O(1).
+    /// Swaps the forward and backward maps in O(1).
     ///
     /// After swapping, what was the forward direction becomes backward and vice versa.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// # use pds::symmap::Direction;
+    /// let mut sm = OrdSymMap::new();
+    /// sm.insert("hello", "hola");
+    /// let sm = sm.swap();
+    /// // "hola" is now the forward key.
+    /// assert_eq!(sm.get(Direction::Forward, &"hola"), Some(&"hello"));
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn swap(self) -> Self {
         GenericOrdSymMap {
@@ -109,12 +123,45 @@ impl<A, P: SharedPointerKind> GenericOrdSymMap<A, P> {
 }
 
 impl<A: Ord, P: SharedPointerKind> GenericOrdSymMap<A, P> {
-    /// Iterate over all pairs in sorted (forward) key order.
+    /// Iterates over all pairs in sorted (forward) key order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// let mut sm = OrdSymMap::new();
+    /// sm.insert(3i32, 30i32);
+    /// sm.insert(1, 10);
+    /// sm.insert(2, 20);
+    /// let pairs: Vec<_> = sm.iter().map(|(k, v)| (*k, *v)).collect();
+    /// assert_eq!(pairs, vec![(1, 10), (2, 20), (3, 30)]);
+    /// ```
+    ///
+    /// Time: O(n)
+    #[must_use]
     pub fn iter(&self) -> MapIter<'_, A, A, P> {
         self.forward.iter()
     }
 
-    /// Iterate over all pairs in the given direction.
+    /// Iterates over all pairs in the given direction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// # use pds::symmap::Direction;
+    /// let mut sm = OrdSymMap::new();
+    /// sm.insert(1i32, 10i32);
+    /// sm.insert(2, 20);
+    /// // Backward iteration is sorted by the backward-map keys (i.e. the values).
+    /// let pairs: Vec<_> = sm.iter_direction(Direction::Backward)
+    ///     .map(|(v, k)| (*v, *k))
+    ///     .collect();
+    /// assert_eq!(pairs, vec![(10, 1), (20, 2)]);
+    /// ```
+    ///
+    /// Time: O(n)
+    #[must_use]
     pub fn iter_direction(&self, dir: Direction) -> IterDirection<'_, A, P> {
         match dir {
             Direction::Forward => IterDirection::Forward(self.forward.iter()),
@@ -123,6 +170,20 @@ impl<A: Ord, P: SharedPointerKind> GenericOrdSymMap<A, P> {
     }
 
     /// Look up a value in the given direction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// # use pds::symmap::Direction;
+    /// let mut sm = OrdSymMap::new();
+    /// sm.insert("hello", "hola");
+    /// assert_eq!(sm.get(Direction::Forward, &"hello"), Some(&"hola"));
+    /// assert_eq!(sm.get(Direction::Backward, &"hola"), Some(&"hello"));
+    /// assert_eq!(sm.get(Direction::Forward, &"unknown"), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn get<Q>(&self, dir: Direction, key: &Q) -> Option<&A>
     where
@@ -134,7 +195,22 @@ impl<A: Ord, P: SharedPointerKind> GenericOrdSymMap<A, P> {
         }
     }
 
-    /// Test whether a key exists in the given direction.
+    /// Tests whether a key exists in the given direction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// # use pds::symmap::Direction;
+    /// let mut sm = OrdSymMap::new();
+    /// sm.insert("a", "b");
+    /// assert!(sm.contains(Direction::Forward, &"a"));
+    /// assert!(sm.contains(Direction::Backward, &"b"));
+    /// // "b" is not a forward key.
+    /// assert!(!sm.contains(Direction::Forward, &"b"));
+    /// ```
+    ///
+    /// Time: O(log n)
     #[must_use]
     pub fn contains<Q>(&self, dir: Direction, key: &Q) -> bool
     where
@@ -148,10 +224,25 @@ impl<A: Ord, P: SharedPointerKind> GenericOrdSymMap<A, P> {
 }
 
 impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdSymMap<A, P> {
-    /// Insert a pair, maintaining the bijection invariant.
+    /// Inserts a pair, maintaining the bijection invariant.
     ///
     /// Establishes `a` → `b` in the forward direction and `b` → `a` in the
     /// backward direction. Any existing mappings that conflict are removed first.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// # use pds::symmap::Direction;
+    /// let mut sm = OrdSymMap::new();
+    /// sm.insert("hello", "hola");
+    /// // Re-inserting with the same forward key removes the old backward entry.
+    /// sm.insert("hello", "bonjour");
+    /// assert_eq!(sm.get(Direction::Forward, &"hello"), Some(&"bonjour"));
+    /// assert_eq!(sm.get(Direction::Backward, &"hola"), None);
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn insert(&mut self, a: A, b: A) {
         // Remove conflicting cross-references.
         if let Some(old_b) = self.forward.remove(&a) {
@@ -165,9 +256,23 @@ impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdSymMap<A, P> {
         self.backward.insert(b, a);
     }
 
-    /// Remove a pair by looking up the key in the given direction.
+    /// Removes a pair by looking up the key in the given direction.
     ///
     /// Returns the other half of the pair, if it was present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// # use pds::symmap::Direction;
+    /// let mut sm = OrdSymMap::new();
+    /// sm.insert("a", "b");
+    /// let partner = sm.remove(Direction::Forward, &"a");
+    /// assert_eq!(partner, Some("b"));
+    /// assert!(sm.is_empty()); // both directions cleared
+    /// ```
+    ///
+    /// Time: O(log n)
     pub fn remove<Q>(&mut self, dir: Direction, key: &Q) -> Option<A>
     where
         Q: Comparable<A> + ?Sized,
@@ -192,17 +297,45 @@ impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdSymMap<A, P> {
         }
     }
 
-    /// Return the union of two OrdSymMaps; entries from `other` overwrite entries in `self`.
+    /// Returns the union of two OrdSymMaps; entries from `other` overwrite entries in `self`.
     ///
     /// For conflicting pairs, `other`'s mapping wins. The bijection invariant is
     /// maintained by the underlying [`insert`][Self::insert] logic.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// # use pds::symmap::Direction;
+    /// let a: OrdSymMap<i32> = [(1, 10)].into();
+    /// let b: OrdSymMap<i32> = [(2, 20)].into();
+    /// let u = a.union(b);
+    /// assert_eq!(u.len(), 2);
+    /// assert_eq!(u.get(Direction::Forward, &2), Some(&20));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn union(mut self, other: Self) -> Self {
         self.extend(other);
         self
     }
 
-    /// Return entries whose forward keys are in `self` but not in `other`.
+    /// Returns entries whose forward keys are in `self` but not in `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// # use pds::symmap::Direction;
+    /// let a: OrdSymMap<i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdSymMap<i32> = [(2, 20)].into();
+    /// let d = a.difference(&b);
+    /// assert_eq!(d.len(), 1);
+    /// assert_eq!(d.get(Direction::Forward, &1), Some(&10));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
         self.into_iter()
@@ -210,7 +343,21 @@ impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdSymMap<A, P> {
             .collect()
     }
 
-    /// Return entries whose forward keys are in both `self` and `other`; `self`'s values are kept.
+    /// Returns entries whose forward keys are in both `self` and `other`; `self`'s values are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// # use pds::symmap::Direction;
+    /// let a: OrdSymMap<i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdSymMap<i32> = [(2, 20), (3, 30)].into();
+    /// let i = a.intersection(&b);
+    /// assert_eq!(i.len(), 1);
+    /// assert_eq!(i.get(Direction::Forward, &2), Some(&20));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
         self.into_iter()
@@ -218,7 +365,22 @@ impl<A: Ord + Clone, P: SharedPointerKind> GenericOrdSymMap<A, P> {
             .collect()
     }
 
-    /// Return entries whose forward keys are in exactly one of `self` or `other`.
+    /// Returns entries whose forward keys are in exactly one of `self` or `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::OrdSymMap;
+    /// # use pds::symmap::Direction;
+    /// let a: OrdSymMap<i32> = [(1, 10), (2, 20)].into();
+    /// let b: OrdSymMap<i32> = [(2, 20), (3, 30)].into();
+    /// let sd = a.symmetric_difference(&b);
+    /// assert_eq!(sd.len(), 2);
+    /// assert!(sd.contains(Direction::Forward, &1));
+    /// assert!(sd.contains(Direction::Forward, &3));
+    /// ```
+    ///
+    /// Time: O(n log n)
     #[must_use]
     pub fn symmetric_difference(self, other: &Self) -> Self {
         // Clone self — O(1) via structural sharing — to check membership after consuming.
@@ -312,6 +474,18 @@ impl<A: Ord + Clone + Debug, P: SharedPointerKind> Debug for GenericOrdSymMap<A,
     }
 }
 
+impl<A: Ord + Clone + Display, P: SharedPointerKind> Display for GenericOrdSymMap<A, P> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (a, b) in self.iter() {
+            write!(f, "{sep}{a} <-> {b}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
+
 impl<A: Ord + Clone, P: SharedPointerKind> FromIterator<(A, A)> for GenericOrdSymMap<A, P> {
     fn from_iter<I: IntoIterator<Item = (A, A)>>(iter: I) -> Self {
         let mut sm = Self::new();
@@ -358,6 +532,11 @@ where
 {
     type Output = A;
 
+    /// Returns the value mapped to `key` (forward direction).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index(&self, key: &Q) -> &Self::Output {
         match self.forward.get(key) {
             Some(v) => v,
@@ -392,6 +571,8 @@ impl<A: Ord + Clone, P: SharedPointerKind> Iterator for ConsumingIter<A, P> {
 }
 
 impl<A: Ord + Clone, P: SharedPointerKind> ExactSizeIterator for ConsumingIter<A, P> {}
+
+impl<A: Ord + Clone, P: SharedPointerKind> FusedIterator for ConsumingIter<A, P> {}
 
 impl<A: Ord + Clone, P: SharedPointerKind> IntoIterator for GenericOrdSymMap<A, P> {
     type Item = (A, A);

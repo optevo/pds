@@ -24,9 +24,9 @@
 //! ```
 
 use alloc::vec::Vec;
-use core::fmt::{Debug, Error, Formatter};
+use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
-use core::iter::FromIterator;
+use core::iter::{ExactSizeIterator, FromIterator, FusedIterator};
 use core::ops::Index;
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
@@ -75,7 +75,7 @@ impl<K, V, P> GenericHashMultiMap<K, V, RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty multimap.
+    /// Creates an empty multimap.
     #[must_use]
     pub fn new() -> Self {
         GenericHashMultiMap {
@@ -90,7 +90,7 @@ impl<K, V, P> GenericHashMultiMap<K, V, foldhash::fast::RandomState, P>
 where
     P: SharedPointerKind,
 {
-    /// Create an empty multimap (no_std + foldhash).
+    /// Creates an empty multimap (no_std + foldhash).
     #[must_use]
     pub fn new() -> Self {
         GenericHashMultiMap {
@@ -104,25 +104,63 @@ impl<K, V, S, P, H: HashWidth> GenericHashMultiMap<K, V, S, P, H>
 where
     P: SharedPointerKind,
 {
-    /// Test whether the multimap is empty.
+    /// Tests whether the multimap is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// assert!(mm.is_empty());
+    /// mm.insert("a", 1);
+    /// assert!(!mm.is_empty());
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
-    /// Return the number of distinct keys.
+    /// Returns the number of distinct keys.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// mm.insert("b", 3);
+    /// assert_eq!(mm.keys_len(), 2);
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn keys_len(&self) -> usize {
         self.map.len()
     }
 
-    /// Return the total number of key-value pairs.
+    /// Returns the total number of key-value pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// mm.insert("b", 3);
+    /// assert_eq!(mm.len(), 3);
+    /// ```
+    ///
+    /// Time: O(1)
     #[must_use]
     pub fn len(&self) -> usize {
         self.total
     }
 
-    /// Test whether two multimaps share the same underlying allocation.
+    /// Tests whether two multimaps share the same underlying allocation.
     ///
     /// Returns `true` if `self` and `other` are the same version of
     /// the multimap — i.e. one is a clone of the other with no
@@ -143,10 +181,23 @@ where
     S: BuildHasher + Clone + Default,
     P: SharedPointerKind,
 {
-    /// Insert a key-value pair. If the value already exists for this
+    /// Inserts a key-value pair. If the value already exists for this
     /// key, no change is made (sets do not have duplicates).
     ///
     /// Returns `true` if the value was newly inserted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// assert!(mm.insert("fruit", "apple"));
+    /// assert!(mm.insert("fruit", "banana")); // second value for same key
+    /// assert!(!mm.insert("fruit", "apple")); // duplicate — not inserted
+    /// assert_eq!(mm.key_count("fruit"), 2);
+    /// ```
+    ///
+    /// Time: O(1) avg
     pub fn insert(&mut self, key: K, value: V) -> bool {
         let set = self.map.entry(key).or_default();
         let prev_len = set.len();
@@ -158,10 +209,26 @@ where
         inserted
     }
 
-    /// Remove a single value for a key.
+    /// Removes a single value for a key.
     ///
     /// Returns `true` if the value was present and removed. If the
     /// key's set becomes empty, the key is removed entirely.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// assert!(mm.remove("a", &1));
+    /// assert_eq!(mm.key_count("a"), 1);
+    /// // Removing the last value drops the key.
+    /// assert!(mm.remove("a", &2));
+    /// assert!(!mm.contains_key("a"));
+    /// ```
+    ///
+    /// Time: O(1) avg
     pub fn remove<QK, QV>(&mut self, key: &QK, value: &QV) -> bool
     where
         QK: Hash + Equivalent<K> + ?Sized,
@@ -185,7 +252,23 @@ where
         removed
     }
 
-    /// Remove all values for a key, returning the set of removed values.
+    /// Removes all values for a key, returning the set of removed values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// mm.insert("b", 3);
+    /// let removed = mm.remove_all("a");
+    /// assert_eq!(removed.len(), 2);
+    /// assert!(!mm.contains_key("a"));
+    /// assert_eq!(mm.len(), 1);
+    /// ```
+    ///
+    /// Time: O(1) avg
     pub fn remove_all<Q>(&mut self, key: &Q) -> GenericHashSet<V, S, P, H>
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -202,6 +285,21 @@ where
     /// Get the set of values for a key.
     ///
     /// Returns an empty set if the key is not present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// mm.insert("a", 10);
+    /// mm.insert("a", 20);
+    /// let vals = mm.get("a");
+    /// assert_eq!(vals.len(), 2);
+    /// assert!(vals.contains(&10) && vals.contains(&20));
+    /// assert!(mm.get("missing").is_empty());
+    /// ```
+    ///
+    /// Time: O(1) avg
     #[must_use]
     pub fn get<Q>(&self, key: &Q) -> GenericHashSet<V, S, P, H>
     where
@@ -210,7 +308,20 @@ where
         self.map.get(key).cloned().unwrap_or_default()
     }
 
-    /// Test whether a specific key-value pair is present.
+    /// Tests whether a specific key-value pair is present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// mm.insert("a", 1);
+    /// assert!(mm.contains("a", &1));
+    /// assert!(!mm.contains("a", &99));
+    /// assert!(!mm.contains("z", &1));
+    /// ```
+    ///
+    /// Time: O(1) avg
     #[must_use]
     pub fn contains<QK, QV>(&self, key: &QK, value: &QV) -> bool
     where
@@ -220,7 +331,19 @@ where
         self.map.get(key).is_some_and(|set| set.contains(value))
     }
 
-    /// Test whether a key is present (has at least one value).
+    /// Tests whether a key is present (has at least one value).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// assert!(!mm.contains_key("a"));
+    /// mm.insert("a", 1);
+    /// assert!(mm.contains_key("a"));
+    /// ```
+    ///
+    /// Time: O(1) avg
     #[must_use]
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
@@ -229,7 +352,20 @@ where
         self.map.contains_key(key)
     }
 
-    /// Return the number of values for a key.
+    /// Returns the number of values for a key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// assert_eq!(mm.key_count("a"), 0);
+    /// mm.insert("a", 10);
+    /// mm.insert("a", 20);
+    /// assert_eq!(mm.key_count("a"), 2);
+    /// ```
+    ///
+    /// Time: O(1) avg
     #[must_use]
     pub fn key_count<Q>(&self, key: &Q) -> usize
     where
@@ -238,33 +374,112 @@ where
         self.map.get(key).map_or(0, GenericHashSet::len)
     }
 
-    /// Iterate over all key-value pairs.
+    /// Iterates over all key-value pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// mm.insert(1, "a");
+    /// mm.insert(1, "b");
+    /// mm.insert(2, "c");
+    /// let mut pairs: Vec<_> = mm.iter().map(|(&k, &v)| (k, v)).collect();
+    /// pairs.sort();
+    /// assert_eq!(pairs, vec![(1, "a"), (1, "b"), (2, "c")]);
+    /// ```
+    ///
+    /// Time: O(1)
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.map
             .iter()
             .flat_map(|(k, set)| set.iter().map(move |v| (k, v)))
     }
 
-    /// Iterate over keys and their value sets.
+    /// Iterates over keys and their value sets.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// mm.insert("a", 1);
+    /// mm.insert("a", 2);
+    /// mm.insert("b", 3);
+    /// let mut counts: Vec<_> = mm.iter_sets().map(|(&k, s)| (k, s.len())).collect();
+    /// counts.sort();
+    /// assert_eq!(counts, vec![("a", 2), ("b", 1)]);
+    /// ```
+    ///
+    /// Time: O(1)
     pub fn iter_sets(&self) -> impl Iterator<Item = (&K, &GenericHashSet<V, S, P, H>)> {
         self.map.iter()
     }
 
-    /// Iterate over all distinct keys.
+    /// Iterates over all distinct keys.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut mm = HashMultiMap::new();
+    /// mm.insert("b", 1);
+    /// mm.insert("a", 2);
+    /// mm.insert("a", 3);
+    /// let mut keys: Vec<_> = mm.keys().copied().collect();
+    /// keys.sort();
+    /// assert_eq!(keys, vec!["a", "b"]);
+    /// ```
+    ///
+    /// Time: O(1)
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         self.map.keys()
     }
 
-    /// Return the union of two multimaps; all key-value pairs from both are merged.
+    /// Returns the union of two multimaps; all key-value pairs from both are merged.
     ///
     /// For a key present in both, the resulting value-set is the union of both value-sets.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut a = HashMultiMap::new();
+    /// a.insert(1, "x");
+    /// let mut b = HashMultiMap::new();
+    /// b.insert(1, "y");
+    /// b.insert(2, "z");
+    /// let c = a.union(b);
+    /// assert_eq!(c.key_count(&1), 2); // "x" and "y" merged
+    /// assert_eq!(c.key_count(&2), 1);
+    /// assert_eq!(c.len(), 3);
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn union(mut self, other: Self) -> Self {
         self.extend(other);
         self
     }
 
-    /// Return entries whose keys are in `self` but not in `other`.
+    /// Returns entries whose keys are in `self` but not in `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut a: HashMultiMap<i32, &str> = HashMultiMap::new();
+    /// a.insert(1, "x");
+    /// a.insert(2, "y");
+    /// let mut b: HashMultiMap<i32, &str> = HashMultiMap::new();
+    /// b.insert(2, "y");
+    /// let d = a.difference(&b);
+    /// // Key 2 is in both — excluded. Only key 1 remains.
+    /// assert!(!d.contains_key(&2));
+    /// assert_eq!(d.key_count(&1), 1);
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn difference(self, other: &Self) -> Self {
         self.into_iter()
@@ -272,7 +487,26 @@ where
             .collect()
     }
 
-    /// Return entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    /// Returns entries whose keys are in both `self` and `other`; `self`'s values are kept.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut a: HashMultiMap<i32, &str> = HashMultiMap::new();
+    /// a.insert(1, "x");
+    /// a.insert(2, "y");
+    /// let mut b: HashMultiMap<i32, &str> = HashMultiMap::new();
+    /// b.insert(2, "z");
+    /// b.insert(3, "w");
+    /// let i = a.intersection(&b);
+    /// // Only key 2 is in both; self's value ("y") is kept.
+    /// assert!(!i.contains_key(&1));
+    /// assert!(i.contains(&2, &"y"));
+    /// assert!(!i.contains_key(&3));
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn intersection(self, other: &Self) -> Self {
         self.into_iter()
@@ -280,9 +514,28 @@ where
             .collect()
     }
 
-    /// Return entries whose keys are in exactly one of `self` or `other`.
+    /// Returns entries whose keys are in exactly one of `self` or `other`.
     ///
     /// Keys present in both maps (regardless of their value sets) are excluded.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::HashMultiMap;
+    /// let mut a: HashMultiMap<i32, &str> = HashMultiMap::new();
+    /// a.insert(1, "x");
+    /// a.insert(2, "y");
+    /// let mut b: HashMultiMap<i32, &str> = HashMultiMap::new();
+    /// b.insert(2, "z");
+    /// b.insert(3, "w");
+    /// let sd = a.symmetric_difference(&b);
+    /// // Key 2 is in both — excluded. Keys 1 and 3 are each unique to one map.
+    /// assert!(!sd.contains_key(&2));
+    /// assert!(sd.contains_key(&1));
+    /// assert!(sd.contains_key(&3));
+    /// ```
+    ///
+    /// Time: O(n) avg
     #[must_use]
     pub fn symmetric_difference(self, other: &Self) -> Self {
         // Clone self before consuming it — O(1) via structural sharing — so we can
@@ -372,6 +625,30 @@ where
     }
 }
 
+impl<K, V, S, P, H: HashWidth> Display for GenericHashMultiMap<K, V, S, P, H>
+where
+    K: Display + Hash + Eq + Clone,
+    V: Display + Hash + Eq + Clone,
+    S: BuildHasher + Clone + Default,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        write!(f, "{{")?;
+        let mut sep = "";
+        for (k, vals) in self.iter_sets() {
+            write!(f, "{sep}{k}: {{")?;
+            let mut inner_sep = "";
+            for v in vals.iter() {
+                write!(f, "{inner_sep}{v}")?;
+                inner_sep = ", ";
+            }
+            write!(f, "}}")?;
+            sep = ", ";
+        }
+        write!(f, "}}")
+    }
+}
+
 impl<K, V, S, P, H: HashWidth> FromIterator<(K, V)> for GenericHashMultiMap<K, V, S, P, H>
 where
     K: Hash + Eq + Clone,
@@ -455,6 +732,11 @@ where
 {
     type Output = GenericHashSet<V, S, P, H>;
 
+    /// Returns a reference to the set of values associated with `key`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `key` is not present in the map.
     fn index(&self, key: &Q) -> &Self::Output {
         match self.map.get(key) {
             Some(set) => set,
@@ -483,6 +765,7 @@ where
 pub struct ConsumingIter<K: Eq, V: Hash + Eq + Clone, S, P: SharedPointerKind, H: HashWidth = u64> {
     outer: crate::hashmap::ConsumingIter<(K, GenericHashSet<V, S, P, H>), P, H>,
     inner: Option<(K, crate::hashset::ConsumingIter<V, P, H>)>,
+    remaining: usize,
 }
 
 impl<K, V, S, P, H: HashWidth> Iterator for ConsumingIter<K, V, S, P, H>
@@ -498,6 +781,7 @@ where
         loop {
             if let Some((ref k, ref mut inner)) = self.inner {
                 if let Some(v) = inner.next() {
+                    self.remaining -= 1;
                     return Some((k.clone(), v));
                 }
                 self.inner = None;
@@ -506,6 +790,28 @@ where
             self.inner = Some((k, set.into_iter()));
         }
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<K, V, S, P, H: HashWidth> ExactSizeIterator for ConsumingIter<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
+}
+
+impl<K, V, S, P, H: HashWidth> FusedIterator for ConsumingIter<K, V, S, P, H>
+where
+    K: Hash + Eq + Clone,
+    V: Hash + Eq + Clone,
+    S: BuildHasher + Clone,
+    P: SharedPointerKind,
+{
 }
 
 impl<K, V, S, P, H: HashWidth> IntoIterator for GenericHashMultiMap<K, V, S, P, H>
@@ -519,9 +825,11 @@ where
     type IntoIter = ConsumingIter<K, V, S, P, H>;
 
     fn into_iter(self) -> Self::IntoIter {
+        let remaining = self.total;
         ConsumingIter {
             outer: self.map.into_iter(),
             inner: None,
+            remaining,
         }
     }
 }

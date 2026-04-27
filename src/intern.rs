@@ -97,7 +97,7 @@ pub struct InternPool<A, P: SharedPointerKind = DefaultSharedPtr, H: HashWidth =
 }
 
 impl<A, P: SharedPointerKind, H: HashWidth> InternPool<A, P, H> {
-    /// Create a new, empty intern pool.
+    /// Creates a new, empty intern pool.
     pub fn new() -> Self {
         InternPool {
             hamt: StdHashMap::new(),
@@ -121,7 +121,7 @@ impl<A, P: SharedPointerKind, H: HashWidth> InternPool<A, P, H> {
         self.len() == 0
     }
 
-    /// Return a snapshot of pool statistics (hits, misses, evictions).
+    /// Returns a snapshot of pool statistics (hits, misses, evictions).
     pub fn stats(&self) -> &InternStats {
         &self.stats
     }
@@ -245,7 +245,7 @@ impl<A: Clone + PartialEq, P: SharedPointerKind, H: HashWidth> InternPool<A, P, 
     }
 }
 
-/// Remove entries from a bucket map where the SharedPointer's strong
+/// Removes entries from a bucket map where the SharedPointer's strong
 /// count is 1 (only the pool holds a reference).
 fn purge_map<K, T, P: SharedPointerKind>(map: &mut StdHashMap<K, Vec<SharedPointer<T, P>>>)
 where
