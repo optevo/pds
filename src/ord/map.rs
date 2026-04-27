@@ -338,6 +338,45 @@ where
         }
     }
 
+    /// Returns a borrowed view over entries whose keys lie within `range`.
+    ///
+    /// The view holds a reference to this map and applies range bounds to every
+    /// operation. All reads go directly to the live map state — the view is not
+    /// a snapshot. The Rust borrow checker ensures the map cannot be mutated while
+    /// the view is alive.
+    ///
+    /// Use [`OrdMapRange::to_map`] to materialise an independent, owned copy, or
+    /// [`OrdMapRange::submap`] to narrow the view further.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
+    /// let m = ordmap!{1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+    /// let view = m.submap(2..=3);
+    /// assert_eq!(view.get(&2), Some(&"b"));
+    /// assert_eq!(view.get(&4), None); // outside range
+    /// assert_eq!(view.len(), 2);
+    ///
+    /// let inner = view.submap(3..);
+    /// assert_eq!(inner.get(&3), Some(&"c"));
+    /// assert_eq!(inner.len(), 1);
+    /// ```
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn submap<R>(&self, range: R) -> OrdMapRange<'_, K, V, P>
+    where
+        R: RangeBounds<K>,
+        K: Clone,
+    {
+        OrdMapRange {
+            map: self,
+            bounds: (range.start_bound().cloned(), range.end_bound().cloned()),
+        }
+    }
+
     /// Returns an iterator over the keys.
     #[must_use]
     pub fn keys(&self) -> Keys<'_, K, V, P> {
@@ -3095,6 +3134,307 @@ where
 {
 }
 
+// --- OrdMapRange ---
+
+/// Borrows a `(Bound<K>, Bound<K>)` pair and implements `RangeBounds<K>` without
+/// cloning. Used internally by [`OrdMapRange::iter`].
+struct BoundsRef<'a, K>(&'a Bound<K>, &'a Bound<K>);
+
+impl<K: Ord> RangeBounds<K> for BoundsRef<'_, K> {
+    fn start_bound(&self) -> Bound<&K> {
+        self.0.as_ref()
+    }
+    fn end_bound(&self) -> Bound<&K> {
+        self.1.as_ref()
+    }
+}
+
+/// A borrowed, range-bounded view over a [`GenericOrdMap`].
+///
+/// Constructed by [`GenericOrdMap::submap`]. Holds a reference to the underlying
+/// map and a pair of [`Bound<K>`] values that delimit the view. Creation is O(1)
+/// and allocation-free — no data is copied.
+///
+/// All read operations go directly to the live map, so the view always reflects
+/// the current map state at the time of the call. The Rust borrow rules prevent
+/// the map from being mutated while the view is alive.
+///
+/// The view can be narrowed with [`OrdMapRange::submap`] or materialised into an
+/// owned map with [`OrdMapRange::to_map`].
+pub struct OrdMapRange<'a, K, V, P: SharedPointerKind> {
+    map: &'a GenericOrdMap<K, V, P>,
+    bounds: (Bound<K>, Bound<K>),
+}
+
+impl<'a, K, V, P: SharedPointerKind> Clone for OrdMapRange<'a, K, V, P>
+where
+    K: Clone,
+{
+    fn clone(&self) -> Self {
+        OrdMapRange {
+            map: self.map,
+            bounds: self.bounds.clone(),
+        }
+    }
+}
+
+impl<'a, K, V, P> Debug for OrdMapRange<'a, K, V, P>
+where
+    K: Ord + Debug,
+    V: Debug,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        f.debug_map().entries(self.iter()).finish()
+    }
+}
+
+impl<'a, K, V, P> OrdMapRange<'a, K, V, P>
+where
+    K: Ord,
+    P: SharedPointerKind,
+{
+    /// Tests whether `key` falls within this view's bounds.
+    #[inline]
+    fn in_bounds<Q>(&self, key: &Q) -> bool
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        let start_ok = match &self.bounds.0 {
+            Bound::Included(lo) => key.compare(lo).is_ge(),
+            Bound::Excluded(lo) => key.compare(lo).is_gt(),
+            Bound::Unbounded => true,
+        };
+        if !start_ok {
+            return false;
+        }
+        match &self.bounds.1 {
+            Bound::Included(hi) => key.compare(hi).is_le(),
+            Bound::Excluded(hi) => key.compare(hi).is_lt(),
+            Bound::Unbounded => true,
+        }
+    }
+
+    /// Returns a reference to the value for `key`, or `None` if the key is absent
+    /// or lies outside this view's range.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get<Q>(&self, key: &Q) -> Option<&'a V>
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        if self.in_bounds(key) {
+            self.map.get(key)
+        } else {
+            None
+        }
+    }
+
+    /// Tests whether `key` exists within this view's range.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        self.in_bounds(key) && self.map.contains_key(key)
+    }
+
+    /// Returns an iterator over `(key, value)` pairs in ascending key order.
+    ///
+    /// References have the lifetime of the underlying map, not of this view, so
+    /// the iterator can outlive the view.
+    ///
+    /// Time: O(log n) to position; O(k) to exhaust
+    #[must_use]
+    pub fn iter(&self) -> RangedIter<'a, K, V, P> {
+        RangedIter {
+            it: NodeIter::new(
+                self.map.root.as_ref(),
+                self.map.size,
+                BoundsRef(&self.bounds.0, &self.bounds.1),
+            ),
+        }
+    }
+
+    /// Tests whether this view is empty.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.iter().next().is_none()
+    }
+
+    /// Returns the number of entries within this view.
+    ///
+    /// Unlike [`GenericOrdMap::len`], this is not O(1) — it counts by iterating.
+    ///
+    /// Time: O(k) where k is the number of entries in the range
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.iter().count()
+    }
+
+    /// Returns the first `(key, value)` pair in this view, or `None` if empty.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn first_key_value(&self) -> Option<(&'a K, &'a V)> {
+        self.iter().next()
+    }
+
+    /// Returns the last `(key, value)` pair in this view, or `None` if empty.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn last_key_value(&self) -> Option<(&'a K, &'a V)> {
+        self.iter().next_back()
+    }
+
+    /// Materialises this view into an owned [`GenericOrdMap`].
+    ///
+    /// Clones each key and value in the range and uses bottom-up B+ tree
+    /// construction — O(k), not O(k log k).
+    ///
+    /// Time: O(k) where k is the number of entries in the range
+    #[must_use]
+    pub fn to_map(&self) -> GenericOrdMap<K, V, P>
+    where
+        K: Clone,
+        V: Clone,
+    {
+        GenericOrdMap::from_sorted_iter(self.iter().map(|(k, v)| (k.clone(), v.clone())))
+    }
+
+    /// Returns a narrower view bounded by `range` intersected with `self`'s bounds.
+    ///
+    /// If `range` extends beyond `self`'s own bounds, the bounds are clamped so the
+    /// sub-view never exceeds the parent scope.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn submap<R>(&self, range: R) -> OrdMapRange<'a, K, V, P>
+    where
+        R: RangeBounds<K>,
+        K: Clone,
+    {
+        let start = ord_map_range_intersect_start(&self.bounds.0, range.start_bound().cloned());
+        let end = ord_map_range_intersect_end(&self.bounds.1, range.end_bound().cloned());
+        OrdMapRange {
+            map: self.map,
+            bounds: (start, end),
+        }
+    }
+}
+
+impl<'a, K, V, P> IntoIterator for OrdMapRange<'a, K, V, P>
+where
+    K: Ord,
+    P: SharedPointerKind,
+{
+    type Item = (&'a K, &'a V);
+    type IntoIter = RangedIter<'a, K, V, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, K, V, P> IntoIterator for &OrdMapRange<'a, K, V, P>
+where
+    K: Ord,
+    P: SharedPointerKind,
+{
+    type Item = (&'a K, &'a V);
+    type IntoIter = RangedIter<'a, K, V, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// Returns the more restrictive of two lower bounds.
+fn ord_map_range_intersect_start<K: Ord + Clone>(outer: &Bound<K>, inner: Bound<K>) -> Bound<K> {
+    match (outer, &inner) {
+        (Bound::Unbounded, _) => inner,
+        (_, Bound::Unbounded) => outer.clone(),
+        (Bound::Included(o), Bound::Included(i)) => {
+            if i >= o {
+                inner
+            } else {
+                outer.clone()
+            }
+        }
+        (Bound::Included(o), Bound::Excluded(i)) => {
+            // Excluded(i) covers key > i, Included(o) covers key >= o.
+            // If i >= o, Excluded(i) is tighter; otherwise Included(o) is.
+            if i >= o {
+                inner
+            } else {
+                outer.clone()
+            }
+        }
+        (Bound::Excluded(o), Bound::Included(i)) => {
+            // Excluded(o) covers key > o. Included(i) covers key >= i.
+            // If i > o, Included(i) is tighter.
+            if i > o {
+                inner
+            } else {
+                outer.clone()
+            }
+        }
+        (Bound::Excluded(o), Bound::Excluded(i)) => {
+            if i >= o {
+                inner
+            } else {
+                outer.clone()
+            }
+        }
+    }
+}
+
+/// Returns the more restrictive of two upper bounds.
+fn ord_map_range_intersect_end<K: Ord + Clone>(outer: &Bound<K>, inner: Bound<K>) -> Bound<K> {
+    match (outer, &inner) {
+        (Bound::Unbounded, _) => inner,
+        (_, Bound::Unbounded) => outer.clone(),
+        (Bound::Included(o), Bound::Included(i)) => {
+            if i <= o {
+                inner
+            } else {
+                outer.clone()
+            }
+        }
+        (Bound::Included(o), Bound::Excluded(i)) => {
+            // Excluded(i) covers key < i, Included(o) covers key <= o.
+            // If i <= o, Excluded(i) is tighter.
+            if i <= o {
+                inner
+            } else {
+                outer.clone()
+            }
+        }
+        (Bound::Excluded(o), Bound::Included(i)) => {
+            // Excluded(o) covers key < o. Included(i) covers key <= i.
+            // If i < o, Included(i) is tighter.
+            if i < o {
+                inner
+            } else {
+                outer.clone()
+            }
+        }
+        (Bound::Excluded(o), Bound::Excluded(i)) => {
+            if i <= o {
+                inner
+            } else {
+                outer.clone()
+            }
+        }
+    }
+}
+
 impl<K, V, RK, RV, P> FromIterator<(RK, RV)> for GenericOrdMap<K, V, P>
 where
     K: Ord + Clone + From<RK>,
@@ -5013,5 +5353,122 @@ mod test {
         let (left, right): (OrdMap<i32, &str>, OrdMap<i32, i32>) = m.unzip();
         assert_eq!(left.get(&42), Some(&"hello"));
         assert_eq!(right.get(&42), Some(&99));
+    }
+
+    // --- submap / OrdMapRange ---
+
+    #[test]
+    fn submap_get_in_range() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let v = m.submap(2..=3);
+        assert_eq!(v.get(&2), Some(&"b"));
+        assert_eq!(v.get(&3), Some(&"c"));
+    }
+
+    #[test]
+    fn submap_get_out_of_range() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let v = m.submap(2..=3);
+        assert_eq!(v.get(&1), None); // below
+        assert_eq!(v.get(&4), None); // above
+        assert_eq!(v.get(&5), None); // absent
+    }
+
+    #[test]
+    fn submap_contains_key() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c"};
+        let v = m.submap(2..);
+        assert!(v.contains_key(&2));
+        assert!(v.contains_key(&3));
+        assert!(!v.contains_key(&1));
+    }
+
+    #[test]
+    fn submap_len_and_is_empty() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let v = m.submap(2..4);
+        assert_eq!(v.len(), 2);
+        assert!(!v.is_empty());
+
+        let empty: OrdMap<i32, &str> = OrdMap::new();
+        assert!(empty.submap(..).is_empty());
+    }
+
+    #[test]
+    fn submap_iter_order() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d", 5 => "e"};
+        let v = m.submap(2..=4);
+        let pairs: Vec<(i32, &str)> = v.iter().map(|(&k, &v)| (k, v)).collect();
+        assert_eq!(pairs, vec![(2, "b"), (3, "c"), (4, "d")]);
+    }
+
+    #[test]
+    fn submap_first_last() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let v = m.submap(2..=3);
+        assert_eq!(v.first_key_value(), Some((&2, &"b")));
+        assert_eq!(v.last_key_value(), Some((&3, &"c")));
+    }
+
+    #[test]
+    fn submap_to_map() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let owned: OrdMap<i32, &str> = m.submap(2..=3).to_map();
+        assert_eq!(owned, ordmap! {2 => "b", 3 => "c"});
+    }
+
+    #[test]
+    fn submap_into_iter() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c"};
+        let v = m.submap(2..);
+        let pairs: Vec<(i32, &str)> = v.into_iter().map(|(&k, &v)| (k, v)).collect();
+        assert_eq!(pairs, vec![(2, "b"), (3, "c")]);
+    }
+
+    #[test]
+    fn submap_chained_submap() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d", 5 => "e"};
+        let outer = m.submap(2..=4);
+        let inner = outer.submap(3..);
+        // inner is clamped to 3..=4 by the outer bound
+        assert_eq!(inner.len(), 2);
+        assert_eq!(inner.get(&3), Some(&"c"));
+        assert_eq!(inner.get(&4), Some(&"d"));
+        assert_eq!(inner.get(&5), None); // clamped by outer
+    }
+
+    #[test]
+    fn submap_excluded_bounds() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let v = m.submap(2..4); // Included(2)..Excluded(4)
+        assert!(v.contains_key(&2));
+        assert!(v.contains_key(&3));
+        assert!(!v.contains_key(&4));
+    }
+
+    #[test]
+    fn submap_full_range() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c"};
+        let v = m.submap(..);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v.get(&1), Some(&"a"));
+    }
+
+    #[test]
+    fn submap_empty_range() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c"};
+        let v = m.submap(5..);
+        assert!(v.is_empty());
+        assert_eq!(v.len(), 0);
+        assert_eq!(v.first_key_value(), None);
+    }
+
+    #[test]
+    fn submap_ref_iter() {
+        // Ensure &OrdMapRange also implements IntoIterator
+        let m = ordmap! {1 => 10, 2 => 20, 3 => 30};
+        let v = m.submap(1..=2);
+        let sum: i32 = (&v).into_iter().map(|(_, &val)| val).sum();
+        assert_eq!(sum, 30);
     }
 }
