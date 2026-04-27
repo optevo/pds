@@ -1507,6 +1507,26 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         (matching, non_matching)
     }
 
+    /// Combines two vectors element-wise into a vector of pairs.
+    ///
+    /// Stops at the shorter of the two vectors. Elements from both vectors are
+    /// paired in index order. The result has `min(self.len(), other.len())` elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate pds;
+    /// let a = vector![1, 2, 3];
+    /// let b = vector!["x", "y"];
+    /// assert_eq!(a.zip(b), vector![(1, "x"), (2, "y")]);
+    /// ```
+    ///
+    /// Time: O(min(n_a, n_b))
+    #[must_use]
+    pub fn zip<B: Clone>(self, other: GenericVector<B, P>) -> GenericVector<(A, B), P> {
+        self.into_iter().zip(other).collect()
+    }
+
     /// Splits a vector at a given index.
     ///
     /// Splits a vector at a given index, consuming the vector and
@@ -2029,6 +2049,36 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         let mut vec: Vec<A> = core::mem::take(self).into_iter().collect();
         vec.par_sort_unstable_by(|a, b| cmp(a, b));
         *self = vec.into_iter().collect();
+    }
+}
+
+/// Extension methods for vectors whose elements are pairs.
+impl<A: Clone, B: Clone, P: SharedPointerKind> GenericVector<(A, B), P> {
+    /// Splits a vector of pairs into a pair of vectors.
+    ///
+    /// The two output vectors contain the first and second elements of each pair
+    /// respectively, in the original order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate pds;
+    /// let v = vector![(1, "a"), (2, "b"), (3, "c")];
+    /// let (nums, strs): (pds::Vector<i32>, pds::Vector<&str>) = v.unzip();
+    /// assert_eq!(nums, vector![1, 2, 3]);
+    /// assert_eq!(strs, vector!["a", "b", "c"]);
+    /// ```
+    ///
+    /// Time: O(n)
+    #[must_use]
+    pub fn unzip(self) -> (GenericVector<A, P>, GenericVector<B, P>) {
+        let mut left = GenericVector::new();
+        let mut right = GenericVector::new();
+        for (a, b) in self {
+            left.push_back(a);
+            right.push_back(b);
+        }
+        (left, right)
     }
 }
 

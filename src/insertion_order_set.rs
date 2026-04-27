@@ -472,6 +472,42 @@ where
     pub fn intersection(self, other: &Self) -> Self {
         self.into_iter().filter(|a| other.contains(a)).collect()
     }
+
+    /// Partitions the set into two sets based on a predicate.
+    ///
+    /// Iterates all elements in insertion order. Elements for which `f` returns
+    /// `true` go into the left set; the rest go into the right set. Both output
+    /// sets preserve the relative insertion order of their elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderSet;
+    /// let s: InsertionOrderSet<i32> = [1, 2, 3, 4, 5].into();
+    /// let (evens, odds) = s.partition(|x| x % 2 == 0);
+    /// let evens_v: Vec<_> = evens.iter().copied().collect();
+    /// let odds_v: Vec<_> = odds.iter().copied().collect();
+    /// assert_eq!(evens_v, vec![2, 4]);
+    /// assert_eq!(odds_v, vec![1, 3, 5]);
+    /// ```
+    ///
+    /// Time: O(n log n)
+    #[must_use]
+    pub fn partition<F>(&self, mut f: F) -> (Self, Self)
+    where
+        F: FnMut(&A) -> bool,
+    {
+        let mut left: Vec<A> = Vec::new();
+        let mut right: Vec<A> = Vec::new();
+        for a in self.iter() {
+            if f(a) {
+                left.push(a.clone());
+            } else {
+                right.push(a.clone());
+            }
+        }
+        (left.into_iter().collect(), right.into_iter().collect())
+    }
 }
 
 // --- Default ---

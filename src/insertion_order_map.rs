@@ -845,6 +845,169 @@ where
             .collect();
         self_diff.union(other_diff)
     }
+
+    /// Partitions the map into two maps based on a predicate.
+    ///
+    /// Iterates all `(key, value)` pairs in insertion order. Pairs for which `f`
+    /// returns `true` go into the left map; the rest go into the right map.
+    /// Both output maps preserve the relative insertion order of their entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut m = InsertionOrderMap::new();
+    /// m.insert("a", 1);
+    /// m.insert("b", 2);
+    /// m.insert("c", 3);
+    ///
+    /// let (big, small) = m.partition(|_, v| *v > 1);
+    /// assert_eq!(big.get("b"), Some(&2));
+    /// assert_eq!(big.get("c"), Some(&3));
+    /// assert_eq!(small.get("a"), Some(&1));
+    /// ```
+    ///
+    /// Time: O(n log n)
+    #[must_use]
+    pub fn partition<F>(&self, mut f: F) -> (Self, Self)
+    where
+        F: FnMut(&K, &V) -> bool,
+    {
+        let mut left: Vec<(K, V)> = Vec::new();
+        let mut right: Vec<(K, V)> = Vec::new();
+        for (k, v) in self.iter() {
+            if f(k, v) {
+                left.push((k.clone(), v.clone()));
+            } else {
+                right.push((k.clone(), v.clone()));
+            }
+        }
+        (left.into_iter().collect(), right.into_iter().collect())
+    }
+
+    /// Partitions and transforms the map in a single pass.
+    ///
+    /// For each `(key, value)` pair (in insertion order), calls `f`. If `f` returns
+    /// `Ok(v1)`, the key and `v1` go into the left map; if `f` returns `Err(v2)`,
+    /// the key and `v2` go into the right map. Both output maps may have a different
+    /// value type from `self` and from each other.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut m = InsertionOrderMap::new();
+    /// m.insert("a", 1i32);
+    /// m.insert("b", -2i32);
+    /// m.insert("c", 3i32);
+    ///
+    /// let (pos, neg): (InsertionOrderMap<&str, u32>, InsertionOrderMap<&str, u32>) =
+    ///     m.partition_map(|_, v| {
+    ///         if *v >= 0 { Ok(*v as u32) } else { Err(v.unsigned_abs()) }
+    ///     });
+    /// assert_eq!(pos.get("a"), Some(&1u32));
+    /// assert_eq!(neg.get("b"), Some(&2u32));
+    /// ```
+    ///
+    /// Time: O(n log n)
+    #[must_use]
+    pub fn partition_map<V1, V2, F>(
+        &self,
+        mut f: F,
+    ) -> (
+        GenericInsertionOrderMap<K, V1, S, P, H>,
+        GenericInsertionOrderMap<K, V2, S, P, H>,
+    )
+    where
+        V1: Clone,
+        V2: Clone,
+        F: FnMut(&K, &V) -> Result<V1, V2>,
+    {
+        let mut left: Vec<(K, V1)> = Vec::new();
+        let mut right: Vec<(K, V2)> = Vec::new();
+        for (k, v) in self.iter() {
+            match f(k, v) {
+                Ok(v1) => left.push((k.clone(), v1)),
+                Err(v2) => right.push((k.clone(), v2)),
+            }
+        }
+        (left.into_iter().collect(), right.into_iter().collect())
+    }
+
+    /// Three-way merge of two maps with separate callbacks for each key partition.
+    ///
+    /// Iterates both maps and calls one of three functions for each key:
+    /// - `left_only(k, v)` — key is in `self` but not `other`
+    /// - `both(k, v_self, v_other)` — key is in both maps
+    /// - `right_only(k, v)` — key is in `other` but not `self`
+    ///
+    /// Each callback returns `Option<V3>`. Returning `None` excludes the entry from
+    /// the result. The result map's insertion order is: `self`'s keys first (in their
+    /// original order), then keys only in `other` (in `other`'s order).
+    ///
+    /// Unlike [`OrdMap::merge_with`][crate::OrdMap::merge_with], which uses a
+    /// sorted merge-join, this method cannot exploit key order and runs in
+    /// O((n + m) log(n + m)) rather than O(n + m).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::InsertionOrderMap;
+    /// let mut a = InsertionOrderMap::new();
+    /// a.insert("x", 1);
+    /// a.insert("y", 2);
+    /// let mut b = InsertionOrderMap::new();
+    /// b.insert("y", 20);
+    /// b.insert("z", 30);
+    ///
+    /// let merged = a.merge_with(
+    ///     &b,
+    ///     |_, v| Some(*v * 10),       // x: only in a -> 10
+    ///     |_, va, vb| Some(va + vb),  // y: in both -> 22
+    ///     |_, v| Some(*v),            // z: only in b -> 30
+    /// );
+    /// assert_eq!(merged.get("x"), Some(&10));
+    /// assert_eq!(merged.get("y"), Some(&22));
+    /// assert_eq!(merged.get("z"), Some(&30));
+    /// ```
+    ///
+    /// Time: O((n + m) log(n + m))
+    #[must_use]
+    pub fn merge_with<V2, V3, FL, FB, FR>(
+        &self,
+        other: &GenericInsertionOrderMap<K, V2, S, P, H>,
+        mut left_only: FL,
+        mut both: FB,
+        mut right_only: FR,
+    ) -> GenericInsertionOrderMap<K, V3, S, P, H>
+    where
+        V2: Clone,
+        V3: Clone,
+        FL: FnMut(&K, &V) -> Option<V3>,
+        FB: FnMut(&K, &V, &V2) -> Option<V3>,
+        FR: FnMut(&K, &V2) -> Option<V3>,
+    {
+        let mut result: Vec<(K, V3)> = Vec::new();
+        // Pass 1: iterate self in insertion order; emit left_only or both entries.
+        for (k, v) in self.iter() {
+            if let Some(v2) = other.get(k) {
+                if let Some(v3) = both(k, v, v2) {
+                    result.push((k.clone(), v3));
+                }
+            } else if let Some(v3) = left_only(k, v) {
+                result.push((k.clone(), v3));
+            }
+        }
+        // Pass 2: iterate other in insertion order; emit right_only entries.
+        for (k, v2) in other.iter() {
+            if !self.contains_key(k) {
+                if let Some(v3) = right_only(k, v2) {
+                    result.push((k.clone(), v3));
+                }
+            }
+        }
+        result.into_iter().collect()
+    }
 }
 
 impl<K, V, S, P, H: HashWidth> Extend<(K, V)> for GenericInsertionOrderMap<K, V, S, P, H>

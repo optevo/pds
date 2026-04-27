@@ -284,6 +284,39 @@ where
     S: BuildHasher + Clone + Default,
     P: SharedPointerKind,
 {
+    /// Returns a cloned, independently-owned copy of the subtrie at the given path.
+    ///
+    /// Returns `Some(subtrie)` if the path exists, `None` otherwise. For an empty
+    /// `path`, returns a clone of `self`. The clone is O(1) via structural sharing
+    /// — no nodes are copied, only reference counts are incremented.
+    ///
+    /// Unlike [`subtrie`][Self::subtrie], which returns a borrowed `&Self`, this
+    /// method returns an owned trie that can be modified independently.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// trie.insert(&["usr", "bin"], 1);
+    /// trie.insert(&["usr", "lib"], 2);
+    ///
+    /// let sub = trie.subtrie_cloned(&["usr"]).unwrap();
+    /// assert_eq!(sub.get(&["bin"]), Some(&1));
+    /// assert_eq!(sub.get(&["lib"]), Some(&2));
+    /// assert!(trie.subtrie_cloned(&["etc"]).is_none());
+    /// ```
+    ///
+    /// Time: O(d) walk + O(1) clone
+    #[must_use]
+    pub fn subtrie_cloned<Q>(&self, path: &[Q]) -> Option<Self>
+    where
+        Q: Hash + Eq,
+        K: core::borrow::Borrow<Q>,
+    {
+        self.subtrie(path).cloned()
+    }
+
     /// Returns a mutable reference to the value at the given path.
     ///
     /// Time: O(d) (d = path length)
@@ -618,6 +651,45 @@ where
             .filter(|(path, _)| !self_clone.contains_path(path))
             .collect();
         self_diff.union(other_diff)
+    }
+
+    /// Partitions the trie into two tries based on a predicate.
+    ///
+    /// Iterates all `(path, value)` pairs in the trie. Pairs for which `f` returns
+    /// `true` go into the left trie; the rest go into the right trie. The two output
+    /// tries are built independently — they do not share structure with `self`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pds::Trie;
+    /// let mut trie: Trie<&str, i32> = Trie::new();
+    /// trie.insert(&["a", "x"], 1);
+    /// trie.insert(&["a", "y"], 2);
+    /// trie.insert(&["b"], 3);
+    ///
+    /// let (big, small) = trie.partition(|_path, v| *v > 1);
+    /// assert!(big.contains_path(&["a", "y"]));
+    /// assert!(big.contains_path(&["b"]));
+    /// assert!(small.contains_path(&["a", "x"]));
+    /// ```
+    ///
+    /// Time: O(n × d)
+    #[must_use]
+    pub fn partition<F>(self, mut f: F) -> (Self, Self)
+    where
+        F: FnMut(&[K], &V) -> bool,
+    {
+        let mut left = Self::default();
+        let mut right = Self::default();
+        for (path, value) in self {
+            if f(&path, &value) {
+                left.insert(&path, value);
+            } else {
+                right.insert(&path, value);
+            }
+        }
+        (left, right)
     }
 }
 

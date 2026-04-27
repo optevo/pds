@@ -2183,6 +2183,109 @@ where
     }
 }
 
+/// Methods that combine two maps, requiring both `K: Clone` and `V: Clone`.
+impl<K, V, P> GenericOrdMap<K, V, P>
+where
+    K: Ord + Clone,
+    V: Clone,
+    P: SharedPointerKind,
+{
+    /// Combines two maps into a map of pairs, retaining only keys present in both.
+    ///
+    /// Iterates both maps simultaneously in sorted key order (O(n_a + n_b) merge-join).
+    /// Only keys present in both `self` and `other` appear in the result. The result
+    /// is built via bottom-up B+ tree construction — no individual inserts needed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
+    /// let a = ordmap!{1 => "x", 2 => "y", 3 => "z"};
+    /// let b = ordmap!{2 => 20, 3 => 30, 4 => 40};
+    /// let zipped = a.zip(b);
+    /// assert_eq!(zipped, ordmap!{2 => ("y", 20), 3 => ("z", 30)});
+    /// ```
+    ///
+    /// Time: O(n_a + n_b)
+    #[must_use]
+    pub fn zip<V2: Clone>(self, other: GenericOrdMap<K, V2, P>) -> GenericOrdMap<K, (V, V2), P> {
+        let mut it1 = self.into_iter().peekable();
+        let mut it2 = other.into_iter().peekable();
+        let mut sorted_pairs: Vec<(K, (V, V2))> = Vec::new();
+        loop {
+            let ord = match (it1.peek(), it2.peek()) {
+                (Some((k1, _)), Some((k2, _))) => <K as Ord>::cmp(k1, k2),
+                (Some(_), None) => {
+                    it1.next();
+                    continue;
+                }
+                (None, Some(_)) => {
+                    it2.next();
+                    continue;
+                }
+                (None, None) => break,
+            };
+            match ord {
+                Ordering::Less => {
+                    it1.next();
+                }
+                Ordering::Greater => {
+                    it2.next();
+                }
+                Ordering::Equal => {
+                    let (k, v1) = it1.next().unwrap();
+                    let (_, v2) = it2.next().unwrap();
+                    sorted_pairs.push((k, (v1, v2)));
+                }
+            }
+        }
+        GenericOrdMap::from_sorted_iter(sorted_pairs.into_iter())
+    }
+}
+
+/// Extension methods for maps whose values are pairs.
+impl<K, V1, V2, P> GenericOrdMap<K, (V1, V2), P>
+where
+    K: Ord + Clone,
+    V1: Clone,
+    V2: Clone,
+    P: SharedPointerKind,
+{
+    /// Splits a map of pairs into a pair of maps.
+    ///
+    /// The two output maps share the same keys as `self`, with the first and second
+    /// elements of each value pair separated. Both output maps are built via bottom-up
+    /// B+ tree construction — no individual inserts needed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
+    /// let paired = ordmap!{1 => ("a", 10), 2 => ("b", 20)};
+    /// let (strs, nums): (OrdMap<i32, &str>, OrdMap<i32, i32>) = paired.unzip();
+    /// assert_eq!(strs, ordmap!{1 => "a", 2 => "b"});
+    /// assert_eq!(nums, ordmap!{1 => 10, 2 => 20});
+    /// ```
+    ///
+    /// Time: O(n)
+    #[must_use]
+    pub fn unzip(self) -> (GenericOrdMap<K, V1, P>, GenericOrdMap<K, V2, P>) {
+        let n = self.len();
+        let mut left_pairs: Vec<(K, V1)> = Vec::with_capacity(n);
+        let mut right_pairs: Vec<(K, V2)> = Vec::with_capacity(n);
+        for (k, (v1, v2)) in self {
+            left_pairs.push((k.clone(), v1));
+            right_pairs.push((k, v2));
+        }
+        (
+            GenericOrdMap::from_sorted_iter(left_pairs.into_iter()),
+            GenericOrdMap::from_sorted_iter(right_pairs.into_iter()),
+        )
+    }
+}
+
 // Methods that need V: Clone but not K: Clone
 impl<K, V, P> GenericOrdMap<K, V, P>
 where
