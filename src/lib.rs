@@ -207,11 +207,15 @@
 //! your data increases. O(n log n) basically means "are you sure you
 //! need to do this?" Operations in this class include: sorting a
 //! [`Vector`]; constructing an [`OrdMap`] or [`OrdSet`] from an
-//! iterator (each of the *n* insertions costs O(log n)); and all bulk
-//! set operations — `union`, `intersection`, `difference`,
-//! `symmetric_difference` — across every collection type, because each
+//! iterator (each of the *n* insertions costs O(log n)); and bulk set
+//! operations — `union`, `intersection`, `difference`,
+//! `symmetric_difference` — on most collection types, because each
 //! iterates *n* elements and inserts each into a new collection at
-//! O(log n) per insert.
+//! O(log n) per insert. Exceptions: [`OrdTrie`] set operations use a
+//! recursive merge-walk (O(N_a + N_b) nodes visited, better than
+//! O(n log n) in the typical case); [`InsertionOrderMap`] /
+//! [`InsertionOrderSet`] `from_iter` uses bottom-up B+ tree
+//! construction (O(n) avg, not O(n log n)).
 //!
 //! *O(1)** means 'amortised O(1),' which means that an operation
 //! usually runs in constant time but will occasionally be more
