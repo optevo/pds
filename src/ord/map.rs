@@ -343,7 +343,7 @@ where
     /// The view holds a reference to this map and applies range bounds to every
     /// operation. All reads go directly to the live map state — the view is not
     /// a snapshot. The Rust borrow checker ensures the map cannot be mutated while
-    /// the view is alive.
+    /// the view is alive, which guarantees the cached element count stays valid.
     ///
     /// Use [`OrdMapRange::to_map`] to materialise an independent, owned copy, or
     /// [`OrdMapRange::submap`] to narrow the view further.
@@ -357,23 +357,31 @@ where
     /// let view = m.submap(2..=3);
     /// assert_eq!(view.get(&2), Some(&"b"));
     /// assert_eq!(view.get(&4), None); // outside range
-    /// assert_eq!(view.len(), 2);
+    /// assert_eq!(view.len(), 2);      // O(1) — cached at construction
     ///
     /// let inner = view.submap(3..);
     /// assert_eq!(inner.get(&3), Some(&"c"));
     /// assert_eq!(inner.len(), 1);
     /// ```
     ///
-    /// Time: O(1)
+    /// Time: O(k) where k is the number of entries in the range (counts once at construction)
     #[must_use]
     pub fn submap<R>(&self, range: R) -> OrdMapRange<'_, K, V, P>
     where
         R: RangeBounds<K>,
         K: Clone,
     {
+        let bounds = (range.start_bound().cloned(), range.end_bound().cloned());
+        let len = NodeIter::new(
+            self.root.as_ref(),
+            self.size,
+            BoundsRef(&bounds.0, &bounds.1),
+        )
+        .count();
         OrdMapRange {
             map: self,
-            bounds: (range.start_bound().cloned(), range.end_bound().cloned()),
+            bounds,
+            len,
         }
     }
 
@@ -3152,18 +3160,21 @@ impl<K: Ord> RangeBounds<K> for BoundsRef<'_, K> {
 /// A borrowed, range-bounded view over a [`GenericOrdMap`].
 ///
 /// Constructed by [`GenericOrdMap::submap`]. Holds a reference to the underlying
-/// map and a pair of [`Bound<K>`] values that delimit the view. Creation is O(1)
-/// and allocation-free — no data is copied.
+/// map, a pair of [`Bound<K>`] values, and the element count for the range.
+/// Allocation-free — no map data is copied.
 ///
 /// All read operations go directly to the live map, so the view always reflects
 /// the current map state at the time of the call. The Rust borrow rules prevent
-/// the map from being mutated while the view is alive.
+/// the map from being mutated while the view is alive, which means the cached
+/// element count stays valid for the entire lifetime of the view.
 ///
 /// The view can be narrowed with [`OrdMapRange::submap`] or materialised into an
 /// owned map with [`OrdMapRange::to_map`].
 pub struct OrdMapRange<'a, K, V, P: SharedPointerKind> {
     map: &'a GenericOrdMap<K, V, P>,
     bounds: (Bound<K>, Bound<K>),
+    /// Number of entries in the range, cached at construction.
+    len: usize,
 }
 
 impl<'a, K, V, P: SharedPointerKind> Clone for OrdMapRange<'a, K, V, P>
@@ -3174,6 +3185,7 @@ where
         OrdMapRange {
             map: self.map,
             bounds: self.bounds.clone(),
+            len: self.len,
         }
     }
 }
@@ -3261,20 +3273,20 @@ where
 
     /// Tests whether this view is empty.
     ///
-    /// Time: O(log n)
+    /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.iter().next().is_none()
+        self.len == 0
     }
 
     /// Returns the number of entries within this view.
     ///
-    /// Unlike [`GenericOrdMap::len`], this is not O(1) — it counts by iterating.
+    /// Cached at construction — O(1), same as [`GenericOrdMap::len`].
     ///
-    /// Time: O(k) where k is the number of entries in the range
+    /// Time: O(1)
     #[must_use]
     pub fn len(&self) -> usize {
-        self.iter().count()
+        self.len
     }
 
     /// Returns the first `(key, value)` pair in this view, or `None` if empty.
@@ -3311,9 +3323,10 @@ where
     /// Returns a narrower view bounded by `range` intersected with `self`'s bounds.
     ///
     /// If `range` extends beyond `self`'s own bounds, the bounds are clamped so the
-    /// sub-view never exceeds the parent scope.
+    /// sub-view never exceeds the parent scope. The element count is counted once
+    /// at construction and cached, so subsequent [`len`][Self::len] calls are O(1).
     ///
-    /// Time: O(1)
+    /// Time: O(k') where k' is the number of entries in the narrowed range
     #[must_use]
     pub fn submap<R>(&self, range: R) -> OrdMapRange<'a, K, V, P>
     where
@@ -3322,9 +3335,17 @@ where
     {
         let start = ord_map_range_intersect_start(&self.bounds.0, range.start_bound().cloned());
         let end = ord_map_range_intersect_end(&self.bounds.1, range.end_bound().cloned());
+        let bounds = (start, end);
+        let len = NodeIter::new(
+            self.map.root.as_ref(),
+            self.map.size,
+            BoundsRef(&bounds.0, &bounds.1),
+        )
+        .count();
         OrdMapRange {
             map: self.map,
-            bounds: (start, end),
+            bounds,
+            len,
         }
     }
 }
