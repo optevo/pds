@@ -372,16 +372,13 @@ where
         K: Clone,
     {
         let bounds = (range.start_bound().cloned(), range.end_bound().cloned());
-        let len = NodeIter::new(
-            self.root.as_ref(),
-            self.size,
-            BoundsRef(&bounds.0, &bounds.1),
-        )
-        .count();
+        let (len, first, last) = ord_map_range_scan(self, &bounds);
         OrdMapRange {
             map: self,
             bounds,
             len,
+            first,
+            last,
         }
     }
 
@@ -3145,7 +3142,7 @@ where
 // --- OrdMapRange ---
 
 /// Borrows a `(Bound<K>, Bound<K>)` pair and implements `RangeBounds<K>` without
-/// cloning. Used internally by [`OrdMapRange::iter`].
+/// cloning. Used internally by [`OrdMapRange`] methods.
 struct BoundsRef<'a, K>(&'a Bound<K>, &'a Bound<K>);
 
 impl<K: Ord> RangeBounds<K> for BoundsRef<'_, K> {
@@ -3157,24 +3154,48 @@ impl<K: Ord> RangeBounds<K> for BoundsRef<'_, K> {
     }
 }
 
+/// Single-pass scan of a range: returns `(len, first, last)` without allocating.
+///
+/// Called once at [`OrdMapRange`] construction so that `len`, `first_key_value`,
+/// and `last_key_value` are all O(1) thereafter.
+fn ord_map_range_scan<'a, K, V, P>(
+    map: &'a GenericOrdMap<K, V, P>,
+    bounds: &(Bound<K>, Bound<K>),
+) -> (usize, Option<(&'a K, &'a V)>, Option<(&'a K, &'a V)>)
+where
+    K: Ord,
+    P: SharedPointerKind,
+{
+    let mut iter = RangedIter {
+        it: NodeIter::new(map.root.as_ref(), map.size, BoundsRef(&bounds.0, &bounds.1)),
+    };
+    match iter.next() {
+        None => (0, None, None),
+        Some(first) => {
+            let (len, last) = iter.fold((1usize, first), |(n, _), item| (n + 1, item));
+            (len, Some(first), Some(last))
+        }
+    }
+}
+
 /// A borrowed, range-bounded view over a [`GenericOrdMap`].
 ///
 /// Constructed by [`GenericOrdMap::submap`]. Holds a reference to the underlying
-/// map, a pair of [`Bound<K>`] values, and the element count for the range.
-/// Allocation-free — no map data is copied.
+/// map, a pair of [`Bound<K>`] values, and metadata cached at construction:
+/// element count, first entry, and last entry. Allocation-free — no map data is
+/// copied.
 ///
-/// All read operations go directly to the live map, so the view always reflects
-/// the current map state at the time of the call. The Rust borrow rules prevent
-/// the map from being mutated while the view is alive, which means the cached
-/// element count stays valid for the entire lifetime of the view.
+/// Because the map is immutably borrowed for the view's lifetime, none of the
+/// cached values can become stale. The Rust borrow checker enforces this.
 ///
 /// The view can be narrowed with [`OrdMapRange::submap`] or materialised into an
 /// owned map with [`OrdMapRange::to_map`].
 pub struct OrdMapRange<'a, K, V, P: SharedPointerKind> {
     map: &'a GenericOrdMap<K, V, P>,
     bounds: (Bound<K>, Bound<K>),
-    /// Number of entries in the range, cached at construction.
     len: usize,
+    first: Option<(&'a K, &'a V)>,
+    last: Option<(&'a K, &'a V)>,
 }
 
 impl<'a, K, V, P: SharedPointerKind> Clone for OrdMapRange<'a, K, V, P>
@@ -3186,6 +3207,8 @@ where
             map: self.map,
             bounds: self.bounds.clone(),
             len: self.len,
+            first: self.first,
+            last: self.last,
         }
     }
 }
@@ -3291,18 +3314,18 @@ where
 
     /// Returns the first `(key, value)` pair in this view, or `None` if empty.
     ///
-    /// Time: O(log n)
+    /// Time: O(1)
     #[must_use]
     pub fn first_key_value(&self) -> Option<(&'a K, &'a V)> {
-        self.iter().next()
+        self.first
     }
 
     /// Returns the last `(key, value)` pair in this view, or `None` if empty.
     ///
-    /// Time: O(log n)
+    /// Time: O(1)
     #[must_use]
     pub fn last_key_value(&self) -> Option<(&'a K, &'a V)> {
-        self.iter().next_back()
+        self.last
     }
 
     /// Materialises this view into an owned [`GenericOrdMap`].
@@ -3336,16 +3359,13 @@ where
         let start = ord_map_range_intersect_start(&self.bounds.0, range.start_bound().cloned());
         let end = ord_map_range_intersect_end(&self.bounds.1, range.end_bound().cloned());
         let bounds = (start, end);
-        let len = NodeIter::new(
-            self.map.root.as_ref(),
-            self.map.size,
-            BoundsRef(&bounds.0, &bounds.1),
-        )
-        .count();
+        let (len, first, last) = ord_map_range_scan(self.map, &bounds);
         OrdMapRange {
             map: self.map,
             bounds,
             len,
+            first,
+            last,
         }
     }
 }
