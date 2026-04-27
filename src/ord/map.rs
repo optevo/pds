@@ -3277,6 +3277,22 @@ where
         self.in_bounds(key) && self.map.contains_key(key)
     }
 
+    /// Returns the `(key, value)` pair for `key`, or `None` if the key is
+    /// absent or lies outside this view's range.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get_key_value<Q>(&self, key: &Q) -> Option<(&'a K, &'a V)>
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        if self.in_bounds(key) {
+            self.map.get_key_value(key)
+        } else {
+            None
+        }
+    }
+
     /// Returns an iterator over `(key, value)` pairs in ascending key order.
     ///
     /// References have the lifetime of the underlying map, not of this view, so

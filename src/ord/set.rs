@@ -266,6 +266,40 @@ where
         }
     }
 
+    /// Returns a borrowed, range-bounded view over this set.
+    ///
+    /// Construction walks the range once to cache the element count, the first
+    /// element, and the last element — all O(1) thereafter. The set is
+    /// immutably borrowed for the view's lifetime, so cached values can never
+    /// become stale.
+    ///
+    /// Use [`OrdSetRange::subrange`] to narrow the view further, or
+    /// [`OrdSetRange::to_set`] to materialise an independent owned copy.
+    ///
+    /// Time: O(k) where k is the number of elements in the range
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::OrdSet;
+    /// let set = ordset![1, 2, 3, 4, 5];
+    /// let view = set.subrange(2..=4);
+    /// assert_eq!(view.len(), 3);
+    /// assert_eq!(view.first(), Some(&2));
+    /// assert_eq!(view.last(), Some(&4));
+    /// ```
+    #[must_use]
+    pub fn subrange<R>(&self, range: R) -> OrdSetRange<'_, A, P>
+    where
+        R: RangeBounds<A>,
+        A: Clone,
+    {
+        OrdSetRange {
+            inner: self.map.submap(range),
+        }
+    }
+
     /// Returns an iterator over the differences between this set and
     /// another, i.e. the set of entries to add or remove to this set
     /// in order to make it equal to the other set.
@@ -1193,6 +1227,182 @@ where
 {
 }
 
+// --- OrdSetRange ---
+
+/// A borrowed, range-bounded view over a [`GenericOrdSet`].
+///
+/// Constructed by [`GenericOrdSet::subrange`]. Holds a reference to the
+/// underlying set and a pair of range bounds. Element count, first element,
+/// and last element are cached at construction — all subsequent metadata
+/// queries are O(1). Because the set is immutably borrowed for the view's
+/// lifetime, none of the cached values can become stale.
+///
+/// The view can be narrowed further with [`OrdSetRange::subrange`] or
+/// materialised into an owned set with [`OrdSetRange::to_set`].
+pub struct OrdSetRange<'a, A, P: SharedPointerKind> {
+    inner: map::OrdMapRange<'a, A, (), P>,
+}
+
+impl<'a, A, P> Clone for OrdSetRange<'a, A, P>
+where
+    A: Clone,
+    P: SharedPointerKind,
+{
+    fn clone(&self) -> Self {
+        OrdSetRange {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<'a, A, P> Debug for OrdSetRange<'a, A, P>
+where
+    A: Ord + Debug,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        f.debug_set().entries(self.iter()).finish()
+    }
+}
+
+impl<'a, A, P> OrdSetRange<'a, A, P>
+where
+    A: Ord,
+    P: SharedPointerKind,
+{
+    /// Tests whether `value` falls within this view's bounds and exists in the set.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn contains<Q>(&self, value: &Q) -> bool
+    where
+        Q: Comparable<A> + ?Sized,
+    {
+        self.inner.contains_key(value)
+    }
+
+    /// Returns a reference to the element equal to `value` if it falls within
+    /// this view's bounds and exists in the set, or `None` otherwise.
+    ///
+    /// Useful when set elements have richer data than their key — for example,
+    /// a set of structs ordered by id where the full struct is the stored element.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get<Q>(&self, value: &Q) -> Option<&'a A>
+    where
+        Q: Comparable<A> + ?Sized,
+    {
+        self.inner.get_key_value(value).map(|(k, _)| k)
+    }
+
+    /// Returns an iterator over elements in ascending order.
+    ///
+    /// References have the lifetime of the underlying set, not of this view,
+    /// so the iterator can outlive the view.
+    ///
+    /// Time: O(log n) to position; O(k) to exhaust
+    #[must_use]
+    pub fn iter(&self) -> RangedIter<'a, A, P> {
+        RangedIter {
+            it: self.inner.iter(),
+        }
+    }
+
+    /// Tests whether this view is empty.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the number of elements within this view.
+    ///
+    /// Cached at construction — O(1), same as [`GenericOrdSet::len`].
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Returns the smallest element in this view, or `None` if empty.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn first(&self) -> Option<&'a A> {
+        self.inner.first_key_value().map(|(k, _)| k)
+    }
+
+    /// Returns the largest element in this view, or `None` if empty.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn last(&self) -> Option<&'a A> {
+        self.inner.last_key_value().map(|(k, _)| k)
+    }
+
+    /// Returns a narrower view bounded by `range` intersected with this view's bounds.
+    ///
+    /// If `range` extends beyond this view's own bounds, it is clamped. Element
+    /// count, first, and last are cached at construction — all O(1) thereafter.
+    ///
+    /// Time: O(k') where k' is the number of elements in the narrowed range
+    #[must_use]
+    pub fn subrange<R>(&self, range: R) -> OrdSetRange<'a, A, P>
+    where
+        R: RangeBounds<A>,
+        A: Clone,
+    {
+        OrdSetRange {
+            inner: self.inner.submap(range),
+        }
+    }
+
+    /// Materialises this view into an owned [`GenericOrdSet`].
+    ///
+    /// Clones each element in the range and uses bottom-up B+ tree construction —
+    /// O(k), not O(k log k).
+    ///
+    /// Time: O(k) where k is the number of elements in the range
+    #[must_use]
+    pub fn to_set(&self) -> GenericOrdSet<A, P>
+    where
+        A: Clone,
+    {
+        GenericOrdSet {
+            map: self.inner.to_map(),
+        }
+    }
+}
+
+impl<'a, A, P> IntoIterator for OrdSetRange<'a, A, P>
+where
+    A: Ord,
+    P: SharedPointerKind,
+{
+    type Item = &'a A;
+    type IntoIter = RangedIter<'a, A, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, A, P> IntoIterator for &OrdSetRange<'a, A, P>
+where
+    A: Ord,
+    P: SharedPointerKind,
+{
+    type Item = &'a A;
+    type IntoIter = RangedIter<'a, A, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 /// A consuming iterator over the elements of a set.
 pub struct ConsumingIter<A, P: SharedPointerKind> {
     it: map::ConsumingIter<A, (), P>,
@@ -1925,5 +2135,159 @@ mod test {
     fn check_sane_valid_set() {
         let set: OrdSet<i32> = (0..100).collect();
         set.check_sane(); // should not panic
+    }
+
+    // --- OrdSetRange tests ---
+
+    #[test]
+    fn subrange_contains() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let view = set.subrange(2..=4);
+        assert!(view.contains(&2));
+        assert!(view.contains(&3));
+        assert!(view.contains(&4));
+        assert!(!view.contains(&1));
+        assert!(!view.contains(&5));
+        assert!(!view.contains(&6));
+    }
+
+    #[test]
+    fn subrange_get_element() {
+        let set = ordset![10, 20, 30, 40, 50];
+        let view = set.subrange(20..=40);
+        assert_eq!(view.get(&20), Some(&20));
+        assert_eq!(view.get(&30), Some(&30));
+        assert_eq!(view.get(&40), Some(&40));
+        assert_eq!(view.get(&10), None); // out of bounds
+        assert_eq!(view.get(&50), None); // out of bounds
+        assert_eq!(view.get(&25), None); // not in set
+    }
+
+    #[test]
+    fn subrange_len_is_empty() {
+        let set = ordset![1, 2, 3, 4, 5];
+
+        let full = set.subrange(..);
+        assert_eq!(full.len(), 5);
+        assert!(!full.is_empty());
+
+        let partial = set.subrange(2..4); // exclusive end: 2, 3
+        assert_eq!(partial.len(), 2);
+        assert!(!partial.is_empty());
+
+        let empty = set.subrange(10..20);
+        assert_eq!(empty.len(), 0);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn subrange_iter_order() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let view = set.subrange(2..=4);
+        let items: Vec<i32> = view.iter().copied().collect();
+        assert_eq!(items, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn subrange_first_last() {
+        let set = ordset![1, 2, 3, 4, 5];
+
+        let view = set.subrange(2..=4);
+        assert_eq!(view.first(), Some(&2));
+        assert_eq!(view.last(), Some(&4));
+
+        let empty = set.subrange(10..20);
+        assert_eq!(empty.first(), None);
+        assert_eq!(empty.last(), None);
+
+        let single = set.subrange(3..=3);
+        assert_eq!(single.first(), Some(&3));
+        assert_eq!(single.last(), Some(&3));
+    }
+
+    #[test]
+    fn subrange_to_set() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let view = set.subrange(2..=4);
+        let owned = view.to_set();
+        assert_eq!(owned, ordset![2, 3, 4]);
+    }
+
+    #[test]
+    fn subrange_into_iter() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let view = set.subrange(2..=4);
+        let items: Vec<i32> = view.into_iter().copied().collect();
+        assert_eq!(items, vec![2, 3, 4]);
+
+        let view2 = set.subrange(2..=4);
+        let items2: Vec<i32> = (&view2).into_iter().copied().collect();
+        assert_eq!(items2, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn subrange_chained() {
+        let set: OrdSet<i32> = (1..=10).collect();
+        let outer = set.subrange(2..=8);
+        let inner = outer.subrange(4..=6);
+        assert_eq!(inner.len(), 3);
+        let items: Vec<i32> = inner.iter().copied().collect();
+        assert_eq!(items, vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn subrange_excluded_bounds() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let view = set.subrange(2..4); // exclusive end: 2, 3
+        assert_eq!(view.len(), 2);
+        let items: Vec<i32> = view.iter().copied().collect();
+        assert_eq!(items, vec![2, 3]);
+    }
+
+    #[test]
+    fn subrange_full_range() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let view = set.subrange(..);
+        assert_eq!(view.len(), 5);
+        let items: Vec<i32> = view.iter().copied().collect();
+        assert_eq!(items, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn subrange_empty_set() {
+        let set: OrdSet<i32> = OrdSet::new();
+        let view = set.subrange(1..=5);
+        assert_eq!(view.len(), 0);
+        assert!(view.is_empty());
+        assert_eq!(view.first(), None);
+        assert_eq!(view.last(), None);
+    }
+
+    #[test]
+    fn subrange_clone_and_debug() {
+        let set = ordset![1, 2, 3, 4, 5];
+        let view = set.subrange(2..=4);
+        let clone = view.clone();
+        assert_eq!(clone.len(), view.len());
+        let items: Vec<i32> = clone.iter().copied().collect();
+        assert_eq!(items, vec![2, 3, 4]);
+
+        let s = format!("{:?}", view);
+        assert!(s.contains('2'));
+        assert!(s.contains('4'));
+    }
+
+    #[test]
+    fn subrange_large_set() {
+        let set: OrdSet<i32> = (0..1000).collect();
+        let view = set.subrange(100..200);
+        assert_eq!(view.len(), 100);
+        assert_eq!(view.first(), Some(&100));
+        assert_eq!(view.last(), Some(&199));
+        assert!(view.contains(&150));
+        assert!(!view.contains(&99));
+        assert!(!view.contains(&200));
+        let items: Vec<i32> = view.iter().copied().collect();
+        assert_eq!(items, (100..200).collect::<Vec<_>>());
     }
 }

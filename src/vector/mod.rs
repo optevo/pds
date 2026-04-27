@@ -512,6 +512,49 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         Focus::new(self)
     }
 
+    /// Returns a borrowed, range-bounded view over this vector.
+    ///
+    /// The first and last elements within the range are fetched once at
+    /// construction (O(log n) each). [`VectorRange::len`],
+    /// [`VectorRange::is_empty`], [`VectorRange::first`], and
+    /// [`VectorRange::last`] are all O(1) thereafter. The underlying vector is
+    /// immutably borrowed for the view's lifetime.
+    ///
+    /// Range bounds are clamped to `0..self.len()` — out-of-bounds indices do
+    /// not panic.
+    ///
+    /// Time: O(log n)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate pds;
+    /// let v = vector![10, 20, 30, 40, 50];
+    /// let view = v.subrange(1..=3);
+    /// assert_eq!(view.len(), 3);
+    /// assert_eq!(view.first(), Some(&20));
+    /// assert_eq!(view.last(), Some(&40));
+    /// assert_eq!(view.get(0), Some(&20));
+    /// ```
+    #[must_use]
+    pub fn subrange<R>(&self, range: R) -> VectorRange<'_, A, P>
+    where
+        R: RangeBounds<usize>,
+    {
+        let r = to_range(&range, self.len());
+        let start = r.start.min(self.len());
+        let end = r.end.min(self.len()).max(start);
+        let first = if start < end { self.get(start) } else { None };
+        let last = if start < end { self.get(end - 1) } else { None };
+        VectorRange {
+            vector: self,
+            start,
+            end,
+            first,
+            last,
+        }
+    }
+
     /// Get a reference to the value at index `index` in a vector.
     ///
     /// Returns `None` if the index is out of bounds.
@@ -3080,6 +3123,181 @@ impl<'a, 'b, A: PartialEq, P: SharedPointerKind + 'a + 'b> FusedIterator
 {
 }
 
+// --- VectorRange ---
+
+/// A borrowed, range-bounded view over a [`GenericVector`].
+///
+/// Constructed by [`GenericVector::subrange`]. Holds a reference to the
+/// underlying vector and an absolute `start..end` index range. The first and
+/// last elements are fetched once at construction, making [`VectorRange::len`],
+/// [`VectorRange::is_empty`], [`VectorRange::first`], and [`VectorRange::last`]
+/// all O(1). The underlying vector is immutably borrowed for the view's lifetime.
+///
+/// Use [`VectorRange::subrange`] to narrow the view further, or
+/// [`VectorRange::to_vector`] to materialise an independent owned copy.
+pub struct VectorRange<'a, A, P: SharedPointerKind> {
+    vector: &'a GenericVector<A, P>,
+    /// Absolute start index in the underlying vector (inclusive).
+    start: usize,
+    /// Absolute end index in the underlying vector (exclusive).
+    end: usize,
+    first: Option<&'a A>,
+    last: Option<&'a A>,
+}
+
+// Manual Clone so we don't require A: Clone or P: Clone.
+impl<'a, A, P: SharedPointerKind> Clone for VectorRange<'a, A, P> {
+    fn clone(&self) -> Self {
+        VectorRange {
+            vector: self.vector,
+            start: self.start,
+            end: self.end,
+            first: self.first,
+            last: self.last,
+        }
+    }
+}
+
+impl<'a, A, P> Debug for VectorRange<'a, A, P>
+where
+    A: Debug,
+    P: SharedPointerKind,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl<'a, A, P: SharedPointerKind> VectorRange<'a, A, P> {
+    /// Returns the number of elements in this view.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.end - self.start
+    }
+
+    /// Tests whether this view is empty.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    /// Returns the first element in this view, or `None` if empty.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn first(&self) -> Option<&'a A> {
+        self.first
+    }
+
+    /// Returns the last element in this view, or `None` if empty.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn last(&self) -> Option<&'a A> {
+        self.last
+    }
+
+    /// Returns a reference to the element at relative index `index` within
+    /// this view, or `None` if `index >= self.len()`.
+    ///
+    /// Relative indexing: index `0` refers to the first element in the view
+    /// regardless of where the view starts in the underlying vector.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&'a A> {
+        if index >= self.len() {
+            return None;
+        }
+        self.vector.get(self.start + index)
+    }
+
+    /// Returns an iterator over elements in this view in order.
+    ///
+    /// References have the lifetime of the underlying vector, not of this view,
+    /// so the iterator can outlive the view.
+    ///
+    /// Time: O(log n) to position; O(k) to exhaust
+    #[must_use]
+    pub fn iter(&self) -> Iter<'a, A, P> {
+        Iter::from_focus(self.vector.focus().narrow(self.start..self.end))
+    }
+
+    /// Returns a narrower view bounded by `range`, where indices in `range`
+    /// are relative to this view's start.
+    ///
+    /// If `range` extends beyond this view's bounds, it is clamped. The first
+    /// and last elements of the narrowed range are fetched at construction.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn subrange<R>(&self, range: R) -> VectorRange<'a, A, P>
+    where
+        R: RangeBounds<usize>,
+    {
+        let view_len = self.end - self.start;
+        let r = to_range(&range, view_len);
+        let rel_start = r.start.min(view_len);
+        let rel_end = r.end.min(view_len).max(rel_start);
+        let abs_start = self.start + rel_start;
+        let abs_end = self.start + rel_end;
+        let first = if abs_start < abs_end {
+            self.vector.get(abs_start)
+        } else {
+            None
+        };
+        let last = if abs_start < abs_end {
+            self.vector.get(abs_end - 1)
+        } else {
+            None
+        };
+        VectorRange {
+            vector: self.vector,
+            start: abs_start,
+            end: abs_end,
+            first,
+            last,
+        }
+    }
+
+    /// Materialises this view into an owned [`GenericVector`].
+    ///
+    /// Clones the underlying vector in O(1) (structural sharing), then extracts
+    /// the slice in O(log n).
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn to_vector(&self) -> GenericVector<A, P>
+    where
+        A: Clone,
+    {
+        let mut v = self.vector.clone();
+        v.slice(self.start..self.end)
+    }
+}
+
+impl<'a, A, P: SharedPointerKind + 'a> IntoIterator for VectorRange<'a, A, P> {
+    type Item = &'a A;
+    type IntoIter = Iter<'a, A, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, A, P: SharedPointerKind + 'a> IntoIterator for &VectorRange<'a, A, P> {
+    type Item = &'a A;
+    type IntoIter = Iter<'a, A, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 // Proptest
 #[cfg(any(test, feature = "proptest"))]
 #[doc(hidden)]
@@ -4901,5 +5119,141 @@ mod test {
         let (ra, rb): (Vector<i32>, Vector<&str>) = a.clone().zip(b.clone()).unzip();
         assert_eq!(ra, a);
         assert_eq!(rb, b);
+    }
+
+    // --- VectorRange tests ---
+
+    #[test]
+    fn subrange_get_element() {
+        let v = vector![10, 20, 30, 40, 50];
+        let view = v.subrange(1..=3);
+        assert_eq!(view.get(0), Some(&20));
+        assert_eq!(view.get(1), Some(&30));
+        assert_eq!(view.get(2), Some(&40));
+        assert_eq!(view.get(3), None); // out of view bounds
+    }
+
+    #[test]
+    fn subrange_len_is_empty() {
+        let v = vector![1, 2, 3, 4, 5];
+
+        let full = v.subrange(..);
+        assert_eq!(full.len(), 5);
+        assert!(!full.is_empty());
+
+        let partial = v.subrange(1..3);
+        assert_eq!(partial.len(), 2);
+        assert!(!partial.is_empty());
+
+        // Out-of-bounds range is clamped — no panic.
+        let clamped = v.subrange(3..100);
+        assert_eq!(clamped.len(), 2); // indices 3, 4
+
+        let empty_range = v.subrange(10..20);
+        assert_eq!(empty_range.len(), 0);
+        assert!(empty_range.is_empty());
+    }
+
+    #[test]
+    fn subrange_iter_order() {
+        let v = vector![10, 20, 30, 40, 50];
+        let view = v.subrange(1..=3);
+        let items: Vec<i32> = view.iter().copied().collect();
+        assert_eq!(items, vec![20, 30, 40]);
+    }
+
+    #[test]
+    fn subrange_first_last() {
+        let v = vector![10, 20, 30, 40, 50];
+
+        let view = v.subrange(1..=3);
+        assert_eq!(view.first(), Some(&20));
+        assert_eq!(view.last(), Some(&40));
+
+        let empty = v.subrange(10..20);
+        assert_eq!(empty.first(), None);
+        assert_eq!(empty.last(), None);
+
+        let single = v.subrange(2..=2);
+        assert_eq!(single.first(), Some(&30));
+        assert_eq!(single.last(), Some(&30));
+    }
+
+    #[test]
+    fn subrange_to_vector() {
+        let v = vector![10, 20, 30, 40, 50];
+        let view = v.subrange(1..=3);
+        let owned = view.to_vector();
+        assert_eq!(owned, vector![20, 30, 40]);
+    }
+
+    #[test]
+    fn subrange_into_iter() {
+        let v = vector![10, 20, 30, 40, 50];
+        let view = v.subrange(1..=3);
+        let items: Vec<i32> = view.into_iter().copied().collect();
+        assert_eq!(items, vec![20, 30, 40]);
+
+        let view2 = v.subrange(1..=3);
+        let items2: Vec<i32> = (&view2).into_iter().copied().collect();
+        assert_eq!(items2, vec![20, 30, 40]);
+    }
+
+    #[test]
+    fn subrange_chained() {
+        let v: Vector<i32> = (0..10).collect();
+        let outer = v.subrange(2..8); // abs 2..8: [2,3,4,5,6,7]
+        assert_eq!(outer.len(), 6);
+        let inner = outer.subrange(1..4); // rel 1..4 → abs 3..6: [3,4,5]
+        assert_eq!(inner.len(), 3);
+        let items: Vec<i32> = inner.iter().copied().collect();
+        assert_eq!(items, vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn subrange_clone_and_debug() {
+        let v = vector![10, 20, 30, 40, 50];
+        let view = v.subrange(1..=3);
+        let clone = view.clone();
+        assert_eq!(clone.len(), view.len());
+        let items: Vec<i32> = clone.iter().copied().collect();
+        assert_eq!(items, vec![20, 30, 40]);
+
+        let s = format!("{:?}", view);
+        assert!(s.contains("20"));
+        assert!(s.contains("40"));
+    }
+
+    #[test]
+    fn subrange_empty_vector() {
+        let v: Vector<i32> = Vector::new();
+        let view = v.subrange(0..10);
+        assert!(view.is_empty());
+        assert_eq!(view.len(), 0);
+        assert_eq!(view.first(), None);
+        assert_eq!(view.last(), None);
+    }
+
+    #[test]
+    fn subrange_full_range() {
+        let v = vector![1, 2, 3, 4, 5];
+        let view = v.subrange(..);
+        assert_eq!(view.len(), 5);
+        let items: Vec<i32> = view.iter().copied().collect();
+        assert_eq!(items, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn subrange_large_vector() {
+        let v: Vector<i32> = (0..1000).collect();
+        let view = v.subrange(100..200);
+        assert_eq!(view.len(), 100);
+        assert_eq!(view.first(), Some(&100));
+        assert_eq!(view.last(), Some(&199));
+        assert_eq!(view.get(0), Some(&100));
+        assert_eq!(view.get(99), Some(&199));
+        assert_eq!(view.get(100), None);
+        let items: Vec<i32> = view.iter().copied().collect();
+        assert_eq!(items, (100..200).collect::<Vec<_>>());
     }
 }
