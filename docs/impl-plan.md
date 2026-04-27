@@ -75,7 +75,11 @@ single v2.0.0 release in Phase 5.
   sequential insert loop with O(n avg) two-pass bulk load. Pass 1 deduplicates via HAMT
   index (sequential counter assignment). Pass 2 builds the `entries` OrdMap via
   `GenericOrdMap::from_sorted_iter` — a new O(n) bottom-up B+ tree constructor
-  (`build_sorted` in `src/nodes/btree.rs`). All `test.sh` checks pass (fmt, cargo test
+  (`build_sorted` in `src/nodes/btree.rs`).
+  (4) `InsertionOrderSet::from_iter` (`src/insertion_order_set.rs`): found during
+  subsequent audit to have its own sequential insert loop. Fixed to delegate via
+  `.map(|a| (a, ())).collect()`, routing through `InsertionOrderMap::from_iter` and
+  gaining the same O(n avg) bulk-load benefit. All `test.sh` checks pass (fmt, cargo test
   × 3 feature variants, clippy -D warnings, cargo doc, cargo audit).
   Benchmarked (1) and (2) in `benches/trie.rs` head-to-head against the old implementations.
   OrdTrie merge-walk: 4–18× faster for overlapping tries, 44–443× for disjoint, thousands-fold

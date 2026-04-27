@@ -2186,6 +2186,12 @@ in comparison operations for the entries OrdMap construction.
 The same `from_sorted_iter` is available for any `GenericOrdMap` caller that can
 guarantee pre-sorted, deduplicated input.
 
+**Note (2026-04-27):** A subsequent audit found that `InsertionOrderSet::from_iter`
+(`src/insertion_order_set.rs`) had its own sequential insert loop and was not
+delegating to `InsertionOrderMap::from_iter`. Fixed by replacing the loop with a
+one-line delegation via `.map(|a| (a, ())).collect()`, which routes through the
+`InsertionOrderMap` `FromIterator` impl and gains the same O(n avg) bulk-load benefit.
+
 ---
 
 ### Investigation C: Trie / OrdTrie set operations — merge-walk
@@ -2330,6 +2336,7 @@ Full results: `docs/baselines.md` § "OrdTrie set operations" and § "Trie set o
 - Complexity annotation corrections are complete; docs regenerated.
 - `front()`/`back()` O(1) caching ruled out; the O(log n) cost is accepted as
   inherent to the B+ tree backing.
-- `from_iter` O(n) bulk load: implemented (Investigation B).
+- `from_iter` O(n) bulk load: implemented for `InsertionOrderMap` (Investigation B)
+  and `InsertionOrderSet` (found during subsequent audit; same fix).
 - `OrdTrie` merge-walk and `Trie` `ptr_eq` fast-path: implemented (Investigation C).
 - All findings (positive and negative) recorded here per the decision log convention.
