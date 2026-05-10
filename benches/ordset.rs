@@ -279,9 +279,85 @@ where
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Range view (OrdSetRange / subrange) benchmarks
+//
+// Mirrors ordmap_subrange: OrdSetRange wraps OrdMapRange<A, ()> so the
+// cost profile is identical. Range = middle 50% of entries.
+// ---------------------------------------------------------------------------
+
+fn bench_subrange_set(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ordset_subrange");
+
+    for &n in &[1_000usize, 10_000usize] {
+        let set: OrdSet<i64> = (0..n as i64).collect();
+        let lo = (n / 4) as i64;
+        let hi = (3 * n / 4) as i64;
+
+        // Construction: O(k) upfront scan
+        group.bench_function(format!("subrange_construct_{n}"), |b| {
+            b.iter(|| black_box(set.subrange(lo..hi)))
+        });
+
+        // len: O(1) from cached field vs O(k) fresh count
+        {
+            let view = set.subrange(lo..hi);
+            group.bench_function(format!("subrange_len_{n}"), |b| {
+                b.iter(|| black_box(view.len()))
+            });
+        }
+        group.bench_function(format!("range_count_{n}"), |b| {
+            b.iter(|| black_box(set.range(lo..hi).count()))
+        });
+
+        // first / last: O(1) from cache vs O(log n) seek + fetch
+        {
+            let view = set.subrange(lo..hi);
+            group.bench_function(format!("subrange_first_{n}"), |b| {
+                b.iter(|| black_box(view.first()))
+            });
+            group.bench_function(format!("subrange_last_{n}"), |b| {
+                b.iter(|| black_box(view.last()))
+            });
+        }
+        group.bench_function(format!("range_first_{n}"), |b| {
+            b.iter(|| black_box(set.range(lo..hi).next()))
+        });
+        group.bench_function(format!("range_last_{n}"), |b| {
+            b.iter(|| black_box(set.range(lo..hi).next_back()))
+        });
+
+        // iter: both use NodeIter — should be equivalent after positioning
+        {
+            let view = set.subrange(lo..hi);
+            group.bench_function(format!("subrange_iter_{n}"), |b| {
+                b.iter(|| black_box(view.iter().count()))
+            });
+        }
+        group.bench_function(format!("range_iter_{n}"), |b| {
+            b.iter(|| black_box(set.range(lo..hi).count()))
+        });
+
+        // contains: O(log n) in both; subrange adds one bounds check
+        {
+            let view = set.subrange(lo..hi);
+            let mid = lo + (hi - lo) / 2;
+            group.bench_function(format!("subrange_contains_{n}"), |b| {
+                b.iter(|| black_box(view.contains(&mid)))
+            });
+            group.bench_function(format!("set_contains_{n}"), |b| {
+                b.iter(|| black_box(set.contains(&mid)))
+            });
+        }
+    }
+
+    group.finish();
+}
+
 fn ordset_benches(c: &mut Criterion) {
     bench_group::<OrdSet<i64>, i64>(c, "ordset_i64");
     bench_group::<OrdSet<Arc<String>>, Arc<String>>(c, "ordset_str");
+    bench_subrange_set(c);
 
     if std::env::var("BENCH_STD").is_ok() {
         bench_group::<BTreeSet<i64>, i64>(c, "btreeset_i64");

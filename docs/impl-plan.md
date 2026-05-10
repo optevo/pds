@@ -59,6 +59,48 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-04-27] Range view API — OrdMap/OrdSet split and materialisation refactor.**
+  Completed three related improvements across `OrdMap`, `OrdSet`, and `Vector`:
+
+  (1) **O(log n) `OrdMapRange::to_map()` (rayon fast path).**
+  Added a conditional fast path in `OrdMapRange::to_map()`: when the `rayon` feature (or
+  test mode) is active, clones the full map in O(1) (Arc refcount), then trims to the
+  view's bounds with two O(log n) `split_at_key_consuming` calls. Reinsertion of boundary
+  keys for `Included` bounds uses `update`, which is also O(log n). Without the `rayon`
+  feature, the previous O(k) `from_sorted_iter` path is preserved. The btree split
+  machinery (`split_node`, `count_entries`, and helpers) retains its
+  `#[cfg(any(test, feature = "rayon"))]` gate — no unconditional compile cost.
+  `OrdSetRange::to_set()` gains the same benefit by delegating to `to_map()`.
+
+  (2) **`split_at_key` as the primary split API on `OrdMap` and `OrdSet`.**
+  Renamed `split_at_key_view` → `split_at_key` on `GenericOrdMap`, `GenericOrdSet`,
+  `OrdMapRange`, and `OrdSetRange`. Demoted `split_at_key_consuming` from `pub` to
+  `pub(crate)` (used internally by rayon parallel ops and the `to_map()` fast path).
+  Updated all doc comments: the split methods now note they return borrowed views and
+  describe when to call `to_map()`/`to_set()` to materialise. 12 split-view tests
+  renamed accordingly (`split_at_key_view_*` → `split_at_key_*`).
+
+  (3) **`split_at` as the primary split API on `Vector` and `VectorRange`.**
+  Replaced the old consuming `GenericVector::split_at(self, index)` (which just called
+  `split_off`) with the view-based implementation. Renamed `split_at_view` → `split_at`
+  on both `GenericVector` and `VectorRange`. Updated `chunked()` to use `split_off`
+  directly (cleaner loop: `split_off` the right half, push the left, repeat). Updated
+  `patch()` similarly (two `split_off` calls on a mutable clone). 6 split-view tests
+  renamed accordingly.
+
+  All three steps: `test.sh` green (fmt, cargo test × 3 variants, clippy -D warnings,
+  cargo doc, cargo audit). 1277 unit tests + 425 doc tests pass.
+
+- **[2026-04-27] OrdMapRange construction: O(k) → O(log n) + lazy cached_len.**
+  `OrdMapRange::len` field changed from `usize` (eagerly computed) to `AtomicUsize`
+  with sentinel `LEN_UNCOMPUTED = usize::MAX`. Construction uses a new
+  `ord_map_range_endpoints` function: one `next()` + one `next_back()` on
+  `RangedIter` to find first/last in O(log n), deferring element count to first
+  `len()` call. Both `submap()` constructors updated. `is_empty()` now checks
+  `self.first.is_none()` (O(1)). `Clone` impl propagates the cached len.
+  Benchmarked: 13–150× faster construction for small/medium ranges. Results in
+  `docs/baselines.md` § "OrdMapRange — lazy construction optimisation".
+
 - **[2026-04-27] DEC-038 perf improvements: ptr_eq fast-paths, OrdTrie merge-walk, InsertionOrderMap bulk load.**
   Three performance improvements from the DEC-038 investigation:
   (1) `Trie` (`src/trie.rs`): added `ptr_eq` fast-paths to all four set operations
@@ -788,7 +830,7 @@ single v2.0.0 release in Phase 5.
 
 ## Current {#current}
 
-All residual items including R.17 are now complete. No active work item.
+All residual items including R.17 and the range-view API refactor are now complete. No active work item.
 
 ---
 

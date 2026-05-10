@@ -41,7 +41,7 @@ use core::cmp::Ordering;
 use core::fmt::{Debug, Display, Error, Formatter};
 use core::hash::{BuildHasher, Hash, Hasher};
 use core::iter::{FromIterator, FusedIterator};
-use core::ops::RangeBounds;
+use core::ops::{Bound, RangeBounds};
 
 use archery::SharedPointerKind;
 use equivalent::Comparable;
@@ -947,9 +947,12 @@ where
     /// Returns `(left, present, right)` where every element in `left` is strictly
     /// less than `key`, every element in `right` is strictly greater, and `present`
     /// is `true` if `key` was in the set.
+    ///
+    /// This is an internal primitive used by rayon parallel operations. Prefer
+    /// [`GenericOrdSet::split_at_key`] for the view-based public API.
     #[cfg(any(test, feature = "rayon"))]
     #[must_use]
-    pub fn split_at_key_consuming<Q>(self, key: &Q) -> (Self, bool, Self)
+    pub(crate) fn split_at_key_consuming<Q>(self, key: &Q) -> (Self, bool, Self)
     where
         Q: Comparable<A> + ?Sized,
     {
@@ -958,6 +961,44 @@ where
             GenericOrdSet { map: l },
             v.is_some(),
             GenericOrdSet { map: r },
+        )
+    }
+
+    /// Returns two borrowed range views split at `key`.
+    ///
+    /// The left view covers all elements strictly less than `key`; the right view
+    /// covers `key` and all elements above. Together they span the entire set with
+    /// no overlap and no gap. If `key` is absent, the right view starts from the
+    /// nearest element above `key`.
+    ///
+    /// Both views borrow the full backing set — no elements are copied, and the
+    /// original set is not consumed. As long as either view is alive, the entire
+    /// set stays in memory. If you only need one half long-term and want to free
+    /// the other, call [`OrdSetRange::to_set`] on the half you need, then drop
+    /// the views and the original set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordset::OrdSet;
+    /// let s = ordset![1, 2, 3, 4, 5];
+    /// let (left, right) = s.split_at_key(&3);
+    /// assert_eq!(left.len(), 2);  // 1, 2
+    /// assert_eq!(right.len(), 3); // 3, 4, 5
+    /// assert!(right.contains(&3));
+    /// assert!(!left.contains(&3));
+    /// ```
+    ///
+    /// Time: O(log n) — two [`subrange`][Self::subrange] calls
+    #[must_use]
+    pub fn split_at_key(&self, key: &A) -> (OrdSetRange<'_, A, P>, OrdSetRange<'_, A, P>)
+    where
+        A: Clone,
+    {
+        (
+            self.subrange((Bound::Unbounded, Bound::Excluded(key.clone()))),
+            self.subrange((Bound::Included(key.clone()), Bound::Unbounded)),
         )
     }
 
@@ -1345,10 +1386,9 @@ where
 
     /// Returns a narrower view bounded by `range` intersected with this view's bounds.
     ///
-    /// If `range` extends beyond this view's own bounds, it is clamped. Element
-    /// count, first, and last are cached at construction — all O(1) thereafter.
+    /// If `range` extends beyond this view's own bounds, it is clamped.
     ///
-    /// Time: O(k') where k' is the number of elements in the narrowed range
+    /// Time: O(log n) construction; [`len`][Self::len] is O(k') on first call, O(1) thereafter
     #[must_use]
     pub fn subrange<R>(&self, range: R) -> OrdSetRange<'a, A, P>
     where
@@ -1360,12 +1400,39 @@ where
         }
     }
 
+    /// Returns two narrower views split at `key`, both bounded within this view's range.
+    ///
+    /// The left view covers elements in `[self.start, key)` and the right covers
+    /// `[key, self.end]`. Equivalent to `(self.subrange(..key), self.subrange(key..))`.
+    ///
+    /// Both views borrow the same backing set. If you only need one half long-term,
+    /// call [`to_set`][Self::to_set] on it and drop the views to free the rest.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn split_at_key(&self, key: &A) -> (OrdSetRange<'a, A, P>, OrdSetRange<'a, A, P>)
+    where
+        A: Clone,
+    {
+        (
+            self.subrange((Bound::Unbounded, Bound::Excluded(key.clone()))),
+            self.subrange((Bound::Included(key.clone()), Bound::Unbounded)),
+        )
+    }
+
     /// Materialises this view into an owned [`GenericOrdSet`].
     ///
-    /// Clones each element in the range and uses bottom-up B+ tree construction —
-    /// O(k), not O(k log k).
+    /// In most cases you do not need to call this explicitly — views support
+    /// iteration, membership tests, and further splitting without materialising.
+    /// The main reason to materialise is memory: if you split a set and only
+    /// need one half long-term, materialise that half into an owned set, then
+    /// let the views and the original go out of scope. Rust's normal drop rules
+    /// will release the backing set's reference count, freeing the unused half.
     ///
-    /// Time: O(k) where k is the number of elements in the range
+    /// Delegates to [`crate::ord::map::OrdMapRange::to_map`]. When the `rayon` feature is
+    /// enabled, this is O(log n) via structural trimming; otherwise O(k).
+    ///
+    /// Time: O(log n) with `rayon` feature; O(k) otherwise
     #[must_use]
     pub fn to_set(&self) -> GenericOrdSet<A, P>
     where
@@ -1373,6 +1440,117 @@ where
     {
         GenericOrdSet {
             map: self.inner.to_map(),
+        }
+    }
+
+    /// Returns the closest element ≤ `value` within this view's bounds,
+    /// or `None` if no such element exists.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get_prev<Q>(&self, value: &Q) -> Option<&'a A>
+    where
+        Q: Comparable<A> + ?Sized,
+    {
+        self.inner.get_prev(value).map(|(k, _)| k)
+    }
+
+    /// Returns the closest element ≥ `value` within this view's bounds,
+    /// or `None` if no such element exists.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get_next<Q>(&self, value: &Q) -> Option<&'a A>
+    where
+        Q: Comparable<A> + ?Sized,
+    {
+        self.inner.get_next(value).map(|(k, _)| k)
+    }
+
+    /// Returns the closest element strictly less than `value` within this
+    /// view's bounds, or `None` if no such element exists.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get_prev_exclusive<Q>(&self, value: &Q) -> Option<&'a A>
+    where
+        Q: Comparable<A> + ?Sized,
+    {
+        self.inner.get_prev_exclusive(value).map(|(k, _)| k)
+    }
+
+    /// Returns the closest element strictly greater than `value` within
+    /// this view's bounds, or `None` if no such element exists.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get_next_exclusive<Q>(&self, value: &Q) -> Option<&'a A>
+    where
+        Q: Comparable<A> + ?Sized,
+    {
+        self.inner.get_next_exclusive(value).map(|(k, _)| k)
+    }
+
+    /// Tests whether every element of this view is also in `other`.
+    ///
+    /// Time: O(k log n) where k is the view size and n is the size of `other`
+    #[must_use]
+    pub fn is_subset<RS>(&self, other: RS) -> bool
+    where
+        RS: Borrow<GenericOrdSet<A, P>>,
+    {
+        let other = other.borrow();
+        self.iter().all(|a| other.contains(a))
+    }
+
+    /// Tests whether every element of this view is also in `other`, and
+    /// this view has strictly fewer elements than `other`.
+    ///
+    /// Time: O(k log n)
+    #[must_use]
+    pub fn is_proper_subset<RS>(&self, other: RS) -> bool
+    where
+        RS: Borrow<GenericOrdSet<A, P>>,
+    {
+        let other = other.borrow();
+        self.len() < other.len() && self.iter().all(|a| other.contains(a))
+    }
+
+    /// Tests whether this view shares no elements with `other`.
+    ///
+    /// Time: O(k log n)
+    #[must_use]
+    pub fn disjoint(&self, other: &GenericOrdSet<A, P>) -> bool {
+        self.iter().all(|a| !other.contains(a))
+    }
+
+    /// Returns a view of the first `n` elements of this view.
+    ///
+    /// If `n` ≥ the number of elements in this view, the full view is returned.
+    ///
+    /// Time: O(k) to walk to the nth element; O(log n) to construct the sub-view
+    #[must_use]
+    pub fn take(&self, n: usize) -> OrdSetRange<'a, A, P>
+    where
+        A: Clone,
+    {
+        OrdSetRange {
+            inner: self.inner.take(n),
+        }
+    }
+
+    /// Returns a view with the first `n` elements of this view removed.
+    ///
+    /// If `n` ≥ the number of elements, the returned view is empty.
+    ///
+    /// Time: O(k) to walk to the nth element; O(log n) to construct the sub-view
+    #[must_use]
+    pub fn skip(&self, n: usize) -> OrdSetRange<'a, A, P>
+    where
+        A: Clone,
+    {
+        OrdSetRange {
+            inner: self.inner.skip(n),
         }
     }
 }
@@ -2289,5 +2467,64 @@ mod test {
         assert!(!view.contains(&200));
         let items: Vec<i32> = view.iter().copied().collect();
         assert_eq!(items, (100..200).collect::<Vec<_>>());
+    }
+
+    // --- split_at_key ---
+
+    #[test]
+    fn split_at_key_basic() {
+        let s = ordset![1, 2, 3, 4, 5];
+        let (left, right) = s.split_at_key(&3);
+        assert_eq!(left.len(), 2); // 1, 2
+        assert_eq!(right.len(), 3); // 3, 4, 5
+        assert!(right.contains(&3));
+        assert!(!left.contains(&3));
+    }
+
+    #[test]
+    fn split_at_key_no_gap() {
+        // Left and right together cover all elements exactly once
+        let s: OrdSet<i32> = (1..=10).collect();
+        let (left, right) = s.split_at_key(&6);
+        let all_left: Vec<i32> = left.iter().copied().collect();
+        let all_right: Vec<i32> = right.iter().copied().collect();
+        assert_eq!(all_left, vec![1, 2, 3, 4, 5]);
+        assert_eq!(all_right, vec![6, 7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn split_at_key_absent_key() {
+        let s = ordset![1, 3, 5, 7];
+        let (left, right) = s.split_at_key(&4);
+        assert_eq!(left.len(), 2); // 1, 3
+        assert_eq!(right.len(), 2); // 5, 7
+        assert_eq!(right.first(), Some(&5));
+    }
+
+    #[test]
+    fn split_at_key_before_first() {
+        let s = ordset![5, 10, 15];
+        let (left, right) = s.split_at_key(&1);
+        assert!(left.is_empty());
+        assert_eq!(right.len(), 3);
+    }
+
+    #[test]
+    fn split_at_key_after_last() {
+        let s = ordset![1, 2, 3];
+        let (left, right) = s.split_at_key(&99);
+        assert_eq!(left.len(), 3);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn split_at_key_on_range() {
+        // OrdSetRange::split_at_key respects the parent bounds
+        let s: OrdSet<i32> = (1..=10).collect();
+        let view = s.subrange(3..=7); // 3, 4, 5, 6, 7
+        let (left, right) = view.split_at_key(&5);
+        assert_eq!(left.len(), 2); // 3, 4
+        assert_eq!(right.len(), 3); // 5, 6, 7
+        assert_eq!(right.contains(&8), false); // clamped by parent
     }
 }

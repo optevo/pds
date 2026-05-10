@@ -704,11 +704,110 @@ fn bench_parallel(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Range view (OrdMapRange / submap) benchmarks
+//
+// Compares `submap()` range views against raw `range()` iterator calls.
+//
+// Key trade-off: `submap()` pays O(k) once at construction to cache len,
+// first, and last. After that, all metadata queries are O(1). Raw `range()`
+// is O(log n) to position and O(k) to count — every fresh call pays again.
+//
+// Sizes: 1_000 and 10_000 entries; range = middle 50% of entries.
+// ---------------------------------------------------------------------------
+
+fn bench_submap(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ordmap_subrange");
+
+    for &n in &[1_000usize, 10_000usize] {
+        let map: OrdMap<i64, i64> = (0..n as i64).map(|i| (i, i)).collect();
+        let lo = (n / 4) as i64;
+        let hi = (3 * n / 4) as i64; // middle 50%
+
+        // --- Construction ---
+        // submap: O(k) upfront scan to cache len/first/last
+        group.bench_function(format!("submap_construct_{n}"), |b| {
+            b.iter(|| black_box(map.submap(lo..hi)))
+        });
+
+        // --- len / is_empty ---
+        // submap view: O(1) from cached field
+        {
+            let view = map.submap(lo..hi);
+            group.bench_function(format!("submap_len_{n}"), |b| {
+                b.iter(|| black_box(view.len()))
+            });
+        }
+        // range iterator: O(k) full scan to count
+        group.bench_function(format!("range_count_{n}"), |b| {
+            b.iter(|| black_box(map.range(lo..hi).count()))
+        });
+
+        // --- first / last ---
+        // submap view: O(1) from cached field
+        {
+            let view = map.submap(lo..hi);
+            group.bench_function(format!("submap_first_{n}"), |b| {
+                b.iter(|| black_box(view.first_key_value()))
+            });
+            group.bench_function(format!("submap_last_{n}"), |b| {
+                b.iter(|| black_box(view.last_key_value()))
+            });
+        }
+        // range iterator: O(log n) seek + O(1) to fetch first
+        group.bench_function(format!("range_first_{n}"), |b| {
+            b.iter(|| black_box(map.range(lo..hi).next()))
+        });
+        group.bench_function(format!("range_last_{n}"), |b| {
+            b.iter(|| black_box(map.range(lo..hi).next_back()))
+        });
+
+        // --- iter (sequential scan) ---
+        // Both paths use NodeIter — should be the same cost after positioning.
+        {
+            let view = map.submap(lo..hi);
+            group.bench_function(format!("submap_iter_{n}"), |b| {
+                b.iter(|| black_box(view.iter().count()))
+            });
+        }
+        group.bench_function(format!("range_iter_{n}"), |b| {
+            b.iter(|| black_box(map.range(lo..hi).count()))
+        });
+
+        // --- contains_key ---
+        // Both are O(log n) B+ tree lookup; submap adds one in-bounds check.
+        {
+            let view = map.submap(lo..hi);
+            let mid = lo + (hi - lo) / 2;
+            group.bench_function(format!("submap_contains_{n}"), |b| {
+                b.iter(|| black_box(view.contains_key(&mid)))
+            });
+            group.bench_function(format!("map_contains_{n}"), |b| {
+                b.iter(|| black_box(map.contains_key(&mid)))
+            });
+        }
+
+        // --- chained submap ---
+        // Narrowing an existing view: O(k') scan on the smaller inner range.
+        {
+            let view = map.submap(lo..hi);
+            let lo2 = lo + (hi - lo) / 4;
+            let hi2 = hi - (hi - lo) / 4;
+            group.bench_function(format!("submap_chain_{n}"), |b| {
+                b.iter(|| black_box(view.submap(lo2..hi2)))
+            });
+        }
+    }
+
+    group.finish();
+}
+
 // Main benchmark entry point
 fn ordmap_benches(c: &mut Criterion) {
     bench_ordmap(c);
     bench_eq_clone(c);
     bench_parallel(c);
+    bench_submap(c);
 
     if std::env::var("BENCH_STD").is_ok() {
         bench_btreemap(c);

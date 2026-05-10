@@ -27,12 +27,11 @@
 //! ## Parallel iteration (`rayon` feature)
 //!
 //! With the `rayon` feature, `InsertionOrderMap` implements
-//! [`IntoParallelRefIterator`][rayon::iter::IntoParallelRefIterator], yielding `(&K, &V)` pairs.
+//! `IntoParallelRefIterator`, yielding `(&K, &V)` pairs.
 //! Note that parallel iteration does not preserve insertion order — worker threads process
 //! subsets of the underlying B+ tree non-sequentially.
 //!
-//! [`FromParallelIterator`][rayon::iter::FromParallelIterator] and
-//! [`ParallelExtend`][rayon::iter::ParallelExtend] are intentionally absent: parallel
+//! `FromParallelIterator` and `ParallelExtend` are intentionally absent: parallel
 //! collection fans entries out across threads with no ordering guarantee, so the
 //! resulting map would have an arbitrary insertion order. Use the sequential
 //! `FromIterator` / `Extend` impls when insertion order must be preserved.

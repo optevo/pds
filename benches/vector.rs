@@ -410,9 +410,121 @@ fn bench_vecdeque(c: &mut Criterion) {
     bench_ops_group::<VecDeque<usize>>(c, "vecdeque");
 }
 
+// ---------------------------------------------------------------------------
+// Range view (VectorRange / subrange) benchmarks
+//
+// Key differences from OrdSetRange: VectorRange::len is trivially O(1) (end -
+// start, no scan). first/last are O(log n) at construction but O(1) after.
+// iter() seeks in O(log n) via Focus::narrow. get(i) is O(log n).
+//
+// Comparisons:
+//   subrange_len vs manual (end - start): both O(1) — should be identical
+//   subrange_first vs vector.get(start): O(1) vs O(log n) — view wins
+//   subrange_iter vs focus narrow:        both O(log n) seek — should match
+//   subrange_get_seq vs vector.get_seq:   similar O(log n) per element
+//
+// Sizes: 1_000 and 10_000 entries; range = middle 50%.
+// ---------------------------------------------------------------------------
+
+fn bench_subrange_vector(c: &mut Criterion) {
+    let mut group = c.benchmark_group("vector_subrange");
+
+    for &n in &[1_000usize, 10_000usize] {
+        let v: Vector<usize> = (0..n).collect();
+        let start = n / 4;
+        let end = 3 * n / 4; // middle 50%
+
+        // Construction: O(log n) — two get() calls for first and last
+        group.bench_function(format!("subrange_construct_{n}"), |b| {
+            b.iter(|| black_box(v.subrange(start..end)))
+        });
+        // Baseline: cloning + slicing (what to_vector does)
+        group.bench_function(format!("clone_slice_{n}"), |b| {
+            b.iter(|| {
+                let mut c = v.clone();
+                black_box(c.slice(start..end))
+            })
+        });
+
+        // len: O(1) — end minus start, no tree walk
+        {
+            let view = v.subrange(start..end);
+            group.bench_function(format!("subrange_len_{n}"), |b| {
+                b.iter(|| black_box(view.len()))
+            });
+        }
+
+        // first / last: O(1) from cache vs O(log n) fresh get
+        {
+            let view = v.subrange(start..end);
+            group.bench_function(format!("subrange_first_{n}"), |b| {
+                b.iter(|| black_box(view.first()))
+            });
+            group.bench_function(format!("subrange_last_{n}"), |b| {
+                b.iter(|| black_box(view.last()))
+            });
+        }
+        group.bench_function(format!("vector_get_start_{n}"), |b| {
+            b.iter(|| black_box(v.get(start)))
+        });
+        group.bench_function(format!("vector_get_end_{n}"), |b| {
+            b.iter(|| black_box(v.get(end - 1)))
+        });
+
+        // iter: O(log n) positioning via Focus::narrow, then O(k) scan
+        {
+            let view = v.subrange(start..end);
+            group.bench_function(format!("subrange_iter_{n}"), |b| {
+                b.iter(|| black_box(view.iter().count()))
+            });
+        }
+        // Baseline: naive skip+take on the full iterator
+        group.bench_function(format!("iter_skip_take_{n}"), |b| {
+            b.iter(|| black_box(v.iter().skip(start).take(end - start).count()))
+        });
+
+        // Sequential get via view vs via underlying vector
+        {
+            let view = v.subrange(start..end);
+            let k = end - start;
+            group.bench_function(format!("subrange_get_seq_{n}"), |b| {
+                b.iter(|| {
+                    let mut sum = 0usize;
+                    for i in 0..k {
+                        sum = sum.wrapping_add(*view.get(i).unwrap());
+                    }
+                    black_box(sum)
+                })
+            });
+            group.bench_function(format!("vector_get_seq_{n}"), |b| {
+                b.iter(|| {
+                    let mut sum = 0usize;
+                    for i in start..end {
+                        sum = sum.wrapping_add(*v.get(i).unwrap());
+                    }
+                    black_box(sum)
+                })
+            });
+        }
+
+        // Chained subrange: O(log n) narrowing of an existing view
+        {
+            let view = v.subrange(start..end);
+            let start2 = (end - start) / 4;
+            let end2 = 3 * (end - start) / 4;
+            group.bench_function(format!("subrange_chain_{n}"), |b| {
+                b.iter(|| black_box(view.subrange(start2..end2)))
+            });
+        }
+    }
+
+    group.finish();
+}
+
 // Main benchmark entry point
 fn vector_benches(c: &mut Criterion) {
     bench_vector(c);
+    bench_subrange_vector(c);
 
     if std::env::var("BENCH_STD").is_ok() {
         bench_vecdeque(c);

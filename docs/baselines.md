@@ -525,3 +525,61 @@ it returns false? (b) how much does it save when it fires?
 **Conclusions:** The ptr_eq check adds zero measurable overhead in the non-matching case
 (differences are within criterion noise bounds, no consistent direction). When the fast-path
 fires (identical tries — `a.op(a.clone())`), the speedup is thousands-fold: O(1) vs O(n × d).
+
+---
+
+## OrdMapRange — lazy construction optimisation {#sec:ordmaprange-lazy}
+
+**Date:** 2026-04-27 | **Benchmark:** `cargo bench --bench ordmap --all-features -- ordmap_subrange`
+**Machine:** MacBook Pro M5 Max | **Rust:** 1.95.0 stable
+
+Before: `submap()` called `ord_map_range_scan` — a full O(k) iterator pass that counted
+all entries and cached `len`, `first`, and `last` at construction.
+
+After: `ord_map_range_endpoints` uses `DoubleEndedIterator` to find `first` and `last` in
+O(log n). The count is deferred to the first call of `len()` via `cached_len: AtomicUsize`
+(sentinel `usize::MAX`). `is_empty()` uses `self.first.is_none()` — always O(1).
+
+### Construction
+
+| n (range = middle 50%) | Before | After | Speedup |
+|------------------------|--------|-------|---------|
+| 1,000 (k≈500) | ~812 ns | 60 ns | **−95%, ~13×** |
+| 10,000 (k≈5000) | ~11,000 ns | 73 ns | **−99.3%, ~150×** |
+
+### len() — lazy, cached after first call
+
+| n | Before (always O(1)) | After (O(1) if cached) | Note |
+|---|---------------------|----------------------|------|
+| 1,000 | ~350 ps | ~703 ps | AtomicUsize relaxed load vs plain usize |
+| 10,000 | ~350 ps | ~728 ps | same |
+
+The ~2× cost of the atomic relaxed load vs a plain usize read is sub-nanosecond either
+way; immaterial in practice. The first (uncached) call costs ~1.1 µs for k=500 (O(k) scan).
+
+### first / last — both O(1) from cached fields
+
+| n | Before | After | Note |
+|---|--------|-------|------|
+| 1,000 | ~510 ps | ~440 ps | −14% |
+| 10,000 | ~510 ps | ~462 ps | −9% |
+
+Slightly faster because the cached `first`/`last` options are now populated in O(log n)
+by the endpoint scan rather than as a by-product of the full O(k) scan.
+
+### chain (two `submap` constructs + two `submap` calls)
+
+| n | Before | After | Speedup |
+|---|--------|-------|---------|
+| 1,000 | ~640 ns | 57 ns | **−91%, ~11×** |
+| 10,000 | ~5,800 ns | 78 ns | **−98.7%, ~75×** |
+
+The chain benchmark constructs a submap and then narrows it — both construction costs
+collapse from O(k)+O(k') to O(log n)+O(log n').
+
+### Trade-off
+
+`construct + len` in a single use-case is ~5–7% slower overall (the O(k) scan is
+deferred but not eliminated). All other patterns are dramatically faster. If `len()` is
+never called (common for iteration-only or contains-only workloads), the O(k) scan is
+never paid at all.

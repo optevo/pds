@@ -514,16 +514,15 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
 
     /// Returns a borrowed, range-bounded view over this vector.
     ///
-    /// The first and last elements within the range are fetched once at
-    /// construction (O(log n) each). [`VectorRange::len`],
-    /// [`VectorRange::is_empty`], [`VectorRange::first`], and
-    /// [`VectorRange::last`] are all O(1) thereafter. The underlying vector is
-    /// immutably borrowed for the view's lifetime.
+    /// Construction is O(1) — only the integer bounds are recorded.
+    /// [`VectorRange::len`] and [`VectorRange::is_empty`] are O(1).
+    /// [`VectorRange::first`] and [`VectorRange::last`] are O(log n) on demand.
+    /// The underlying vector is immutably borrowed for the view's lifetime.
     ///
     /// Range bounds are clamped to `0..self.len()` — out-of-bounds indices do
     /// not panic.
     ///
-    /// Time: O(log n)
+    /// Time: O(1)
     ///
     /// # Examples
     ///
@@ -544,14 +543,10 @@ impl<A, P: SharedPointerKind> GenericVector<A, P> {
         let r = to_range(&range, self.len());
         let start = r.start.min(self.len());
         let end = r.end.min(self.len()).max(start);
-        let first = if start < end { self.get(start) } else { None };
-        let last = if start < end { self.get(end - 1) } else { None };
         VectorRange {
             vector: self,
             start,
             end,
-            first,
-            last,
         }
     }
 
@@ -1204,8 +1199,8 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         let mut result = Vec::with_capacity(num_chunks);
         let mut remaining = self.clone();
         while remaining.len() > chunk_size {
-            let (left, right) = remaining.split_at(chunk_size);
-            result.push(left);
+            let right = remaining.split_off(chunk_size);
+            result.push(remaining);
             remaining = right;
         }
         result.push(remaining);
@@ -1240,8 +1235,9 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
             from + replaced,
             self.len()
         );
-        let (left, rest) = self.clone().split_at(from);
-        let (_, right) = rest.split_at(replaced);
+        let mut left = self.clone();
+        let mut rest = left.split_off(from);
+        let right = rest.split_off(replaced);
         let mut result = left;
         result.append(replacement.clone());
         result.append(right);
@@ -1313,7 +1309,7 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         let mut result = Vec::with_capacity(num_windows);
         let mut start = 0;
         while start + size <= self.len() {
-            result.push(self.skip(start).take(size));
+            result.push(self.skip(start).take(size).to_vector());
             start += step;
         }
         result
@@ -1580,27 +1576,38 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         self.into_iter().zip(other).collect()
     }
 
-    /// Splits a vector at a given index.
+    /// Returns two borrowed range views split at `index`.
     ///
-    /// Splits a vector at a given index, consuming the vector and
-    /// returning a pair of the left hand side and the right hand side
-    /// of the split.
+    /// The left view covers elements at positions `[0, index)` and the right view
+    /// covers `[index, len)`. Together they span the entire vector with no overlap
+    /// and no gap.
     ///
-    /// Time: O(log n)
+    /// If `index >= self.len()`, the left view covers the full vector and the right
+    /// is empty.
+    ///
+    /// Both views borrow the full backing vector — no elements are copied, and the
+    /// original vector is not consumed. As long as either view is alive, the entire
+    /// vector stays in memory. If you only need one half long-term and want to free
+    /// the other, call [`VectorRange::to_vector`] on the half you need, then drop
+    /// the views and the original vector.
     ///
     /// # Examples
     ///
     /// ```
     /// # #[macro_use] extern crate pds;
-    /// let mut vec = vector![1, 2, 3, 7, 8, 9];
-    /// let (left, right) = vec.split_at(3);
-    /// assert_eq!(vector![1, 2, 3], left);
-    /// assert_eq!(vector![7, 8, 9], right);
+    /// let v = vector![10, 20, 30, 40, 50];
+    /// let (left, right) = v.split_at(3);
+    /// assert_eq!(left.len(), 3);
+    /// assert_eq!(right.len(), 2);
+    /// assert_eq!(left.get(0), Some(&10));
+    /// assert_eq!(right.get(0), Some(&40));
     /// ```
+    ///
+    /// Time: O(1) — two [`subrange`][Self::subrange] calls
     #[must_use]
-    pub fn split_at(mut self, index: usize) -> (Self, Self) {
-        let right = self.split_off(index);
-        (self, right)
+    pub fn split_at(&self, index: usize) -> (VectorRange<'_, A, P>, VectorRange<'_, A, P>) {
+        let index = index.min(self.len());
+        (self.subrange(..index), self.subrange(index..))
     }
 
     /// Splits a vector at a given index.
@@ -1743,32 +1750,26 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
         }
     }
 
-    /// Constructs a vector with `count` elements removed from the
-    /// start of the current vector.
+    /// Returns a view of the vector with the first `count` elements removed.
     ///
-    /// Time: O(log n)
+    /// No elements are copied — the view borrows the underlying vector.
+    /// Use [`VectorRange::to_vector`] if you need an owned copy of the result.
+    ///
+    /// Time: O(1)
     #[must_use]
-    pub fn skip(&self, count: usize) -> Self {
-        match count {
-            0 => self.clone(),
-            count if count >= self.len() => Self::new(),
-            count => {
-                // FIXME can be made more efficient by dropping the unwanted side without constructing it
-                self.clone().split_off(count)
-            }
-        }
+    pub fn skip(&self, count: usize) -> VectorRange<'_, A, P> {
+        self.subrange(count.min(self.len())..)
     }
 
-    /// Constructs a vector of the first `count` elements from the
-    /// current vector.
+    /// Returns a view of the first `count` elements of the vector.
     ///
-    /// Time: O(log n)
+    /// No elements are copied — the view borrows the underlying vector.
+    /// Use [`VectorRange::to_vector`] if you need an owned copy of the result.
+    ///
+    /// Time: O(1)
     #[must_use]
-    pub fn take(&self, count: usize) -> Self {
-        // FIXME can be made more efficient by dropping the unwanted side without constructing it
-        let mut left = self.clone();
-        let _ = left.split_off(count);
-        left
+    pub fn take(&self, count: usize) -> VectorRange<'_, A, P> {
+        self.subrange(..count.min(self.len()))
     }
 
     /// Truncate a vector to the given size.
@@ -1782,28 +1783,6 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
             // FIXME can be made more efficient by dropping the unwanted side without constructing it
             let _ = self.split_off(len);
         }
-    }
-
-    /// Extract a slice from a vector.
-    ///
-    /// Removes the elements from `start_index` until `end_index` in
-    /// the current vector and return the removed slice as a new
-    /// vector.
-    ///
-    /// Time: O(log n)
-    #[must_use]
-    pub fn slice<R>(&mut self, range: R) -> Self
-    where
-        R: RangeBounds<usize>,
-    {
-        let r = to_range(&range, self.len());
-        if r.start >= r.end || r.start >= self.len() {
-            return GenericVector::new();
-        }
-        let mut middle = self.split_off(r.start);
-        let right = middle.split_off(r.end - r.start);
-        self.append(right);
-        middle
     }
 
     /// Inserts an element into a vector.
@@ -1864,12 +1843,10 @@ impl<A: Clone, P: SharedPointerKind> GenericVector<A, P> {
     /// While `pop_front` and `pop_back` are heavily optimised
     /// operations, `remove` in the middle of a vector requires a
     /// split, a pop, and an append. Thus, if you want to remove many
-    /// elements from the same location, instead of `remove`ing them
-    /// one by one, it is much better to use [`slice`][slice].
+    /// elements from a range, prefer splitting with [`split_off`][Self::split_off]
+    /// and discarding the unwanted parts.
     ///
     /// Time: O(log n)
-    ///
-    /// [slice]: #method.slice
     pub fn remove(&mut self, index: usize) -> A {
         assert!(index < self.len());
         self.merkle_valid = false;
@@ -3128,10 +3105,11 @@ impl<'a, 'b, A: PartialEq, P: SharedPointerKind + 'a + 'b> FusedIterator
 /// A borrowed, range-bounded view over a [`GenericVector`].
 ///
 /// Constructed by [`GenericVector::subrange`]. Holds a reference to the
-/// underlying vector and an absolute `start..end` index range. The first and
-/// last elements are fetched once at construction, making [`VectorRange::len`],
-/// [`VectorRange::is_empty`], [`VectorRange::first`], and [`VectorRange::last`]
-/// all O(1). The underlying vector is immutably borrowed for the view's lifetime.
+/// underlying vector and an absolute `start..end` index range. Construction
+/// is O(1) — only the integer bounds are recorded. [`VectorRange::len`] and
+/// [`VectorRange::is_empty`] are O(1). [`VectorRange::first`] and
+/// [`VectorRange::last`] are O(log n) (a single tree lookup each). The
+/// underlying vector is immutably borrowed for the view's lifetime.
 ///
 /// Use [`VectorRange::subrange`] to narrow the view further, or
 /// [`VectorRange::to_vector`] to materialise an independent owned copy.
@@ -3141,8 +3119,6 @@ pub struct VectorRange<'a, A, P: SharedPointerKind> {
     start: usize,
     /// Absolute end index in the underlying vector (exclusive).
     end: usize,
-    first: Option<&'a A>,
-    last: Option<&'a A>,
 }
 
 // Manual Clone so we don't require A: Clone or P: Clone.
@@ -3152,8 +3128,6 @@ impl<'a, A, P: SharedPointerKind> Clone for VectorRange<'a, A, P> {
             vector: self.vector,
             start: self.start,
             end: self.end,
-            first: self.first,
-            last: self.last,
         }
     }
 }
@@ -3187,18 +3161,26 @@ impl<'a, A, P: SharedPointerKind> VectorRange<'a, A, P> {
 
     /// Returns the first element in this view, or `None` if empty.
     ///
-    /// Time: O(1)
+    /// Time: O(log n)
     #[must_use]
     pub fn first(&self) -> Option<&'a A> {
-        self.first
+        if self.start < self.end {
+            self.vector.get(self.start)
+        } else {
+            None
+        }
     }
 
     /// Returns the last element in this view, or `None` if empty.
     ///
-    /// Time: O(1)
+    /// Time: O(log n)
     #[must_use]
     pub fn last(&self) -> Option<&'a A> {
-        self.last
+        if self.start < self.end {
+            self.vector.get(self.end - 1)
+        } else {
+            None
+        }
     }
 
     /// Returns a reference to the element at relative index `index` within
@@ -3230,10 +3212,10 @@ impl<'a, A, P: SharedPointerKind> VectorRange<'a, A, P> {
     /// Returns a narrower view bounded by `range`, where indices in `range`
     /// are relative to this view's start.
     ///
-    /// If `range` extends beyond this view's bounds, it is clamped. The first
-    /// and last elements of the narrowed range are fetched at construction.
+    /// If `range` extends beyond this view's bounds it is clamped silently.
+    /// Only the integer bounds are recorded — no tree work is performed.
     ///
-    /// Time: O(log n)
+    /// Time: O(1)
     #[must_use]
     pub fn subrange<R>(&self, range: R) -> VectorRange<'a, A, P>
     where
@@ -3243,28 +3225,58 @@ impl<'a, A, P: SharedPointerKind> VectorRange<'a, A, P> {
         let r = to_range(&range, view_len);
         let rel_start = r.start.min(view_len);
         let rel_end = r.end.min(view_len).max(rel_start);
-        let abs_start = self.start + rel_start;
-        let abs_end = self.start + rel_end;
-        let first = if abs_start < abs_end {
-            self.vector.get(abs_start)
-        } else {
-            None
-        };
-        let last = if abs_start < abs_end {
-            self.vector.get(abs_end - 1)
-        } else {
-            None
-        };
         VectorRange {
             vector: self.vector,
-            start: abs_start,
-            end: abs_end,
-            first,
-            last,
+            start: self.start + rel_start,
+            end: self.start + rel_end,
         }
     }
 
+    /// Returns two narrower views split at relative `index` within this view.
+    ///
+    /// The left view covers relative indices `[0, index)` and the right covers
+    /// `[index, self.len())`. If `index >= self.len()`, the left covers the full
+    /// view and the right is empty.
+    ///
+    /// Both views borrow the same backing vector. If you only need one half
+    /// long-term, call [`to_vector`][Self::to_vector] on it and drop the views
+    /// to free the rest.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn split_at(&self, index: usize) -> (VectorRange<'a, A, P>, VectorRange<'a, A, P>) {
+        let index = index.min(self.len());
+        (self.subrange(..index), self.subrange(index..))
+    }
+
+    /// Returns a narrower view with the first `count` elements of this view removed.
+    ///
+    /// Equivalent to `self.subrange(count..)`. No elements are copied.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn skip(&self, count: usize) -> VectorRange<'a, A, P> {
+        self.subrange(count.min(self.len())..)
+    }
+
+    /// Returns a narrower view of the first `count` elements of this view.
+    ///
+    /// Equivalent to `self.subrange(..count)`. No elements are copied.
+    ///
+    /// Time: O(1)
+    #[must_use]
+    pub fn take(&self, count: usize) -> VectorRange<'a, A, P> {
+        self.subrange(..count.min(self.len()))
+    }
+
     /// Materialises this view into an owned [`GenericVector`].
+    ///
+    /// In most cases you do not need to call this explicitly — views support
+    /// iteration, indexed access, and further splitting without materialising.
+    /// The main reason to materialise is memory: if you split a vector and only
+    /// need one half long-term, materialise that half into an owned vector, then
+    /// let the views and the original go out of scope. Rust's normal drop rules
+    /// will release the backing vector's reference count, freeing the unused half.
     ///
     /// Clones the underlying vector in O(1) (structural sharing), then extracts
     /// the slice in O(log n).
@@ -3275,8 +3287,139 @@ impl<'a, A, P: SharedPointerKind> VectorRange<'a, A, P> {
     where
         A: Clone,
     {
-        let mut v = self.vector.clone();
-        v.slice(self.start..self.end)
+        // O(1) structural clone, then two O(log n) splits to extract the range.
+        let mut v = self.vector.clone().split_off(self.start);
+        let _ = v.split_off(self.end - self.start);
+        v
+    }
+
+    /// Returns the first element in this view, or `None` if empty.
+    ///
+    /// Alias for [`first`][Self::first].
+    ///
+    /// Time: O(log n)
+    #[inline]
+    #[must_use]
+    pub fn front(&self) -> Option<&'a A> {
+        self.first()
+    }
+
+    /// Returns the first element in this view, or `None` if empty.
+    ///
+    /// Alias for [`first`][Self::first].
+    ///
+    /// Time: O(log n)
+    #[inline]
+    #[must_use]
+    pub fn head(&self) -> Option<&'a A> {
+        self.first()
+    }
+
+    /// Returns the last element in this view, or `None` if empty.
+    ///
+    /// Alias for [`last`][Self::last].
+    ///
+    /// Time: O(log n)
+    #[inline]
+    #[must_use]
+    pub fn back(&self) -> Option<&'a A> {
+        self.last()
+    }
+
+    /// Returns the relative index of the first occurrence of `value` in this
+    /// view, or `None` if it is not present.
+    ///
+    /// Indices are relative to the view's start: index `0` refers to the
+    /// first element of the view regardless of where it sits in the
+    /// underlying vector.
+    ///
+    /// Time: O(n)
+    #[must_use]
+    pub fn index_of(&self, value: &A) -> Option<usize>
+    where
+        A: PartialEq,
+    {
+        for (i, item) in self.iter().enumerate() {
+            if value == item {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Tests whether `value` is present in this view.
+    ///
+    /// Time: O(n)
+    #[must_use]
+    pub fn contains(&self, value: &A) -> bool
+    where
+        A: PartialEq,
+    {
+        self.index_of(value).is_some()
+    }
+
+    /// Binary searches this sorted view with a comparator function.
+    ///
+    /// Assumes the view's elements are already sorted by the same ordering
+    /// the comparator implements. Returns `Ok(index)` if found, or
+    /// `Err(index)` indicating where `value` would need to be inserted to
+    /// maintain sorted order. Indices are relative to the view's start.
+    ///
+    /// Time: O(log n)
+    pub fn binary_search_by<F>(&self, mut f: F) -> Result<usize, usize>
+    where
+        F: FnMut(&A) -> Ordering,
+    {
+        let mut size = self.len();
+        if size == 0 {
+            return Err(0);
+        }
+        let mut base = 0usize;
+        while size > 1 {
+            let half = size / 2;
+            let mid = base + half;
+            // mid < self.len() by construction: base + half < base + size ≤ self.len()
+            base = match f(self.get(mid).expect("mid within view bounds")) {
+                Ordering::Greater => base,
+                _ => mid,
+            };
+            size -= half;
+        }
+        // base < self.len() because size ≥ 1 at entry
+        match f(self.get(base).expect("base within view bounds")) {
+            Ordering::Equal => Ok(base),
+            Ordering::Greater => Err(base),
+            Ordering::Less => Err(base + 1),
+        }
+    }
+
+    /// Binary searches this sorted view for `value`.
+    ///
+    /// Returns `Ok(index)` if found, or `Err(index)` indicating where
+    /// `value` would need to be inserted to maintain sorted order.
+    /// Indices are relative to the view's start.
+    ///
+    /// Time: O(log n)
+    pub fn binary_search(&self, value: &A) -> Result<usize, usize>
+    where
+        A: Ord,
+    {
+        self.binary_search_by(|e| e.cmp(value))
+    }
+
+    /// Binary searches this sorted view with a key extraction function.
+    ///
+    /// Returns `Ok(index)` if an element with key `b` is found, or
+    /// `Err(index)` indicating the insertion point. Indices are relative
+    /// to the view's start.
+    ///
+    /// Time: O(log n)
+    pub fn binary_search_by_key<B, F>(&self, b: &B, mut f: F) -> Result<usize, usize>
+    where
+        F: FnMut(&A) -> B,
+        B: Ord,
+    {
+        self.binary_search_by(|k| f(k).cmp(b))
     }
 }
 
@@ -3457,7 +3600,8 @@ mod test {
         assert_eq!(Some(&4098), l.get(1));
         assert_eq!(Some(&4097), l.get(2));
         let len = l.len();
-        let _ = l.slice(2..len);
+        // Checks that subrange on a large back-appended vector does not panic.
+        let _ = l.subrange(2..len);
     }
 
     #[test]
@@ -3520,8 +3664,7 @@ mod test {
             l = tmp;
         }
         assert_eq!(4100, l.len());
-        let len = l.len();
-        let tail = l.slice(1..len);
+        let tail = l.split_off(1);
         assert_eq!(1, l.len());
         assert_eq!(4099, tail.len());
         assert_eq!(Some(&0), l.get(0));
@@ -3601,7 +3744,7 @@ mod test {
         }
 
         while !v.is_empty() {
-            v = v.take(v.len() - 1);
+            v.truncate(v.len() - 1);
         }
     }
 
@@ -5255,5 +5398,66 @@ mod test {
         assert_eq!(view.get(100), None);
         let items: Vec<i32> = view.iter().copied().collect();
         assert_eq!(items, (100..200).collect::<Vec<_>>());
+    }
+
+    // --- split_at ---
+
+    #[test]
+    fn split_at_basic() {
+        let v = vector![10, 20, 30, 40, 50];
+        let (left, right) = v.split_at(3);
+        assert_eq!(left.len(), 3);
+        assert_eq!(right.len(), 2);
+        assert_eq!(left.get(0), Some(&10));
+        assert_eq!(left.get(2), Some(&30));
+        assert_eq!(right.get(0), Some(&40));
+        assert_eq!(right.get(1), Some(&50));
+    }
+
+    #[test]
+    fn split_at_no_gap() {
+        // Left and right together cover all elements exactly once
+        let v: Vector<i32> = (0..10).collect();
+        let (left, right) = v.split_at(5);
+        let all_left: Vec<i32> = left.iter().copied().collect();
+        let all_right: Vec<i32> = right.iter().copied().collect();
+        assert_eq!(all_left, vec![0, 1, 2, 3, 4]);
+        assert_eq!(all_right, vec![5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn split_at_at_zero() {
+        let v = vector![1, 2, 3];
+        let (left, right) = v.split_at(0);
+        assert!(left.is_empty());
+        assert_eq!(right.len(), 3);
+    }
+
+    #[test]
+    fn split_at_at_len() {
+        let v = vector![1, 2, 3];
+        let (left, right) = v.split_at(3);
+        assert_eq!(left.len(), 3);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn split_at_beyond_len_clamps() {
+        let v = vector![1, 2, 3];
+        let (left, right) = v.split_at(999);
+        assert_eq!(left.len(), 3);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn split_at_on_range() {
+        // VectorRange::split_at uses relative indexing
+        let v: Vector<i32> = (0..10).collect();
+        let view = v.subrange(2..8); // [2, 3, 4, 5, 6, 7]
+        let (left, right) = view.split_at(3); // rel 3 → abs 5
+        assert_eq!(left.len(), 3); // [2, 3, 4]
+        assert_eq!(right.len(), 3); // [5, 6, 7]
+        assert_eq!(left.get(0), Some(&2));
+        assert_eq!(right.get(0), Some(&5));
     }
 }

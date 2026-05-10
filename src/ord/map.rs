@@ -45,7 +45,8 @@ use core::iter::{FromIterator, FusedIterator};
 use core::mem;
 use core::ops::{Bound, Index, IndexMut, RangeBounds};
 #[cfg(feature = "ord-hash")]
-use core::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 use archery::{SharedPointer, SharedPointerKind};
 use equivalent::Comparable;
@@ -357,14 +358,15 @@ where
     /// let view = m.submap(2..=3);
     /// assert_eq!(view.get(&2), Some(&"b"));
     /// assert_eq!(view.get(&4), None); // outside range
-    /// assert_eq!(view.len(), 2);      // O(1) — cached at construction
+    /// assert_eq!(view.len(), 2);      // O(k) first call, O(1) thereafter
     ///
     /// let inner = view.submap(3..);
     /// assert_eq!(inner.get(&3), Some(&"c"));
     /// assert_eq!(inner.len(), 1);
     /// ```
     ///
-    /// Time: O(k) where k is the number of entries in the range (counts once at construction)
+    /// Time: O(log n) construction; [`OrdMapRange::len`] is O(k) on the first call,
+    /// O(1) thereafter
     #[must_use]
     pub fn submap<R>(&self, range: R) -> OrdMapRange<'_, K, V, P>
     where
@@ -372,13 +374,13 @@ where
         K: Clone,
     {
         let bounds = (range.start_bound().cloned(), range.end_bound().cloned());
-        let (len, first, last) = ord_map_range_scan(self, &bounds);
+        let (first, last) = ord_map_range_endpoints(self, &bounds);
         OrdMapRange {
             map: self,
             bounds,
-            len,
             first,
             last,
+            cached_len: AtomicUsize::new(LEN_UNCOMPUTED),
         }
     }
 
@@ -1875,9 +1877,14 @@ where
     /// less than `key`, every key in `right` is strictly greater, and `exact_value`
     /// is `Some(v)` if `key` was present. Unlike [`split_lookup`][Self::split_lookup]
     /// (which is O(n log n)), this walk is O(depth × NODE_SIZE) ≈ O(log n).
+    ///
+    /// This is an internal primitive used by rayon parallel operations and,
+    /// when the rayon feature is enabled, by [`OrdMapRange::to_map`] for
+    /// an O(log n) fast path. Prefer [`GenericOrdMap::split_at_key`] for
+    /// the view-based public API.
     #[cfg(any(test, feature = "rayon"))]
     #[must_use]
-    pub fn split_at_key_consuming<Q>(self, key: &Q) -> (Self, Option<V>, Self)
+    pub(crate) fn split_at_key_consuming<Q>(self, key: &Q) -> (Self, Option<V>, Self)
     where
         Q: Comparable<K> + ?Sized,
     {
@@ -1909,12 +1916,50 @@ where
         }
     }
 
+    /// Returns two borrowed range views split at `key`.
+    ///
+    /// The left view covers all entries with keys strictly less than `key`; the
+    /// right view covers `key` and all entries above. Together the two views span
+    /// the entire map with no overlap and no gap. If `key` is absent, the right
+    /// view still starts from the nearest key above `key`.
+    ///
+    /// Both views borrow the full backing map — no entries are copied, and the
+    /// original map is not consumed. As long as either view is alive, the entire
+    /// map stays in memory. If you only need one half long-term and want to free
+    /// the other, call [`OrdMapRange::to_map`] on the half you need, then drop
+    /// the views and the original map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # #[macro_use] extern crate pds;
+    /// # use pds::ordmap::OrdMap;
+    /// let m = ordmap!{1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+    /// let (left, right) = m.split_at_key(&3);
+    /// assert_eq!(left.len(), 2);           // keys 1, 2
+    /// assert_eq!(right.len(), 2);          // keys 3, 4
+    /// assert_eq!(right.get(&3), Some(&"c"));
+    /// assert_eq!(left.get(&3), None);
+    /// ```
+    ///
+    /// Time: O(log n) — two [`submap`][Self::submap] calls
+    #[must_use]
+    pub fn split_at_key(&self, key: &K) -> (OrdMapRange<'_, K, V, P>, OrdMapRange<'_, K, V, P>)
+    where
+        K: Clone,
+    {
+        (
+            self.submap((Bound::Unbounded, Bound::Excluded(key.clone()))),
+            self.submap((Bound::Included(key.clone()), Bound::Unbounded)),
+        )
+    }
+
     /// Join two maps where every key in `self` is strictly less than every key in
     /// `other`, in O(log n).
     ///
-    /// This is the inverse of [`split_at_key_consuming`][Self::split_at_key_consuming].
-    /// The precondition (all self-keys < all other-keys) is not checked; violating it
-    /// produces a map with incorrect key ordering.
+    /// Used internally by rayon parallel operations as the inverse of
+    /// `split_at_key_consuming`. The precondition (all self-keys < all other-keys)
+    /// is not checked; violating it produces a map with incorrect key ordering.
     #[cfg(any(test, feature = "rayon"))]
     #[must_use]
     pub fn concat_ordered(self, other: Self) -> Self {
@@ -2919,6 +2964,68 @@ where
 }
 impl<'a, K, V, P> FusedIterator for RangedIter<'a, K, V, P> where P: SharedPointerKind {}
 
+/// An iterator over the keys of a ranged view.
+pub struct RangedKeys<'a, K, V, P: SharedPointerKind> {
+    it: RangedIter<'a, K, V, P>,
+}
+
+impl<'a, K, V, P> Iterator for RangedKeys<'a, K, V, P>
+where
+    P: SharedPointerKind,
+{
+    type Item = &'a K;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.it.next().map(|(k, _)| k)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.it.size_hint()
+    }
+}
+
+impl<'a, K, V, P> DoubleEndedIterator for RangedKeys<'a, K, V, P>
+where
+    P: SharedPointerKind,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.it.next_back().map(|(k, _)| k)
+    }
+}
+
+impl<'a, K, V, P> FusedIterator for RangedKeys<'a, K, V, P> where P: SharedPointerKind {}
+
+/// An iterator over the values of a ranged view.
+pub struct RangedValues<'a, K, V, P: SharedPointerKind> {
+    it: RangedIter<'a, K, V, P>,
+}
+
+impl<'a, K, V, P> Iterator for RangedValues<'a, K, V, P>
+where
+    P: SharedPointerKind,
+{
+    type Item = &'a V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.it.next().map(|(_, v)| v)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.it.size_hint()
+    }
+}
+
+impl<'a, K, V, P> DoubleEndedIterator for RangedValues<'a, K, V, P>
+where
+    P: SharedPointerKind,
+{
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.it.next_back().map(|(_, v)| v)
+    }
+}
+
+impl<'a, K, V, P> FusedIterator for RangedValues<'a, K, V, P> where P: SharedPointerKind {}
+
 /// A mutable iterator over the key/value pairs of a map.
 ///
 /// Values can be modified in place. Keys are immutable because changing
@@ -3154,14 +3261,25 @@ impl<K: Ord> RangeBounds<K> for BoundsRef<'_, K> {
     }
 }
 
-/// Single-pass scan of a range: returns `(len, first, last)` without allocating.
+/// Sentinel for [`OrdMapRange::cached_len`] — element count not yet computed.
 ///
-/// Called once at [`OrdMapRange`] construction so that `len`, `first_key_value`,
-/// and `last_key_value` are all O(1) thereafter.
-fn ord_map_range_scan<'a, K, V, P>(
+/// `usize::MAX` is safe because a valid range length can never reach that value
+/// (the underlying map is bounded by `isize::MAX` bytes of memory).
+const LEN_UNCOMPUTED: usize = usize::MAX;
+
+/// Returns the first and last `(key, value)` pairs in `bounds` in O(log n).
+///
+/// Constructs a [`RangedIter`] and uses its [`DoubleEndedIterator`] impl: one
+/// `next()` call seeks to the first element, one `next_back()` call seeks to the
+/// last. The element count is deliberately *not* computed here — it is deferred to
+/// the first call of [`OrdMapRange::len`].
+///
+/// If the range is empty, returns `(None, None)`. For a single-element range,
+/// both slots hold the same reference.
+fn ord_map_range_endpoints<'a, K, V, P>(
     map: &'a GenericOrdMap<K, V, P>,
     bounds: &(Bound<K>, Bound<K>),
-) -> (usize, Option<(&'a K, &'a V)>, Option<(&'a K, &'a V)>)
+) -> (Option<(&'a K, &'a V)>, Option<(&'a K, &'a V)>)
 where
     K: Ord,
     P: SharedPointerKind,
@@ -3170,10 +3288,12 @@ where
         it: NodeIter::new(map.root.as_ref(), map.size, BoundsRef(&bounds.0, &bounds.1)),
     };
     match iter.next() {
-        None => (0, None, None),
+        None => (None, None),
         Some(first) => {
-            let (len, last) = iter.fold((1usize, first), |(n, _), item| (n + 1, item));
-            (len, Some(first), Some(last))
+            // For a single-element range the iterator is now exhausted from the
+            // front, so next_back() returns None — use `first` for both slots.
+            let last = iter.next_back().unwrap_or(first);
+            (Some(first), Some(last))
         }
     }
 }
@@ -3181,9 +3301,9 @@ where
 /// A borrowed, range-bounded view over a [`GenericOrdMap`].
 ///
 /// Constructed by [`GenericOrdMap::submap`]. Holds a reference to the underlying
-/// map, a pair of [`Bound<K>`] values, and metadata cached at construction:
-/// element count, first entry, and last entry. Allocation-free — no map data is
-/// copied.
+/// map, a pair of [`Bound<K>`] values, and the first and last entries (cached at
+/// O(log n) construction cost). The element count is computed lazily on the first
+/// call to [`Self::len`]. Allocation-free — no map data is copied.
 ///
 /// Because the map is immutably borrowed for the view's lifetime, none of the
 /// cached values can become stale. The Rust borrow checker enforces this.
@@ -3193,9 +3313,13 @@ where
 pub struct OrdMapRange<'a, K, V, P: SharedPointerKind> {
     map: &'a GenericOrdMap<K, V, P>,
     bounds: (Bound<K>, Bound<K>),
-    len: usize,
     first: Option<(&'a K, &'a V)>,
     last: Option<(&'a K, &'a V)>,
+    /// Element count, computed lazily on the first call to [`Self::len`].
+    ///
+    /// Holds [`LEN_UNCOMPUTED`] until then. All concurrent writes are idempotent
+    /// (every thread arrives at the same count), so `Relaxed` ordering is safe.
+    cached_len: AtomicUsize,
 }
 
 impl<'a, K, V, P: SharedPointerKind> Clone for OrdMapRange<'a, K, V, P>
@@ -3206,9 +3330,10 @@ where
         OrdMapRange {
             map: self.map,
             bounds: self.bounds.clone(),
-            len: self.len,
             first: self.first,
             last: self.last,
+            // Propagate whatever has been cached (may still be LEN_UNCOMPUTED).
+            cached_len: AtomicUsize::new(self.cached_len.load(AtomicOrdering::Relaxed)),
         }
     }
 }
@@ -3315,17 +3440,33 @@ where
     /// Time: O(1)
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.first.is_none()
     }
 
     /// Returns the number of entries within this view.
     ///
-    /// Cached at construction — O(1), same as [`GenericOrdMap::len`].
+    /// The count is computed lazily on the first call by scanning the range
+    /// (O(k), where k is the number of entries in the view), then cached in an
+    /// atomic. Every subsequent call is O(1). Concurrent callers are safe —
+    /// all racing writes produce the same value.
     ///
-    /// Time: O(1)
+    /// Time: O(k) first call; O(1) thereafter
     #[must_use]
     pub fn len(&self) -> usize {
-        self.len
+        let cached = self.cached_len.load(AtomicOrdering::Relaxed);
+        if cached != LEN_UNCOMPUTED {
+            return cached;
+        }
+        let count = RangedIter {
+            it: NodeIter::new(
+                self.map.root.as_ref(),
+                self.map.size,
+                BoundsRef(&self.bounds.0, &self.bounds.1),
+            ),
+        }
+        .count();
+        self.cached_len.store(count, AtomicOrdering::Relaxed);
+        count
     }
 
     /// Returns the first `(key, value)` pair in this view, or `None` if empty.
@@ -3346,26 +3487,86 @@ where
 
     /// Materialises this view into an owned [`GenericOrdMap`].
     ///
-    /// Clones each key and value in the range and uses bottom-up B+ tree
-    /// construction — O(k), not O(k log k).
+    /// In most cases you do not need to call this explicitly — views support
+    /// iteration, lookup, and further splitting without materialising. The main
+    /// reason to materialise is memory: if you split a map and only need one
+    /// half long-term, materialise that half into an owned map, then let the
+    /// views and the original go out of scope. Rust's normal drop rules will
+    /// release the backing map's reference count, freeing the unused half.
     ///
-    /// Time: O(k) where k is the number of entries in the range
+    /// When the `rayon` feature is enabled, uses O(log n) structural trimming:
+    /// clones the backing map in O(1) (structural sharing) then trims each
+    /// bound with a single O(log n) split. Without the `rayon` feature, falls
+    /// back to O(k) bottom-up construction from the range's iterator.
+    ///
+    /// The resulting map shares B+ tree nodes with the original (copy-on-write
+    /// semantics) until mutations occur.
+    ///
+    /// Time: O(log n) with `rayon` feature; O(k) otherwise
     #[must_use]
     pub fn to_map(&self) -> GenericOrdMap<K, V, P>
     where
         K: Clone,
         V: Clone,
     {
+        // Fast path when structural split machinery is available (rayon feature or tests):
+        // clone the full map in O(1) then trim each bound with an O(log n) split.
+        // The block is the last expression when compiled with rayon — no `return` needed.
+        #[cfg(any(test, feature = "rayon"))]
+        {
+            // Clone is O(1) — only the Arc refcount on the root is bumped.
+            let mut result = self.map.clone();
+
+            // Trim to the start bound.
+            match &self.bounds.0 {
+                Bound::Unbounded => {}
+                Bound::Included(k) => {
+                    let (_, opt_v, right) = result.split_at_key_consuming(k);
+                    result = right;
+                    if let Some(v) = opt_v {
+                        // k is included — reinsert it at the front.
+                        result = result.update(k.clone(), v);
+                    }
+                }
+                Bound::Excluded(k) => {
+                    let (_, _, right) = result.split_at_key_consuming(k);
+                    result = right;
+                }
+            }
+
+            // Trim to the end bound.
+            match &self.bounds.1 {
+                Bound::Unbounded => {}
+                Bound::Included(k) => {
+                    let (left, opt_v, _) = result.split_at_key_consuming(k);
+                    result = left;
+                    if let Some(v) = opt_v {
+                        // k is included — reinsert it at the back.
+                        result = result.update(k.clone(), v);
+                    }
+                }
+                Bound::Excluded(k) => {
+                    let (left, _, _) = result.split_at_key_consuming(k);
+                    result = left;
+                }
+            }
+
+            result
+        }
+
+        // Slow path (no rayon feature): O(k) bottom-up construction from a sorted iterator.
+        #[cfg(not(any(test, feature = "rayon")))]
         GenericOrdMap::from_sorted_iter(self.iter().map(|(k, v)| (k.clone(), v.clone())))
     }
 
     /// Returns a narrower view bounded by `range` intersected with `self`'s bounds.
     ///
     /// If `range` extends beyond `self`'s own bounds, the bounds are clamped so the
-    /// sub-view never exceeds the parent scope. The element count is counted once
-    /// at construction and cached, so subsequent [`len`][Self::len] calls are O(1).
+    /// sub-view never exceeds the parent scope. The element count is computed lazily
+    /// on the first call to [`len`][Self::len].
     ///
-    /// Time: O(k') where k' is the number of entries in the narrowed range
+    /// Time: O(log n) construction; [`len`][Self::len] is O(k') on the first call,
+    /// O(1) thereafter
     #[must_use]
     pub fn submap<R>(&self, range: R) -> OrdMapRange<'a, K, V, P>
     where
@@ -3375,13 +3576,308 @@ where
         let start = ord_map_range_intersect_start(&self.bounds.0, range.start_bound().cloned());
         let end = ord_map_range_intersect_end(&self.bounds.1, range.end_bound().cloned());
         let bounds = (start, end);
-        let (len, first, last) = ord_map_range_scan(self.map, &bounds);
+        let (first, last) = ord_map_range_endpoints(self.map, &bounds);
         OrdMapRange {
             map: self.map,
             bounds,
-            len,
             first,
             last,
+            cached_len: AtomicUsize::new(LEN_UNCOMPUTED),
+        }
+    }
+
+    /// Returns two narrower views split at `key`, both bounded within `self`'s range.
+    ///
+    /// The left view covers entries with keys in `[self.start, key)` and the right
+    /// view covers `[key, self.end]`. Equivalent to
+    /// `(self.submap(..key), self.submap(key..))` with the parent's bounds applied.
+    ///
+    /// Both views borrow the same backing map. If you only need one half long-term,
+    /// call [`to_map`][Self::to_map] on it and drop the views to free the rest.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn split_at_key(&self, key: &K) -> (OrdMapRange<'a, K, V, P>, OrdMapRange<'a, K, V, P>)
+    where
+        K: Clone,
+    {
+        (
+            self.submap((Bound::Unbounded, Bound::Excluded(key.clone()))),
+            self.submap((Bound::Included(key.clone()), Bound::Unbounded)),
+        )
+    }
+
+    /// Returns an iterator over the keys in this view in ascending order.
+    ///
+    /// Time: O(log n) to position; O(k) to exhaust
+    #[must_use]
+    pub fn keys(&self) -> RangedKeys<'a, K, V, P> {
+        RangedKeys { it: self.iter() }
+    }
+
+    /// Returns an iterator over the values in this view in ascending key order.
+    ///
+    /// Time: O(log n) to position; O(k) to exhaust
+    #[must_use]
+    pub fn values(&self) -> RangedValues<'a, K, V, P> {
+        RangedValues { it: self.iter() }
+    }
+
+    /// Returns the closest entry with a key ≤ `key` within this view's bounds,
+    /// or `None` if no such entry exists.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get_prev<Q>(&self, key: &Q) -> Option<(&'a K, &'a V)>
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        self.map.get_prev(key).filter(|(k, _)| self.in_bounds(*k))
+    }
+
+    /// Returns the closest entry with a key ≥ `key` within this view's bounds,
+    /// or `None` if no such entry exists.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get_next<Q>(&self, key: &Q) -> Option<(&'a K, &'a V)>
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        self.map.get_next(key).filter(|(k, _)| self.in_bounds(*k))
+    }
+
+    /// Returns the closest entry with a key strictly less than `key` within
+    /// this view's bounds, or `None` if no such entry exists.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get_prev_exclusive<Q>(&self, key: &Q) -> Option<(&'a K, &'a V)>
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        self.map
+            .get_prev_exclusive(key)
+            .filter(|(k, _)| self.in_bounds(*k))
+    }
+
+    /// Returns the closest entry with a key strictly greater than `key` within
+    /// this view's bounds, or `None` if no such entry exists.
+    ///
+    /// Time: O(log n)
+    #[must_use]
+    pub fn get_next_exclusive<Q>(&self, key: &Q) -> Option<(&'a K, &'a V)>
+    where
+        Q: Comparable<K> + ?Sized,
+    {
+        self.map
+            .get_next_exclusive(key)
+            .filter(|(k, _)| self.in_bounds(*k))
+    }
+
+    /// Tests whether every `(key, value)` pair in this view also exists in
+    /// `other` with an equal value as determined by `cmp`.
+    ///
+    /// Uses a simultaneous sorted traversal of both collections, so the
+    /// comparison is O(k + m) rather than O(k log m).
+    ///
+    /// Time: O(k + m), where k is the view length and m is `other.len()`
+    #[must_use]
+    pub fn is_submap_by<B, RM, F, P2>(&self, other: RM, mut cmp: F) -> bool
+    where
+        F: FnMut(&V, &B) -> bool,
+        RM: Borrow<GenericOrdMap<K, B, P2>>,
+        P2: SharedPointerKind,
+    {
+        let other = other.borrow();
+        let mut it2 = other.iter();
+        let mut e2 = it2.next();
+        for (k1, v1) in self.iter() {
+            // Advance other's iterator until we reach a key >= k1.
+            loop {
+                match e2 {
+                    Some((k2, _)) if k2 < k1 => e2 = it2.next(),
+                    _ => break,
+                }
+            }
+            match e2 {
+                Some((k2, v2)) if k2 == k1 => {
+                    if !cmp(v1, v2) {
+                        return false;
+                    }
+                    // Advance past the matched entry so the next iteration's
+                    // inner loop starts at a fresh position.
+                    e2 = it2.next();
+                }
+                // k1 is absent from other, or other is exhausted.
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Tests whether every `(key, value)` pair in this view also exists in
+    /// `other` with an equal value. A proper submap must also have strictly
+    /// fewer entries than `other`.
+    ///
+    /// Time: O(k + m), where k is the view length and m is `other.len()`
+    #[must_use]
+    pub fn is_proper_submap_by<B, RM, F, P2>(&self, other: RM, cmp: F) -> bool
+    where
+        F: FnMut(&V, &B) -> bool,
+        RM: Borrow<GenericOrdMap<K, B, P2>>,
+        P2: SharedPointerKind,
+    {
+        self.len() < other.borrow().len() && self.is_submap_by(other, cmp)
+    }
+
+    /// Tests whether every `(key, value)` pair in this view also exists in
+    /// `other` with an equal value (using `PartialEq`).
+    ///
+    /// Time: O(k + m), where k is the view length and m is `other.len()`
+    #[must_use]
+    pub fn is_submap<RM>(&self, other: RM) -> bool
+    where
+        V: PartialEq,
+        RM: Borrow<GenericOrdMap<K, V, P>>,
+    {
+        self.is_submap_by(other.borrow(), PartialEq::eq)
+    }
+
+    /// Tests whether every `(key, value)` pair in this view also exists in
+    /// `other` with an equal value, and this view has strictly fewer entries
+    /// than `other`.
+    ///
+    /// Time: O(k + m), where k is the view length and m is `other.len()`
+    #[must_use]
+    pub fn is_proper_submap<RM>(&self, other: RM) -> bool
+    where
+        V: PartialEq,
+        RM: Borrow<GenericOrdMap<K, V, P>>,
+    {
+        self.is_proper_submap_by(other.borrow(), PartialEq::eq)
+    }
+
+    /// Tests whether this view shares no keys with `other`.
+    ///
+    /// Uses a simultaneous sorted traversal of both collections, returning
+    /// `false` at the first shared key. O(k + m) time.
+    ///
+    /// Time: O(k + m), where k is the view length and m is `other.len()`
+    #[must_use]
+    pub fn disjoint(&self, other: &GenericOrdMap<K, V, P>) -> bool {
+        let mut it1 = self.iter();
+        let mut it2 = other.iter();
+        let mut e1 = it1.next();
+        let mut e2 = it2.next();
+        loop {
+            match (e1, e2) {
+                (Some((k1, _)), Some((k2, _))) => match k1.cmp(k2) {
+                    Ordering::Less => e1 = it1.next(),
+                    Ordering::Greater => e2 = it2.next(),
+                    Ordering::Equal => return false,
+                },
+                _ => return true,
+            }
+        }
+    }
+
+    // Returns a view that keeps only the first `n` entries of this view.
+    // If the view has fewer than `n` entries, the full view is returned.
+    // Time: O(k) to find the nth key; O(log n) to construct the sub-view
+    fn empty_view(&self) -> OrdMapRange<'a, K, V, P>
+    where
+        K: Clone,
+    {
+        // Create a range whose start is strictly after the last key — always empty.
+        match self.last_key_value() {
+            None => self.clone(),
+            Some((k, _)) => self.submap((Bound::Excluded(k.clone()), Bound::Unbounded)),
+        }
+    }
+
+    /// Returns a view of the first `n` entries of this view.
+    ///
+    /// If `n` is zero, the returned view is empty. If `n` ≥ the number of
+    /// entries in this view, the full view is returned unchanged.
+    ///
+    /// When the view length `k` is already cached (e.g. after a previous call to
+    /// [`Self::len`]), the walk is O(min(n, k − n)) by iterating from whichever
+    /// end is closer. When `k` is not yet cached the walk is O(n).
+    ///
+    /// Time: O(min(n, k − n)) if len is cached; O(n) otherwise; plus O(log n) to construct the sub-view
+    #[must_use]
+    pub fn take(&self, n: usize) -> OrdMapRange<'a, K, V, P>
+    where
+        K: Clone,
+    {
+        if n == 0 {
+            return self.empty_view();
+        }
+        // If the length is cached we can choose the cheaper direction.
+        let cached = self.cached_len.load(AtomicOrdering::Relaxed);
+        if cached != LEN_UNCOMPUTED {
+            let k = cached;
+            if n >= k {
+                return self.clone();
+            }
+            // Forward costs n steps; backward costs k-n steps (nth_back(k-n)).
+            // Element at index n-1 from front == nth_back(k-n) from the back.
+            if 2 * n > k {
+                // Backward walk is cheaper.
+                return match self.iter().nth_back(k - n) {
+                    None => self.clone(),
+                    Some((key, _)) => {
+                        self.submap((Bound::Unbounded, Bound::Included(key.clone())))
+                    }
+                };
+            }
+        }
+        match self.iter().nth(n - 1) {
+            None => self.clone(),
+            Some((k, _)) => self.submap((Bound::Unbounded, Bound::Included(k.clone()))),
+        }
+    }
+
+    /// Returns a view with the first `n` entries of this view removed.
+    ///
+    /// If `n` ≥ the number of entries in this view, the returned view is empty.
+    ///
+    /// When the view length `k` is already cached (e.g. after a previous call to
+    /// [`Self::len`]), the walk is O(min(n, k − n)) by iterating from whichever
+    /// end is closer. When `k` is not yet cached the walk is O(n + 1).
+    ///
+    /// Time: O(min(n, k − n)) if len is cached; O(n + 1) otherwise; plus O(log n) to construct the sub-view
+    #[must_use]
+    pub fn skip(&self, n: usize) -> OrdMapRange<'a, K, V, P>
+    where
+        K: Clone,
+    {
+        if n == 0 {
+            return self.clone();
+        }
+        // If the length is cached we can choose the cheaper direction.
+        let cached = self.cached_len.load(AtomicOrdering::Relaxed);
+        if cached != LEN_UNCOMPUTED {
+            let k = cached;
+            if n >= k {
+                return self.empty_view();
+            }
+            // Forward costs n+1 steps (nth(n)); backward costs k-n steps (nth_back(k-1-n)).
+            // Element at index n from front == nth_back(k-1-n) from the back.
+            if 2 * n >= k {
+                // Backward walk is cheaper.
+                return match self.iter().nth_back(k - 1 - n) {
+                    None => self.empty_view(),
+                    Some((key, _)) => {
+                        self.submap((Bound::Included(key.clone()), Bound::Unbounded))
+                    }
+                };
+            }
+        }
+        match self.iter().nth(n) {
+            Some((k, _)) => self.submap((Bound::Included(k.clone()), Bound::Unbounded)),
+            None => self.empty_view(),
         }
     }
 }
@@ -5527,5 +6023,72 @@ mod test {
         let v = m.submap(1..=2);
         let sum: i32 = (&v).into_iter().map(|(_, &val)| val).sum();
         assert_eq!(sum, 30);
+    }
+
+    // --- split_at_key ---
+
+    #[test]
+    fn split_at_key_basic() {
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d"};
+        let (left, right) = m.split_at_key(&3);
+        // left: keys < 3; right: keys >= 3
+        assert_eq!(left.len(), 2);
+        assert_eq!(right.len(), 2);
+        assert_eq!(left.get(&1), Some(&"a"));
+        assert_eq!(left.get(&2), Some(&"b"));
+        assert_eq!(left.get(&3), None);
+        assert_eq!(right.get(&3), Some(&"c"));
+        assert_eq!(right.get(&4), Some(&"d"));
+        assert_eq!(right.get(&2), None);
+    }
+
+    #[test]
+    fn split_at_key_no_gap() {
+        // Left and right together cover all entries
+        let m: OrdMap<i32, i32> = (1..=10).map(|i| (i, i * 10)).collect();
+        let (left, right) = m.split_at_key(&5);
+        let all_left: Vec<i32> = left.iter().map(|(&k, _)| k).collect();
+        let all_right: Vec<i32> = right.iter().map(|(&k, _)| k).collect();
+        assert_eq!(all_left, vec![1, 2, 3, 4]);
+        assert_eq!(all_right, vec![5, 6, 7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn split_at_key_absent_key() {
+        // Key not in map — right view starts from next existing key
+        let m = ordmap! {1 => "a", 3 => "c", 5 => "e"};
+        let (left, right) = m.split_at_key(&4);
+        assert_eq!(left.len(), 2); // 1, 3
+        assert_eq!(right.len(), 1); // 5
+        assert_eq!(right.first_key_value(), Some((&5, &"e")));
+    }
+
+    #[test]
+    fn split_at_key_before_first() {
+        // Split before all keys — left is empty
+        let m = ordmap! {5 => "a", 10 => "b"};
+        let (left, right) = m.split_at_key(&1);
+        assert!(left.is_empty());
+        assert_eq!(right.len(), 2);
+    }
+
+    #[test]
+    fn split_at_key_after_last() {
+        // Split after all keys — right is empty
+        let m = ordmap! {1 => "a", 2 => "b"};
+        let (left, right) = m.split_at_key(&99);
+        assert_eq!(left.len(), 2);
+        assert!(right.is_empty());
+    }
+
+    #[test]
+    fn split_at_key_on_range() {
+        // OrdMapRange::split_at_key respects the parent bounds
+        let m = ordmap! {1 => "a", 2 => "b", 3 => "c", 4 => "d", 5 => "e"};
+        let view = m.submap(2..=4); // keys 2, 3, 4
+        let (left, right) = view.split_at_key(&3);
+        assert_eq!(left.len(), 1); // key 2 only
+        assert_eq!(right.len(), 2); // keys 3, 4
+        assert_eq!(right.get(&5), None); // clamped by parent
     }
 }

@@ -27,11 +27,10 @@
 //! ## Parallel iteration (`rayon` feature)
 //!
 //! With the `rayon` feature, `InsertionOrderSet` implements
-//! [`IntoParallelRefIterator`][rayon::iter::IntoParallelRefIterator], yielding `&A` references.
+//! `IntoParallelRefIterator`, yielding `&A` references.
 //! Note that parallel iteration does not preserve insertion order.
 //!
-//! [`FromParallelIterator`][rayon::iter::FromParallelIterator] and
-//! [`ParallelExtend`][rayon::iter::ParallelExtend] are intentionally absent — parallel
+//! `FromParallelIterator` and `ParallelExtend` are intentionally absent — parallel
 //! collection does not preserve insertion order. Use the sequential
 //! `FromIterator` / `Extend` impls instead.
 

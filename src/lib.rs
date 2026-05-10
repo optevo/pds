@@ -240,6 +240,40 @@
 //! | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 //! | [`Vector<A>`] | [RRB tree][rrb-tree] | [`Clone`] | insertion | O(1) | O(1)† | O(1)\* | O(1)\* | O(log n) | O(log n) | O(log n) |
 //!
+//! ### Range views
+//!
+//! [`Vector`] exposes [`vector::VectorRange`] — a borrowed, range-bounded view with
+//! O(1) construction. `OrdMap` and `OrdSet` will gain equivalent view types
+//! (`OrdMapRange`, `OrdSetRange`) following the same design.
+//!
+//! A `VectorRange` records a reference to the original vector plus two integer bounds.
+//! Construction does no tree work at all — no element access, no allocation:
+//!
+//! | Method | Returns | Time |
+//! | --- | --- | --- |
+//! | [`Vector::take`][vector::GenericVector::take] | first `n` elements | O(1) |
+//! | [`Vector::skip`][vector::GenericVector::skip] | all but first `n` | O(1) |
+//! | [`Vector::split_at`][vector::GenericVector::split_at] | `(prefix, suffix)` | O(1) |
+//! | [`Vector::subrange`][vector::GenericVector::subrange] | arbitrary sub-slice | O(1) |
+//! | `view.take` / `view.skip` / `view.subrange` | narrower view | O(1) |
+//!
+//! The view borrows the original; both share the same backing tree without
+//! allocating any extra memory. Call
+//! [`VectorRange::to_vector`][vector::VectorRange::to_vector] to obtain an owned
+//! copy (O(log n) — two structural splits on the underlying tree).
+//!
+//! Before range views, working with a prefix or suffix meant clone-and-split:
+//!
+//! ```ignore
+//! // O(log n): clone is O(1) but split_off walks the tree.
+//! let mut prefix = vector.clone();
+//! let _rest = prefix.split_off(n);
+//! ```
+//!
+//! A view is strictly cheaper: `take(n)` is pure integer arithmetic. Views are
+//! the right default for any operation that reads a subrange without needing to
+//! own it.
+//!
 //! ### Maps
 //!
 //! Maps are mappings of keys to values, where the most common read

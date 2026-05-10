@@ -75,6 +75,69 @@ share unchanged subtrees with the original.
 All collection types implement `Display` for human-readable output.
 `Debug` is also implemented on all types for use in format strings and test assertions.
 
+## Range views
+
+`Vector` exposes `VectorRange` — a borrowed, range-bounded view with O(1) construction.
+`OrdMap` and `OrdSet` will gain equivalent view types (`OrdMapRange`, `OrdSetRange`)
+following the same design.
+
+### How views work
+
+A `VectorRange` holds a reference to the original vector plus two integer bounds.
+Construction records only those three values — no tree walk, no element copy:
+
+| Method | Returns | Time |
+|--------|---------|------|
+| `vector.take(n)` | first `n` elements | O(1) |
+| `vector.skip(n)` | all but the first `n` elements | O(1) |
+| `vector.split_at(i)` | `(prefix, suffix)` pair | O(1) |
+| `vector.subrange(lo..hi)` | arbitrary sub-slice | O(1) |
+| `view.take(n)` / `view.skip(n)` / `view.subrange(r)` | narrower view | O(1) |
+
+The view borrows the original. Both the view and the vector share the same backing
+tree — no extra memory is allocated.
+
+### Iterating and inspecting without materialising
+
+Most operations work directly on the view:
+
+```rust
+let data: Vector<i32> = (0..1000).collect();
+
+// Iterate — O(n) work, O(1) view construction.
+for x in data.take(100) { /* ... */ }
+
+// Check length — O(1).
+assert_eq!(data.skip(900).len(), 100);
+
+// Chain narrowing operations — all O(1).
+let middle = data.skip(200).take(600); // elements 200..800
+println!("{}", middle.len());          // 600
+```
+
+Call `.to_vector()` when you need an owned copy:
+
+```rust
+// Materialise — O(log n) two-split on the underlying tree.
+let owned: Vector<i32> = data.take(100).to_vector();
+```
+
+### Why O(1) construction matters
+
+Before range views, working with a prefix meant clone-and-split:
+
+```rust
+// O(log n): clone is O(1) but split_off walks the tree.
+let mut prefix = data.clone();
+let _rest = prefix.split_off(100);
+```
+
+`VectorRange` costs strictly less: `take(100)` is pure integer arithmetic.
+Views are the right default for any operation that reads a subrange without
+needing to own it.
+
+---
+
 ## pds vs the standard library
 
 The standard library provides `HashMap`, `BTreeMap`, and `Vec` as mutable, owned

@@ -1487,8 +1487,7 @@ where
 
 /// Count the number of key-value entries in an optional tree node.
 ///
-/// Used by [`split_at_key_consuming`][crate::ord::map::GenericOrdMap::split_at_key_consuming]
-/// to recompute the `size` field after a structural split. O(n).
+/// Used to recompute the `size` field after a structural split. O(n).
 #[cfg(any(test, feature = "rayon"))]
 pub(crate) fn count_entries<K, V, P: SharedPointerKind>(node: &Option<Node<K, V, P>>) -> usize {
     match node {

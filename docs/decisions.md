@@ -42,6 +42,94 @@ new entry explaining why the earlier reasoning no longer holds.
 
 ## Decisions {#sec:decision-entries}
 
+## DEC-039: `*Range` view types — design principles {#sec:dec-039}
+
+**Date:** 2026-04-27
+**Status:** Accepted
+
+**Context:**
+`OrdMapRange`, `OrdSetRange`, and `VectorRange` are borrowed, range-bounded views
+over their respective collection types. Several design questions arose during
+implementation: whether to eagerly or lazily compute metadata (first/last
+element, length), and whether methods that return a subset of a collection
+should return a view or an owned copy.
+
+An earlier concern was raised: if view construction costs O(log n) (to cache
+first/last pointers), the lifetime constraint imposed on the caller is a real
+ergonomic cost with no performance benefit — the old owned approach (`take(&self)
+-> Self` via O(1) clone + O(log n) split_off) was the same asymptotic cost and
+produced a freely-storable, independently-owned value. That concern was resolved
+by making `VectorRange` construction O(1): only integer bounds are stored, all
+metadata is deferred. At O(1) construction, range views are **strictly cheaper**
+than the owned approach for every operation that does not require materialisation.
+The lifetime constraint remains but is justified: for the common case (iterate,
+check len, chain take/skip, peek first/last) nothing is ever materialised; for the
+uncommon case (independent ownership), `.to_vector()` costs the same O(log n) as
+the old approach.
+
+**Decision:**
+
+**1. Construction must be O(1) — store only what bounds the view.**
+No work is done at construction time beyond recording the bounds. For
+`VectorRange`, bounds are integer indices (`start`, `end`); no tree lookups.
+For `OrdMapRange`/`OrdSetRange`, bounds are owned `Bound<K>` values cloned
+from the caller's range argument; no iterator walks.
+
+**2. Metadata is deferred — computed on demand, not at construction.**
+- `len()` on `VectorRange`: O(1) — `end - start`.
+- `first()`/`last()` on `VectorRange`: O(log n) — single tree lookup. Not
+  cached; the vector is immutably borrowed so the result is stable, but
+  repeated calls are rare enough that caching is not worth the struct cost.
+- `len()` on `OrdMapRange`/`OrdSetRange`: O(k) first call, O(1) thereafter —
+  cached via `AtomicUsize`. Counting bounded entries requires iterating the
+  range; the atomic allows the cache to be filled without `&mut self`.
+- `first_key_value()`/`last_key_value()` on `OrdMapRange`: O(log n) —
+  iterator walk from bounds. Eagerly computed at construction because
+  (a) `OrdMapRange` construction is already O(log n) for bound setup, and
+  (b) `is_empty()` can delegate to `first_key_value().is_none()` in O(log n)
+  without needing a separate tree walk. The cost is paid once and reused.
+  This asymmetry with `VectorRange` is intentional: integer indices make
+  deferred first/last free; key-based bounds do not.
+
+**3. The rule of thumb — defer unless storing is free.**
+If the metadata can be derived in O(1) from already-stored data (e.g., index
+arithmetic), compute on demand with no cache. If computing requires a tree
+walk AND the result will almost certainly be needed (e.g., `is_empty()` via
+first_key_value on OrdMapRange), store eagerly to avoid paying twice.
+
+**4. `*Range` types expose the same read-only API as the original collection.**
+Every `&self` method on the original that makes sense for a bounded subview
+must exist on the `Range` type. This includes element access, iterators,
+metadata, and subset/membership queries. The `*Range` type is a first-class
+citizen, not a thin iteration helper. Parity gaps are tracked in
+`docs/impl-plan.md`.
+
+**Alternatives considered:**
+- *Lazy `first`/`last` with `Cell` on `OrdMapRange`* — `Cell<Option<(&'a K, &'a V)>>`
+  would work (the reference type is `Copy`) but makes the type `!Sync`. Rejected
+  because `OrdMapRange` needs to be `Sync` when `K`/`V` are, and the construction
+  cost is already O(log n) anyway.
+- *Always eager (pre-compute everything at construction)* — Makes construction
+  O(k) for `len`. Rejected; range views are often created just to iterate, and
+  O(k) construction for an O(k) iteration is wasteful.
+- *Always lazy (nothing at construction)* — Consistent but makes `is_empty()`
+  O(log n) with no caching, which is surprising for a frequently-called method.
+  Rejected for `OrdMapRange`; accepted for `VectorRange` where O(1) `is_empty()`
+  is available without any cache.
+
+**Consequences:**
+- `VectorRange` struct has no cached fields beyond `start`/`end`. Construction
+  is pure O(1). All view operations (`split_at`, `take`, `skip`, `subrange`)
+  are O(1). This is a strict improvement over the original O(log n) construction.
+- `OrdMapRange`/`OrdSetRange` construction is O(log n) for `first`/`last`;
+  `is_empty()` is O(1) after that. Consistent with the original collection's
+  `get_min`/`get_max` being O(log n).
+- This design must be followed when adding new `*Range` types or new fields
+  to existing ones. Any proposed eager computation at construction requires
+  justification against this rule.
+
+---
+
 ## DEC-001: Fork maintenance strategy — upstream-first
 
 **Date:** 2026-04-24

@@ -105,6 +105,54 @@ across every collection type that supports them:
 
 ---
 
+## `*Range` view types — design rules
+
+*(pds-specific — no equivalent in rust-template; rationale in DEC-039)*
+
+`OrdMapRange`, `OrdSetRange`, and `VectorRange` are borrowed, range-bounded views
+over their collection types. The following rules apply when adding new `*Range`
+types or extending existing ones.
+
+### Construction must be O(1)
+
+View construction records only what defines the range — integer indices for
+`VectorRange`, cloned `Bound<K>` values for `OrdMapRange`/`OrdSetRange`. No
+tree lookups, no iterator walks at construction time.
+
+The rule of thumb: **defer any computation that requires touching the tree.**
+
+### Metadata is computed lazily — defer unless storing is free
+
+| Metadata | `VectorRange` | `OrdMapRange`/`OrdSetRange` |
+|----------|--------------|----------------------------|
+| `len` | O(1) — `end - start` | O(k) first call, O(1) cached via `AtomicUsize` |
+| `is_empty` | O(1) — `start == end` | O(log n) via `first_key_value()` |
+| `first` / `last` | O(log n) on demand | Eagerly computed at construction (O(log n)); `is_empty()` then derives from this |
+
+The asymmetry between `VectorRange` (fully deferred) and `OrdMapRange` (eager
+first/last) is intentional:
+- Integer bounds make deferred `first`/`last` free — `vector.get(start)` — so
+  there is no benefit to caching.
+- Key bounds require an iterator walk to find the actual first/last entry. Since
+  `is_empty()` also needs this, it is worth computing once at construction.
+
+**Do not add eager computation to `VectorRange`** for first/last — it was
+deliberately removed to make all view operations O(1). Any PR that re-introduces
+eager first/last fetching to `VectorRange` must cite a specific, measured
+performance reason.
+
+### `*Range` types expose the same read-only API as the original collection
+
+Every `&self` method on the original that makes sense over a bounded subview must
+exist on the `Range` type with identical semantics (indices are relative to the
+view's start). This includes element access, containment, iteration, neighbour
+lookup, and subset/membership tests. Mutation methods are excluded.
+
+Gaps in parity are bugs, not "nice to haves". Track them in `docs/impl-plan.md`
+and close them before releasing a new version.
+
+---
+
 ### Change discipline
 
 *(pds-specific — no equivalent in rust-template)*

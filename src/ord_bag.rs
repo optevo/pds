@@ -53,7 +53,7 @@
 //! ## Parallel iteration (`rayon` feature)
 //!
 //! With the `rayon` feature, `OrdBag` provides a parallel iterator via
-//! [`par_iter()`][rayon::iter::IntoParallelRefIterator::par_iter] — yields
+//! `par_iter()` — yields
 //! `(&A, usize)` pairs in parallel (one per distinct element).
 
 use alloc::vec::Vec;
