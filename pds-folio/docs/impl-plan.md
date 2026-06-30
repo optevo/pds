@@ -19,6 +19,32 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-06-30] G.3 — Reference counting and `Drop`.**
+  `NodeStore<B>` gains a `refcounts: HashMap<u64, u32>` field tracking structural
+  sharing across `HamtMap` snapshots.  Absent from the table = implicit refcount 1
+  (page has exactly one owner).
+
+  `Clone` impl: increments the root page's refcount — O(1).
+
+  `Drop` impl: calls `collect_pages_to_free` (iterative, explicit stack — no
+  recursion risk) which decrements refcounts for all reachable pages; pages that
+  reach 0 are batch-freed via `NodeStore::free_nodes` (single WAL commit).
+
+  `insert_into_internal` and `remove_from_internal`: when a new internal node is
+  allocated that reuses existing child page IDs (path-copy leaves unchanged
+  subtrees shared), those children have their refcounts incremented immediately —
+  they are now owned by both the old and new internal nodes.  On Drop, the old
+  node's `collect_pages_to_free` decrements them back to 1, leaving the children
+  live under the new node.
+
+  `remove_from_leaf` and `remove_from_internal` (absent-key path): now return the
+  original `page_id` unchanged instead of re-allocating — eliminates the wasteful
+  copy noted in G.2.
+
+  5 new unit tests (drop empty, clone shares + original drop leaves clone intact,
+  all clones dropped refcounts empty, multiple snapshots independent,
+  remove-absent-key no extra alloc).  All 37 lib + 6 doc tests green.
+
 - **[2026-07-01] G.2 — `HamtMap` CRUD.**
   `src/hamt.rs` implements `HamtMap<K, V, C, B>` with full path-copy CRUD.
 

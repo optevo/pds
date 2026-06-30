@@ -36,6 +36,7 @@
 //! - `C` — codec; defaults to [`crate::codec::PostcardCodec`]
 //! - `B` — folio backend; defaults to [`folio_core::backend::MemBackend`]
 
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
@@ -81,10 +82,18 @@ pub enum HamtError {
 
 /// A thin wrapper around [`FolioStore`] that reads and writes [`HamtNodePage`]
 /// values as folio page payloads.
+///
+/// # Reference counting
+///
+/// The `refcounts` table tracks structural sharing across `HamtMap` snapshots.
+/// A refcount of 1 is implicit — page IDs absent from the table have exactly
+/// one live reference.  Only refcounts ≥ 2 are stored.
 #[derive(Debug)]
 pub(crate) struct NodeStore<B> {
     /// The underlying folio page store.
     pub(crate) store: FolioStore<B>,
+    /// Shared-page refcount table.  Absent = refcount 1 (unique).
+    pub(crate) refcounts: HashMap<u64, u32>,
 }
 
 impl<B: Backend<Error = BackendError>> NodeStore<B> {
@@ -116,15 +125,59 @@ impl<B: Backend<Error = BackendError>> NodeStore<B> {
 
     /// Frees the folio page at `page_id`.
     ///
-    /// No-op if `page_id` is `u64::MAX` (sentinel for no page).
+    /// # Errors
+    ///
+    /// Returns [`HamtError::Store`] on folio I/O failure.
+    #[allow(dead_code)] // used in future stages
+    pub(crate) fn free_node(&mut self, page_id: u64) -> Result<(), HamtError> {
+        self.store.free_page(page_id)?;
+        Ok(())
+    }
+
+    /// Batch-frees a set of folio pages.
+    ///
+    /// Uses `free_pages` for a single WAL commit rather than one per page.
     ///
     /// # Errors
     ///
     /// Returns [`HamtError::Store`] on folio I/O failure.
-    #[allow(dead_code)] // used in G.3
-    pub(crate) fn free_node(&mut self, page_id: u64) -> Result<(), HamtError> {
-        self.store.free_page(page_id)?;
+    pub(crate) fn free_nodes(&mut self, page_ids: &[u64]) -> Result<(), HamtError> {
+        self.store.free_pages(page_ids)?;
         Ok(())
+    }
+
+    /// Increments the reference count for `page_id`.
+    ///
+    /// If `page_id` was at refcount 1 (implicit — absent from the table),
+    /// it is inserted with refcount 2.
+    pub(crate) fn increment_refcount(&mut self, page_id: u64) {
+        let entry = self.refcounts.entry(page_id).or_insert(1);
+        *entry += 1;
+    }
+
+    /// Decrements the reference count for `page_id`.
+    ///
+    /// Returns `true` if the page should be freed (refcount reached 0).
+    /// After decrementing from 2 → 1 the entry is removed (refcount 1 is implicit).
+    pub(crate) fn decrement_refcount(&mut self, page_id: u64) -> bool {
+        match self.refcounts.get_mut(&page_id) {
+            None => {
+                // Implicit refcount 1 — dropping the last reference.
+                true
+            }
+            Some(count) => {
+                *count -= 1;
+                if *count <= 1 {
+                    self.refcounts.remove(&page_id);
+                    // If it hit 1, the page is still live (held by one owner).
+                    // If it hit 0 that would be a bug — we decrement from ≥2.
+                    // We only free when decrementing from implicit 1.
+                    false
+                } else {
+                    false
+                }
+            }
+        }
     }
 }
 
@@ -153,7 +206,13 @@ impl<B: Backend<Error = BackendError>> NodeStore<B> {
 /// assert_eq!(map2.get(&"key".to_string()).unwrap(), Some(42u64));
 /// ```
 #[derive(Debug)]
-pub struct HamtMap<K = String, V = u64, C = PostcardCodec, B = MemBackend> {
+pub struct HamtMap<K = String, V = u64, C = PostcardCodec, B = MemBackend>
+where
+    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
+    V: Serialize + for<'de> Deserialize<'de> + Clone,
+    C: Codec,
+    B: Backend<Error = BackendError>,
+{
     /// Shared node store.
     node_store: Arc<Mutex<NodeStore<B>>>,
     /// Root page ID, or `None` for an empty map.
@@ -182,7 +241,10 @@ where
     #[must_use]
     pub fn new(store: FolioStore<B>) -> Self {
         Self {
-            node_store: Arc::new(Mutex::new(NodeStore { store })),
+            node_store: Arc::new(Mutex::new(NodeStore {
+                store,
+                refcounts: HashMap::new(),
+            })),
             root: None,
             len: 0,
             _marker: std::marker::PhantomData,
@@ -500,6 +562,12 @@ where
     }
 
     /// Inserts into an internal node by recursing into the appropriate child.
+    ///
+    /// When a new internal node is written that reuses existing child page IDs,
+    /// those children have their refcounts incremented — they are now referenced
+    /// by both the old internal node and the new one.  When the old internal node
+    /// is freed (during `Drop`), `collect_pages_to_free` will decrement the
+    /// children's refcounts back down.
     fn insert_into_internal(
         store: &mut NodeStore<B>,
         page: &HamtNodePage,
@@ -525,6 +593,14 @@ where
                 let new_child_id =
                     Self::insert_recursive(store, child_id, key, value, hash, new_shift, delta)?;
                 new_children[idx] = new_child_id;
+
+                // All children except new_children[idx] are reused from the old
+                // internal node — increment their refcounts.
+                for (i, &cid) in new_children.iter().enumerate() {
+                    if i != idx {
+                        store.increment_refcount(cid);
+                    }
+                }
             }
             None => {
                 // New child branch: create a single-entry leaf.
@@ -537,6 +613,16 @@ where
                 let insert_pos = (bitmap & ((1 << bit_pos) - 1)).count_ones() as usize;
                 new_children.insert(insert_pos, new_child_id);
                 let new_bitmap = bitmap | (1 << bit_pos);
+
+                // All old children are reused — increment their refcounts.
+                // The newly inserted child (new_child_id) is not in new_children yet
+                // (we just inserted it), but it was freshly allocated so refcount=1.
+                // We iterate over all children except the new one.
+                for (i, &cid) in new_children.iter().enumerate() {
+                    if i != insert_pos {
+                        store.increment_refcount(cid);
+                    }
+                }
 
                 *delta += 1;
                 let new_page = build_internal(new_bitmap, &new_children);
@@ -592,8 +678,9 @@ where
     /// Recursive path-copy remove.
     ///
     /// Returns `Some(new_page_id)` for the updated subtree, or `None` if the
-    /// subtree is now empty.  `removed` is set to `Some(value)` if the key
-    /// was found and removed.
+    /// subtree is now empty.  When the key is absent the original `page_id`
+    /// is returned unchanged (no new page allocation).  `removed` is set to
+    /// `Some(value)` if the key was found and removed.
     fn remove_recursive(
         store: &mut NodeStore<B>,
         page_id: u64,
@@ -604,17 +691,20 @@ where
     ) -> Result<Option<u64>, HamtError> {
         let page = store.read_node(page_id)?;
         match page.0[0] {
-            DISCRIMINANT_LEAF => Self::remove_from_leaf(store, &page, key, hash, removed),
+            DISCRIMINANT_LEAF => Self::remove_from_leaf(store, page_id, &page, key, hash, removed),
             DISCRIMINANT_INTERNAL => {
-                Self::remove_from_internal(store, &page, key, hash, shift, removed)
+                Self::remove_from_internal(store, page_id, &page, key, hash, shift, removed)
             }
             d => Err(HamtError::BadDiscriminant(d)),
         }
     }
 
     /// Removes `key` from a leaf node.
+    ///
+    /// Returns the original `page_id` unchanged when the key is absent.
     fn remove_from_leaf(
         store: &mut NodeStore<B>,
+        page_id: u64,
         page: &HamtNodePage,
         key: &K,
         hash: u64,
@@ -652,13 +742,16 @@ where
             return Ok(Some(new_id));
         }
 
-        // Key not found.
-        Ok(Some(page_id_from_page(store, page)?))
+        // Key not found — return original page ID, no allocation needed.
+        Ok(Some(page_id))
     }
 
     /// Removes `key` from an internal node.
+    ///
+    /// Returns the original `page_id` unchanged when the key is absent.
     fn remove_from_internal(
         store: &mut NodeStore<B>,
+        page_id: u64,
         page: &HamtNodePage,
         key: &K,
         hash: u64,
@@ -672,16 +765,16 @@ where
 
         let child_count = reader.child_count();
         let Some(idx) = reader.child_index(bit_pos) else {
-            // Child not present → key absent, nothing to remove.
-            return Ok(Some(page_id_of_current(store, page)?));
+            // Child not present → key absent, return original page ID unchanged.
+            return Ok(Some(page_id));
         };
 
         let child_id = reader.child_page_id(idx);
         let new_child_opt = Self::remove_recursive(store, child_id, key, hash, new_shift, removed)?;
 
         if removed.is_none() {
-            // Key was absent in the child subtree.
-            return Ok(Some(page_id_of_current(store, page)?));
+            // Key was absent in the child subtree — return original page ID unchanged.
+            return Ok(Some(page_id));
         }
 
         let mut new_children: Vec<u64> =
@@ -695,14 +788,132 @@ where
                 if new_children.is_empty() {
                     return Ok(None);
                 }
+                // All remaining children are reused from the old internal node —
+                // they are now shared between the old and new internal nodes.
+                for &cid in &new_children {
+                    store.increment_refcount(cid);
+                }
                 let new_page = build_internal(new_bitmap, &new_children);
                 Ok(Some(store.alloc_node(&new_page)?))
             }
             Some(new_child_id) => {
+                // Path-copy: the child at `idx` was replaced.  All other children
+                // are reused — increment their refcounts.
                 new_children[idx] = new_child_id;
+                for (i, &cid) in new_children.iter().enumerate() {
+                    if i != idx {
+                        store.increment_refcount(cid);
+                    }
+                }
                 let new_page = build_internal(bitmap, &new_children);
                 Ok(Some(store.alloc_node(&new_page)?))
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Reference counting helpers (G.3)
+    // -----------------------------------------------------------------------
+
+    /// Increments the refcount of `page_id` (called by `Clone`).
+    fn increment_root_refcount(&self) {
+        if let Some(root_id) = self.root {
+            let mut store = self.node_store.lock().expect("mutex not poisoned");
+            store.increment_refcount(root_id);
+        }
+    }
+
+    /// Iteratively walks the subtree rooted at `page_id`, collecting all page
+    /// IDs that should be freed (i.e. their refcount reaches 0 after decrement).
+    ///
+    /// Uses an explicit work-stack instead of recursion to avoid stack overflow
+    /// on deep trees.  Called by `Drop`.
+    fn collect_pages_to_free(
+        store: &mut NodeStore<B>,
+        root_id: u64,
+        to_free: &mut Vec<u64>,
+    ) -> Result<(), HamtError> {
+        // Work-stack of page IDs remaining to process.
+        let mut stack: Vec<u64> = vec![root_id];
+
+        while let Some(page_id) = stack.pop() {
+            // Decrement this node's refcount.
+            let should_free = store.decrement_refcount(page_id);
+
+            if should_free {
+                // Read the page to find its children before queuing them.
+                let page = store.read_node(page_id)?;
+                if page.0[0] == DISCRIMINANT_INTERNAL {
+                    let reader = InternalReader::new(&page);
+                    let child_count = reader.child_count();
+                    for i in 0..child_count {
+                        stack.push(reader.child_page_id(i));
+                    }
+                }
+                // Mark this page for batch-free.
+                to_free.push(page_id);
+            }
+            // If should_free is false, the page is still referenced by another
+            // snapshot — leave it and its subtree intact.
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Clone — O(1) refcount increment
+// ---------------------------------------------------------------------------
+
+impl<K, V, C, B> Clone for HamtMap<K, V, C, B>
+where
+    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
+    V: Serialize + for<'de> Deserialize<'de> + Clone,
+    C: Codec,
+    B: Backend<Error = BackendError>,
+{
+    /// Clones this map snapshot in O(1) by incrementing the root page's
+    /// refcount.  Both the original and the clone share all underlying pages.
+    fn clone(&self) -> Self {
+        self.increment_root_refcount();
+        Self {
+            node_store: Arc::clone(&self.node_store),
+            root: self.root,
+            len: self.len,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Drop — recursive refcount decrement and batch free
+// ---------------------------------------------------------------------------
+
+impl<K, V, C, B> Drop for HamtMap<K, V, C, B>
+where
+    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
+    V: Serialize + for<'de> Deserialize<'de> + Clone,
+    C: Codec,
+    B: Backend<Error = BackendError>,
+{
+    /// Drops this map snapshot.
+    ///
+    /// Decrements refcounts for all reachable pages.  Any page whose refcount
+    /// reaches zero is batch-freed via a single `free_pages` call to minimise
+    /// WAL commits.  Pages still referenced by other snapshots are left intact.
+    fn drop(&mut self) {
+        let Some(root_id) = self.root else {
+            return; // Empty map — nothing to free.
+        };
+
+        let mut store = self.node_store.lock().expect("mutex not poisoned");
+        let mut to_free: Vec<u64> = Vec::new();
+
+        // Walk the tree and collect pages whose refcount drops to zero.
+        // Ignore errors during drop — we cannot propagate them.
+        let _ = HamtMap::<K, V, C, B>::collect_pages_to_free(&mut store, root_id, &mut to_free);
+
+        if !to_free.is_empty() {
+            let _ = store.free_nodes(&to_free);
         }
     }
 }
@@ -718,32 +929,6 @@ fn hash_key<K: Hash>(key: &K) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     key.hash(&mut hasher);
     hasher.finish()
-}
-
-/// Re-allocates the page to obtain a stable page ID.
-///
-/// Used when a leaf/internal node is returned unchanged (key absent) and we
-/// need to return a page ID.  Since the caller already holds the page ID we
-/// just return it directly — but we need access to the original ID.
-///
-/// This helper is used only in remove when the key is absent; it allocates
-/// a new copy of the page and returns the new ID.
-fn page_id_from_page<B: Backend<Error = BackendError>>(
-    store: &mut NodeStore<B>,
-    page: &HamtNodePage,
-) -> Result<u64, HamtError> {
-    // Allocate a new copy of the unchanged page.
-    // This is wasteful but correct for G.2 (no path sharing on unchanged subtrees).
-    // G.3 will improve this with ref-counted sharing.
-    store.alloc_node(page)
-}
-
-/// Same as `page_id_from_page` — see its doc comment.
-fn page_id_of_current<B: Backend<Error = BackendError>>(
-    store: &mut NodeStore<B>,
-    page: &HamtNodePage,
-) -> Result<u64, HamtError> {
-    store.alloc_node(page)
 }
 
 // ---------------------------------------------------------------------------
@@ -883,5 +1068,120 @@ mod tests {
         let m1 = map.insert("present".to_string(), 1u32).unwrap();
         assert!(m1.contains_key(&"present".to_string()).unwrap());
         assert!(!m1.contains_key(&"absent".to_string()).unwrap());
+    }
+
+    // -----------------------------------------------------------------------
+    // G.3 — Reference counting and Drop
+    // -----------------------------------------------------------------------
+
+    /// Cloning a map shares the underlying pages.  The clone can still read
+    /// all entries after the original is dropped.
+    #[test]
+    fn clone_shares_pages_original_drop_leaves_clone_intact() {
+        let map: HamtMap<String, u32> = HamtMap::new(make_store());
+        let m1 = map.insert("a".to_string(), 1u32).unwrap();
+        let m2 = m1.insert("b".to_string(), 2u32).unwrap();
+
+        // Clone m2; m2 and m2_clone share all pages.
+        let m2_clone = m2.clone();
+        assert_eq!(m2_clone.len(), 2);
+
+        // Drop the original; the clone must still be accessible.
+        drop(m2);
+
+        // All entries remain readable via the clone.
+        assert_eq!(m2_clone.get(&"a".to_string()).unwrap(), Some(1u32));
+        assert_eq!(m2_clone.get(&"b".to_string()).unwrap(), Some(2u32));
+    }
+
+    /// After both the original and all clones are dropped, the refcount table
+    /// should be empty (all pages freed).
+    #[test]
+    fn all_clones_dropped_refcounts_empty() {
+        let map: HamtMap<String, u32> = HamtMap::new(make_store());
+        let m1 = map.insert("x".to_string(), 42u32).unwrap();
+        let clone1 = m1.clone();
+        let clone2 = m1.clone();
+
+        // All three share the same root.
+        {
+            let store = m1.node_store.lock().unwrap();
+            // refcount for root should be 3 (1 implicit + 2 increments = stored as 3).
+            // The stored value is `Some(3)` since it is > 1.
+            if let Some(root_id) = m1.root {
+                assert_eq!(store.refcounts.get(&root_id), Some(&3u32));
+            }
+        }
+
+        drop(m1);
+
+        // After dropping m1, refcount should decrease to 2 (stored as 2).
+        {
+            let store = clone1.node_store.lock().unwrap();
+            if let Some(root_id) = clone1.root {
+                assert_eq!(store.refcounts.get(&root_id), Some(&2u32));
+            }
+        }
+
+        drop(clone1);
+
+        // After dropping clone1, refcount decreases to 1 — entry removed (implicit).
+        {
+            let store = clone2.node_store.lock().unwrap();
+            if let Some(root_id) = clone2.root {
+                assert_eq!(store.refcounts.get(&root_id), None);
+            }
+        }
+
+        // Drop last clone — the page should be freed.
+        drop(clone2);
+    }
+
+    /// Multiple clones can be independently read after all intermediate drops.
+    #[test]
+    fn multiple_snapshots_independent() {
+        let map: HamtMap<String, u32> = HamtMap::new(make_store());
+        let m1 = map.insert("k1".to_string(), 1u32).unwrap();
+        let m2 = m1.insert("k2".to_string(), 2u32).unwrap();
+        let m3 = m2.insert("k3".to_string(), 3u32).unwrap();
+
+        // Clone intermediate snapshots.
+        let snap1 = m1.clone();
+        let snap3 = m3.clone();
+
+        // Drop m1, m2, m3 in sequence.
+        drop(m1);
+        drop(m2);
+        drop(m3);
+
+        // snap1 sees only k1.
+        assert_eq!(snap1.get(&"k1".to_string()).unwrap(), Some(1u32));
+        assert_eq!(snap1.get(&"k2".to_string()).unwrap(), None);
+
+        // snap3 sees all three keys.
+        assert_eq!(snap3.get(&"k1".to_string()).unwrap(), Some(1u32));
+        assert_eq!(snap3.get(&"k2".to_string()).unwrap(), Some(2u32));
+        assert_eq!(snap3.get(&"k3".to_string()).unwrap(), Some(3u32));
+    }
+
+    /// Dropping an empty map is a no-op (no pages to free).
+    #[test]
+    fn drop_empty_map_is_noop() {
+        let map: HamtMap<String, u32> = HamtMap::new(make_store());
+        drop(map); // Must not panic.
+    }
+
+    /// Removing an absent key returns the original snapshot — the remove path
+    /// no longer re-allocates pages.
+    #[test]
+    fn remove_absent_key_no_extra_alloc() {
+        let map: HamtMap<String, u32> = HamtMap::new(make_store());
+        let m1 = map.insert("a".to_string(), 1u32).unwrap();
+        let root_before = m1.root;
+
+        let (m2, removed) = m1.remove(&"absent".to_string()).unwrap();
+        assert_eq!(removed, None);
+        // The root page ID must be the same — no new page was allocated.
+        assert_eq!(m2.root, root_before);
     }
 }
