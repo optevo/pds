@@ -418,6 +418,10 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    // Convenience aliases to avoid turbofish repetition in tests.
+    type StrictMap = DurableMap<String, i64, Strict>;
+    type RelaxedMap = DurableMap<String, i64, Relaxed>;
+
     // ── Strict tests ──────────────────────────────────────────────────────────
 
     #[test]
@@ -426,15 +430,13 @@ mod tests {
         let path = dir.path().join("map.wal");
 
         {
-            let mut map: DurableMap<String, i64, Strict> =
-                DurableMap::open(&path, DurableConfig::default()).unwrap();
+            let mut map = StrictMap::open(&path, DurableConfig::default()).unwrap();
             for i in 0..10i64 {
                 map.insert(format!("key{}", i), i).unwrap();
             }
         }
 
-        let map: DurableMap<String, i64, Strict> =
-            DurableMap::open(&path, DurableConfig::default()).unwrap();
+        let map = StrictMap::open(&path, DurableConfig::default()).unwrap();
         assert_eq!(map.len(), 10);
         for i in 0..10i64 {
             assert_eq!(map.get(&format!("key{}", i)), Some(&i));
@@ -447,14 +449,12 @@ mod tests {
         let path = dir.path().join("map.wal");
 
         {
-            let mut map: DurableMap<String, i64, Strict> =
-                DurableMap::open(&path, DurableConfig::default()).unwrap();
+            let mut map = StrictMap::open(&path, DurableConfig::default()).unwrap();
             map.insert("x".to_owned(), 42).unwrap();
             map.remove(&"x".to_owned()).unwrap();
         }
 
-        let map: DurableMap<String, i64, Strict> =
-            DurableMap::open(&path, DurableConfig::default()).unwrap();
+        let map = StrictMap::open(&path, DurableConfig::default()).unwrap();
         assert!(map.is_empty());
     }
 
@@ -467,8 +467,7 @@ mod tests {
             checkpoint_every: 5,
             ..Default::default()
         };
-        let mut map: DurableMap<String, i64, Strict> =
-            DurableMap::open(&path, config).unwrap();
+        let mut map = StrictMap::open(&path, config).unwrap();
         for i in 0..5i64 {
             map.insert(format!("k{}", i), i).unwrap();
         }
@@ -481,8 +480,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("map.wal");
 
-        let mut map: DurableMap<String, i64, Strict> =
-            DurableMap::open(&path, DurableConfig::default()).unwrap();
+        let mut map = StrictMap::open(&path, DurableConfig::default()).unwrap();
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
 
@@ -497,8 +495,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("map.wal");
 
-        let mut map: DurableMap<String, i64, Strict> =
-            DurableMap::open(&path, DurableConfig::default()).unwrap();
+        let mut map = StrictMap::open(&path, DurableConfig::default()).unwrap();
         assert!(!map.contains_key(&"z".to_owned()));
         map.insert("z".to_owned(), 9).unwrap();
         assert!(map.contains_key(&"z".to_owned()));
@@ -510,16 +507,14 @@ mod tests {
         let path = dir.path().join("map.wal");
 
         {
-            let mut map: DurableMap<String, i64, Strict> =
-                DurableMap::open(&path, DurableConfig::default()).unwrap();
+            let mut map = StrictMap::open(&path, DurableConfig::default()).unwrap();
             for i in 0..5i64 {
                 map.insert(format!("k{}", i), i).unwrap();
             }
             map.checkpoint().unwrap();
         }
 
-        let map: DurableMap<String, i64, Strict> =
-            DurableMap::open(&path, DurableConfig::default()).unwrap();
+        let map = StrictMap::open(&path, DurableConfig::default()).unwrap();
         assert_eq!(map.len(), 5);
         for i in 0..5i64 {
             assert_eq!(map.get(&format!("k{}", i)), Some(&i));
@@ -534,16 +529,14 @@ mod tests {
         let path = dir.path().join("map.wal");
 
         {
-            let mut map: DurableMap<String, i64, Relaxed> =
-                DurableMap::open(&path, DurableConfig::default()).unwrap();
+            let mut map = RelaxedMap::open(&path, DurableConfig::default()).unwrap();
             for i in 0..5i64 {
                 map.insert(format!("k{}", i), i);
             }
             // Drop without flushing — simulate crash.
         }
 
-        let map: DurableMap<String, i64, Relaxed> =
-            DurableMap::open(&path, DurableConfig::default()).unwrap();
+        let map = RelaxedMap::open(&path, DurableConfig::default()).unwrap();
         assert!(map.is_empty(), "unflushed mutations should be lost on crash");
     }
 
@@ -553,8 +546,7 @@ mod tests {
         let path = dir.path().join("map.wal");
 
         {
-            let mut map: DurableMap<String, i64, Relaxed> =
-                DurableMap::open(&path, DurableConfig::default()).unwrap();
+            let mut map = RelaxedMap::open(&path, DurableConfig::default()).unwrap();
             for i in 0..5i64 {
                 map.insert(format!("k{}", i), i);
             }
@@ -562,8 +554,7 @@ mod tests {
             // Drop after flush.
         }
 
-        let map: DurableMap<String, i64, Relaxed> =
-            DurableMap::open(&path, DurableConfig::default()).unwrap();
+        let map = RelaxedMap::open(&path, DurableConfig::default()).unwrap();
         assert_eq!(map.len(), 5);
         for i in 0..5i64 {
             assert_eq!(map.get(&format!("k{}", i)), Some(&i));
@@ -581,17 +572,14 @@ mod tests {
         };
 
         {
-            let mut map: DurableMap<String, i64, Relaxed> =
-                DurableMap::open(&path, config).unwrap();
+            let mut map = RelaxedMap::open(&path, config).unwrap();
             for i in 0..9i64 {
                 map.insert(format!("k{}", i), i);
             }
-            // Auto-flush should have fired at 3, 6, 9.
-            // All 9 entries should be flushed.
+            // Auto-flush fires at 3, 6, 9.
         }
 
-        let map: DurableMap<String, i64, Relaxed> =
-            DurableMap::open(&path, DurableConfig::default()).unwrap();
+        let map = RelaxedMap::open(&path, DurableConfig::default()).unwrap();
         assert_eq!(map.len(), 9);
     }
 
@@ -600,8 +588,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("map.wal");
 
-        let mut map: DurableMap<String, i64, Relaxed> =
-            DurableMap::open(&path, DurableConfig::default()).unwrap();
+        let mut map = RelaxedMap::open(&path, DurableConfig::default()).unwrap();
         assert_eq!(map.pending_count(), 0);
         map.insert("a".to_owned(), 1);
         assert_eq!(map.pending_count(), 1);
@@ -617,16 +604,14 @@ mod tests {
         let path = dir.path().join("map.wal");
 
         {
-            let mut map: DurableMap<String, i64, Relaxed> =
-                DurableMap::open(&path, DurableConfig::default()).unwrap();
+            let mut map = RelaxedMap::open(&path, DurableConfig::default()).unwrap();
             for i in 0..4i64 {
                 map.insert(format!("k{}", i), i);
             }
             map.checkpoint().unwrap();
         }
 
-        let map: DurableMap<String, i64, Relaxed> =
-            DurableMap::open(&path, DurableConfig::default()).unwrap();
+        let map = RelaxedMap::open(&path, DurableConfig::default()).unwrap();
         assert_eq!(map.len(), 4);
     }
 }

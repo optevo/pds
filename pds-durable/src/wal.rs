@@ -153,6 +153,9 @@ pub(crate) struct Wal {
     /// Absolute path to the WAL file on disk.
     pub(crate) path: PathBuf,
     /// Byte offset of the last valid `Checkpoint` entry (or 0 if none).
+    ///
+    /// Populated during [`Wal::open`] for diagnostic and incremental-replay use.
+    #[allow(dead_code)] // populated by open(); used in tests and future incremental recovery
     pub(crate) last_checkpoint_offset: u64,
     /// Pending entries not yet written to disk (Relaxed mode only).
     ///

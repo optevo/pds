@@ -9,7 +9,6 @@
 //! file with a new one that contains only the checkpoint (all preceding entries
 //! become redundant).
 
-use std::hash::Hash;
 use std::path::Path;
 
 use serde::Serialize;

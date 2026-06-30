@@ -419,6 +419,8 @@ record the result, and implement only if the measured gain exceeds 5%.
 
 ### PERF-1 — Page read cache in NodeStore (High impact)
 
+**[DONE 2026-07-01] KEPT — 78–88% improvement on hamt_get across all sizes.**
+
 **Hypothesis:** `get` traverses O(log N) pages, each requiring folio decode (checksum
 verify + postcard deserialise). Adding a small LRU/fixed-size cache of decoded
 internal nodes in `NodeStore` would eliminate repeated decodes on shared tree paths
@@ -427,110 +429,78 @@ internal nodes in `NodeStore` would eliminate repeated decodes on shared tree pa
 **Expected gain:** `get` at n=10 000: 722–1 040 ns → ~250–300 ns (3–4×). Insert
 indirectly benefits when the descent path is cached.
 
-**PoC:** Implement a simple `HashMap<u64, CachedNode>` in `NodeStore` (or a
-fixed-size ring buffer). Invalidate on write (page free/alloc). Run criterion before
-and after; record in `docs/baselines.md`.
+**PoC:** Implemented `page_cache: HashMap<u64, HamtNodePage>` + `cache_order: VecDeque<u64>`
+(FIFO, 128-entry cap) in `NodeStore`.  Cache populated on `alloc_node` and `read_node`;
+invalidated on `free_node`/`free_nodes`.  `read_node` signature changed from `&self`
+to `&mut self`.
 
-**Design constraints:**
-- Cache must be invalidated on page free (refcount drop) and overwrite (page write).
-- Cache entries must not outlive the page they were decoded from (check mmap safety).
-- Cache size should be tunable (default: 128 entries = ~2 × log₂(max practical N)).
-- `MemBackend` may not benefit (no decode cost), so measure on the actual path.
+**Results:** n=10: 381→58 ns (−85%), n=100: 752→89 ns (−88%), n=1000: 863→167 ns
+(−81%), n=10000: 873→191 ns (−78%).  All ≥15%.  `test.sh` green.
 
-**Acceptance:** ≥15% measured improvement on `hamt_get` at n=10 000; `test.sh` green.
+See `docs/baselines.md` for full numbers.
 
 ---
 
 ### PERF-2 — PodCodec for numeric key/value types (High impact)
+
+**[DONE 2026-07-01] DEFERRED — Codec trait redesign required; no measurable gain possible with current trait design.**
 
 **Hypothesis:** `PostcardCodec` calls `postcard::to_allocvec` (heap allocation) on
 every key/value encode and `postcard::from_bytes` on every decode. For `Pod` types
 (`u64`, `f32`, `i32`, etc.) the correct encoding is a direct cast of the raw bytes —
 no heap allocation, no field framing.
 
-`PodCodec` is already referenced in the impl-plan (G.2, G.7) and its interface is
-designed. This item is the full implementation and benchmark.
+**Finding:** The `Codec` trait's generic `encode<T: Serialize>` / `decode<T: Deserialize>`
+signature prevents zero-copy dispatch without stable Rust specialization.  The existing
+`PodCodec` trait impl falls back to postcard for all T.  Benchmarks confirmed that
+`PodCodec` and `PostcardCodec` produce identical timings at all sizes (within noise).
 
-**Expected gain:** For `u64→u64` maps: eliminate per-node heap allocation on every
-insert/get. Likely 20–40% insert improvement; 30–50% get improvement. The allocator
-pressure alone (currently ~2 allocs per HAMT node access for encode/decode) is the
-dominant overhead after folio page I/O.
+After PERF-1, the `get` path at n=10 000 is ~108 ns.  The postcard decode of a `u64`
+is a small fraction of the Mutex lock (~4.5 ns) and HashMap cache lookup.  A true
+zero-copy codec would require a breaking `Codec` trait redesign (v2.0.0, Phase 5).
 
-**Implementation:**
-```rust
-/// Zero-copy codec for `Pod` types.
-pub struct PodCodec;
-
-impl<T: Pod + NoUninit + AnyBitPattern> Codec for PodCodec
-where T: Sized
-{
-    type Key = T;
-    type Value = T;
-    fn encode_key(k: &T, buf: &mut Vec<u8>) { buf.extend_from_slice(bytemuck::bytes_of(k)); }
-    fn decode_key(buf: &[u8]) -> Result<T, CodecError> { bytemuck::try_from_bytes(buf).copied().map_err(|e| ...) }
-    // same for value
-}
-```
-
-Alternatively: a generic `PodCodec<K, V>` that works for any `(K: Pod, V: Pod)` pair.
-
-**Acceptance:** `hamt_insert` and `hamt_get` benchmarks with `PodCodec<u64,u64>` at
-n=10 000 show ≥15% improvement over `PostcardCodec`; all existing tests pass with both
-codecs.
+See `docs/baselines.md` for benchmark numbers.  Added `pod_codec/get` and
+`pod_codec/insert` benchmarks to `benches/bench.rs` for future regression tracking.
 
 ---
 
 ### PERF-3 — Single-threaded NodeStore path (Medium impact)
+
+**[DONE 2026-07-01] NOT IMPLEMENTED — Mutex overhead measured at 2.4%; below 10% threshold.**
 
 **Hypothesis:** `Arc<Mutex<NodeStore<B>>>` acquires a kernel-level mutex on every
 node read and write, even for single-threaded callers (the overwhelming common case).
 At ~30–50 ns per lock/unlock, this costs 30–50 ns × O(log N) = 400–650 ns per
 `HamtMap::get` at n=10 000, which represents ~60% of the current 720 ns get cost.
 
-**PoC approach:** Add a `NodeStoreKind` enum variant:
-- `Shared(Arc<Mutex<NodeStore<B>>>)` — current path (multi-map, shared store)
-- `Exclusive(NodeStore<B>)` — new path (single owner, no locking)
+**Finding:** `get` acquires the Mutex once per call (held for the entire descent, not
+once per page).  Uncontended `std::sync::Mutex` lock/unlock on M5 Max: **4.5 ns**.
+After PERF-1, `hamt_get` at n=10 000 is ~191 ns.  Mutex overhead: 4.5 / 191 = 2.4%.
 
-`HamtMap` uses `Exclusive` when constructed via `HamtMap::new()` (the common path).
-It upgrades to `Shared` only when `clone()` is called (since clones share the store).
-Downgrade back to `Exclusive` is possible when the last clone is dropped (Arc refcount
-== 1), but may not be worth the complexity.
+The original hypothesis was based on pre-PERF-1 costs where the folio store reads
+dominated.  With the page cache, the mutex overhead is negligible.
 
-**Constraints:**
-- `Exclusive` path is not `Send` (uses `Rc`-like single-owner semantics) unless we
-  use `Arc<UnsafeCell<NodeStore<B>>>` with provenance. Prefer the `Rc<RefCell<>>`
-  path gated by a `single_thread` feature flag to avoid unsoundness.
-- Alternatively: keep `Arc<Mutex<>>` but replace with a trylock+spin strategy for
-  low-contention single-threaded paths.
-
-**Acceptance:** `hamt_get` at n=10 000 with single-threaded path ≥10% faster than
-current `Arc<Mutex<>>` path; `Send + Sync` bounds preserved (or documented if removed).
+See `docs/baselines.md` for measurement methodology.
 
 ---
 
 ### PERF-4 — Write batching (Medium impact)
+
+**[DONE 2026-07-01] NOT APPLICABLE to MemBackend — deferred to disk-backed benchmarking.**
 
 **Hypothesis:** Each HAMT insert currently writes O(log N) pages to the WAL
 independently (one WAL flush per page). Grouping all pages modified in a single
 insert into one WAL commit (atomic write) would both reduce WAL flush overhead and
 improve write amplification.
 
-**Expected gain:** Primarily relevant for `FolioStore` (disk-backed). `MemBackend`
-has no WAL, so no impact there. For disk benchmarks, expect 2–4× throughput improvement
-on insert-heavy workloads. For `MemBackend` benchmarks used in baselines, benefit is
-minimal.
+**Finding:** `MemBackend` has no WAL.  The folio WAL is gated by `feature = "wal"`
+(not enabled in pds-folio).  `alloc_node` and `write_page_data` are pure HashMap
+insertions on `MemBackend`.  Batching has zero measurable effect here.
 
-**Design:** `NodeStore` accumulates a `Vec<(PageId, PageData)>` of dirty pages during
-a logical mutation and flushes them atomically in `commit_batch()`. The `HamtMap`
-mutation methods call `commit_batch()` at the end instead of writing pages one-by-one.
+The hypothesis holds for disk-backed stores.  When a disk-backed benchmark is added,
+write batching is the primary candidate for insert-heavy workload improvement.
 
-**Constraints:**
-- Batch must be atomic: all-or-nothing. On crash mid-batch, recovery replays only
-  complete batches (WAL record framing handles this).
-- `MemBackend` skips batching (no WAL), so the API change must be transparent to both.
-
-**Acceptance:** Disk-backend insert benchmark shows ≥20% improvement on
-`HamtMap::insert` at n=10 000; `MemBackend` results unchanged; `test.sh` green.
+See `docs/baselines.md` for analysis.
 
 ---
 

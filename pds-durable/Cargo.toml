@@ -11,7 +11,7 @@ keywords = ["persistent", "wal", "durable", "write-ahead-log"]
 
 [dependencies]
 # Wrapped heap collections
-pds = { path = "..", features = ["std", "persist", "traits"] }
+pds = { path = "..", features = ["std", "persist", "serde", "traits"] }
 
 # WAL serialisation
 postcard = { version = "1", features = ["alloc"] }
@@ -25,6 +25,10 @@ thiserror = "2"
 
 # Tracing
 tracing = "0.1"
+
+[features]
+durable-set = []
+durable-ordmap = []
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
