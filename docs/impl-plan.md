@@ -59,6 +59,17 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-06-30] pds-folio G.0 — Scaffold.**
+  Created `pds-folio` as a Cargo workspace member of the `pds` repo.
+  `pds-folio/Cargo.toml` with deps: `folio-core` (path), `folio-collections` (path),
+  `pds` (workspace, traits feature), `serde`, `postcard`, `bytemuck`, `thiserror`.
+  `pds-folio/src/lib.rs` with `#![deny(unsafe_code)]` and module declarations.
+  `pds-folio/src/codec.rs`: `Codec` trait, `PodCodec` (raw bytes + postcard fallback),
+  `PostcardCodec` — 9 unit tests + 5 doctests, all green.
+  `pds-folio/docs/impl-plan.md` (G.1–G.15 items in Future).
+  Full workspace `test.sh` gate (9 steps including workspace smoke check and audit) passes.
+  pds-folio doctests pass as `Doc-tests pds_folio` under the workspace run.
+
 - **[2026-06-30] Phase W.0 + W.1 — Workspace consolidation.**
   Added `[workspace]` table to root `Cargo.toml` with `members = []`,
   `resolver = "2"`, and a `[workspace.dependencies]` stub for `pds` itself.

@@ -1,0 +1,36 @@
+[package]
+name = "pds-folio"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0+"
+rust-version = "1.85"
+description = "Folio-backed persistent data structures with structural sharing"
+repository = "https://github.com/optevo/pds"
+documentation = "https://docs.rs/pds-folio"
+homepage = "https://github.com/optevo/pds"
+readme = "../README.md"
+categories = ["data-structures"]
+keywords = ["immutable", "persistent", "hamt", "folio", "mmap"]
+
+[lib]
+path = "./src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+# Folio storage substrate — mmap-backed page allocator.
+folio-core = { path = "../../folio/folio-core" }
+# Folio collections — FolioSlab (slab allocator), FolioBTree (refcount table).
+folio-collections = { path = "../../folio/folio-collections" }
+# pds cross-variant traits — PersistentMap, PersistentSet, etc.
+pds = { workspace = true, features = ["traits"] }
+# Serialisation for keys and values (PostcardCodec).
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+# Zero-copy Pod codec support (PodCodec).
+bytemuck = { version = "1", features = ["derive"] }
+# Typed errors.
+thiserror = "2"
+
+[dev-dependencies]
