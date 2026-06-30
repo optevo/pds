@@ -154,8 +154,7 @@ impl<B: Backend<Error = BackendError>> NodeStore<B> {
     /// Inserts `page` into the cache under `page_id`, evicting the oldest
     /// entry when the cache is at capacity.
     fn cache_insert(&mut self, page_id: u64, page: HamtNodePage) {
-        if let std::collections::hash_map::Entry::Occupied(mut e) = self.page_cache.entry(page_id)
-        {
+        if let std::collections::hash_map::Entry::Occupied(mut e) = self.page_cache.entry(page_id) {
             // Already cached — update in place (no FIFO re-order needed for FIFO eviction).
             e.insert(page);
             return;

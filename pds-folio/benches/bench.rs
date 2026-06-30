@@ -118,16 +118,12 @@ fn bench_pod_codec_get(c: &mut Criterion) {
         for i in 0..n as u64 {
             pc_map = pc_map.insert(i, i * 7).unwrap();
         }
-        group.bench_with_input(
-            BenchmarkId::new("PostcardCodec", n),
-            &n,
-            |b, &n| {
-                b.iter(|| {
-                    let key = black_box((n as u64) / 2);
-                    black_box(pc_map.get(&key).unwrap())
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("PostcardCodec", n), &n, |b, &n| {
+            b.iter(|| {
+                let key = black_box((n as u64) / 2);
+                black_box(pc_map.get(&key).unwrap())
+            });
+        });
 
         // PodCodec map.
         let mut pod_map: HamtMap<u64, u64, PodCodec> =
@@ -135,16 +131,12 @@ fn bench_pod_codec_get(c: &mut Criterion) {
         for i in 0..n as u64 {
             pod_map = pod_map.insert(i, i * 7).unwrap();
         }
-        group.bench_with_input(
-            BenchmarkId::new("PodCodec", n),
-            &n,
-            |b, &n| {
-                b.iter(|| {
-                    let key = black_box((n as u64) / 2);
-                    black_box(pod_map.get(&key).unwrap())
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("PodCodec", n), &n, |b, &n| {
+            b.iter(|| {
+                let key = black_box((n as u64) / 2);
+                black_box(pod_map.get(&key).unwrap())
+            });
+        });
     }
     group.finish();
 }
@@ -154,35 +146,27 @@ fn bench_pod_codec_get(c: &mut Criterion) {
 fn bench_pod_codec_insert(c: &mut Criterion) {
     let mut group = c.benchmark_group("pod_codec/insert");
     for &n in &[1000usize, 10000] {
-        group.bench_with_input(
-            BenchmarkId::new("PostcardCodec", n),
-            &n,
-            |b, &n| {
-                b.iter(|| {
-                    let mut map: HamtMap<u64, u64, PostcardCodec> =
-                        HamtMap::new(make_store((n as u64) * 4 + 64));
-                    for i in 0..n as u64 {
-                        map = map.insert(black_box(i), black_box(i * 7)).unwrap();
-                    }
-                    black_box(map.len())
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("PostcardCodec", n), &n, |b, &n| {
+            b.iter(|| {
+                let mut map: HamtMap<u64, u64, PostcardCodec> =
+                    HamtMap::new(make_store((n as u64) * 4 + 64));
+                for i in 0..n as u64 {
+                    map = map.insert(black_box(i), black_box(i * 7)).unwrap();
+                }
+                black_box(map.len())
+            });
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("PodCodec", n),
-            &n,
-            |b, &n| {
-                b.iter(|| {
-                    let mut map: HamtMap<u64, u64, PodCodec> =
-                        HamtMap::new(make_store((n as u64) * 4 + 64));
-                    for i in 0..n as u64 {
-                        map = map.insert(black_box(i), black_box(i * 7)).unwrap();
-                    }
-                    black_box(map.len())
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("PodCodec", n), &n, |b, &n| {
+            b.iter(|| {
+                let mut map: HamtMap<u64, u64, PodCodec> =
+                    HamtMap::new(make_store((n as u64) * 4 + 64));
+                for i in 0..n as u64 {
+                    map = map.insert(black_box(i), black_box(i * 7)).unwrap();
+                }
+                black_box(map.len())
+            });
+        });
     }
     group.finish();
 }
@@ -354,7 +338,11 @@ criterion_group!(
     bench_hamtset_contains,
 );
 
-criterion_group!(pod_codec_benches, bench_pod_codec_get, bench_pod_codec_insert,);
+criterion_group!(
+    pod_codec_benches,
+    bench_pod_codec_get,
+    bench_pod_codec_insert,
+);
 
 criterion_group!(vector_benches, bench_vector_push_back, bench_vector_get,);
 
@@ -366,4 +354,9 @@ criterion_group!(
     bench_ordset_insert,
 );
 
-criterion_main!(hamt_benches, vector_benches, ordmap_benches, pod_codec_benches);
+criterion_main!(
+    hamt_benches,
+    vector_benches,
+    ordmap_benches,
+    pod_codec_benches
+);
