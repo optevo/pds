@@ -59,6 +59,50 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-07-01] pds-merkle-spine H.0–H.8 — `VersionedHamt` full implementation.**
+  New workspace member `pds-merkle-spine` (crate `pds-merkle-spine`): thin facade
+  combining `pds-folio`'s `HamtMap<K,V,C,B>` with `merkle-spine`'s BLAKE3 hash primitives.
+
+  Key types:
+  - `VersionId { seq: u64, root_hash: [u8; 32] }` — stable, cheaply-copied version handle.
+  - `VersionedHamt<K, V, C, B>` — persistent, versioned, Merkle-verified hash map.
+  - `MerkleProof { root_hash, key_hash, value_hash, siblings }` — inclusion proof.
+  - `DiffEntry<K, V>` enum — `Inserted`, `Removed`, `Updated` entries from `diff()`.
+
+  Architecture: `VersionHistory<K,V,C,B>` (shared via `Arc<Mutex<…>>`) stores full
+  `HamtMap` clones per version entry, keeping folio refcounts permanently alive.
+  Storing page IDs alone was tried and discarded: pages are freed when the owning
+  `HamtMap` is dropped, so historical `get_at` calls would silently return `None`.
+  Cloning a `HamtMap` is O(1) — it only increments a root page refcount.
+
+  Public API:
+  - `new`, `len`, `is_empty`, `iter`, `version`, `root_hash`, `root_hash_at`
+  - `insert`, `remove`, `get`, `contains_key`
+  - `get_at` — O(log N) historical point lookup without materialising the full version
+  - `checkout` — O(1) historical version branch (clone the stored snapshot)
+  - `diff(from, to)` — O(changed × log N) structural diff between any two versions
+  - `prove_inclusion`, `prove_inclusion_at`, `verify_proof` — O(log N) Merkle proofs
+
+  Trait impls: `PersistentCollection`, `PersistentMap`, `VersionedPersistentMap`,
+  `MerklePersistentMap` from the `pds::traits` feature.
+
+  Merkle root: iterate all K/V pairs, sort by serialised key, concatenate
+  `(key_len LE32 || key_bytes || val_len LE32 || val_bytes)`, hash with BLAKE3
+  `ms:hamt-node-v1` domain key.
+
+  Tests:
+  - 30 unit tests (`src/versioned_hamt.rs`) covering all API methods, trait impls, edge cases.
+  - 11 integration tests (`tests/versioned_hamt_integration.rs`): large insert/remove
+    sequences, structural diff, snapshot isolation, Merkle proof round-trips, cross-crate
+    trait usage.
+  - 2 proptest property tests (20 cases each): historical value correctness, diff
+    inverse-of-mutations.
+  - 41/41 tests green; `cargo fmt --check` clean; `cargo clippy -D warnings` clean;
+    full workspace `test.sh` (9 steps) passes.
+
+  Removed `root_page_id` and `snapshot_at_root` from `pds-folio`'s `HamtMap` — added
+  for the first (page-ID-based) VersionHistory design but unused by the final design.
+
 - **[2026-07-01] pds-folio G.2 — `HamtMap` CRUD.**
   `pds-folio/src/hamt.rs`: `HamtMap<K, V, C, B>` with path-copy insert/remove/get.
   `NodeStore<B>` wraps `FolioStore<B>` for typed `HamtNodePage` page I/O; shared

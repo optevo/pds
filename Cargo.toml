@@ -2,7 +2,7 @@
 # Members are added as Phase G (pds-folio) and Phase H (pds-merkle-spine) are created.
 # The root `pds` crate is an implicit member (package + workspace coexist in the same
 # Cargo.toml — the standard Cargo pattern for a root crate that is also the workspace root).
-members = ["pds-folio"]
+members = ["pds-folio", "pds-merkle-spine"]
 resolver = "2"
 
 # Shared dependency versions inherited by member crates.

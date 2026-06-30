@@ -1,0 +1,36 @@
+[package]
+name = "pds-merkle-spine"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0+"
+rust-version = "1.85"
+description = "Versioned, Merkle-verified persistent hash map combining pds-folio and merkle-spine"
+repository = "https://github.com/optevo/pds"
+documentation = "https://docs.rs/pds-merkle-spine"
+homepage = "https://github.com/optevo/pds"
+readme = "../README.md"
+categories = ["data-structures"]
+keywords = ["immutable", "persistent", "hamt", "merkle", "versioned"]
+
+[lib]
+path = "./src/lib.rs"
+
+[dependencies]
+# pds-folio — provides HamtMap (HAMT with structural sharing) and HamtIndex (PageIndexBackend).
+pds-folio = { path = "../pds-folio" }
+# merkle-spine — provides PageIndexBackend trait and BLAKE3 hash primitives.
+merkle-spine = { path = "../../merkle-spine" }
+# pds cross-variant traits — PersistentMap, VersionedPersistentMap, MerklePersistentMap.
+pds = { workspace = true, features = ["traits"] }
+# Folio storage substrate — needed for Backend bound and MemBackend.
+folio-core = { path = "../../folio/folio-core" }
+# Serialisation for keys and values.
+serde = { version = "1", features = ["derive"] }
+# Postcard encoding for Merkle root computation.
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+# Typed errors.
+thiserror = "2"
+
+[dev-dependencies]
+# Property-based testing.
+proptest = "1"

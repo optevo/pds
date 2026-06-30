@@ -275,6 +275,8 @@ where
         self.len
     }
 
+    /// Returns the folio page ID of the HAMT root node, or `None` for an empty map.
+    ///
     /// Tests whether the map is empty.
     ///
     /// Time: O(1).
