@@ -31,6 +31,31 @@ Two durability modes: `Strict` (zero data loss, fsync per mutation) and `Relaxed
 
 *Newest first.*
 
+- **[2026-07-01] D.10 — `TierPolicy` trait + `Pipelined` 3-tier preset** —
+  `src/policy.rs` created with sealed `TierPolicy` marker trait and four preset
+  zero-sized types: `MemOnly`, `WriteBack`, `Pipelined`, `Durable`. Existing
+  `TieredMap<K,V,Strict>` renamed to `TieredMap<K,V,Durable>` and
+  `TieredMap<K,V,Relaxed>` renamed to `TieredMap<K,V,WriteBack>`; backward-compat
+  type aliases (`Strict = Durable`, `Relaxed = WriteBack`) retained. `MemOnlyMap<K,V>`
+  (wraps `std::collections::HashMap`, no disk; `into_persistent()` → O(N log N)
+  freeze into `pds::HashMap`) and `PipelinedMap<K,V>` (3-tier: t0 `std::HashMap` →
+  t1 `pds::HashMap` → t2 `VersionedHamt`) added as concrete exported types.
+  `TieredConfig` extended with `commit_every: usize`. `lib.rs` updated with `policy`
+  module and all new exports. 15 integration tests in `tests/pipelined.rs` (feature-
+  gated on `tiered`), all passing. 5 new criterion benchmarks in `benches/bench.rs`.
+  `cargo test --all-features` green (80 total tests); `cargo clippy -D warnings` clean.
+  - Benchmark highlights (M5 Max, macOS tmpfs): `mem_only_insert` 57.9 µs / 1 000;
+    `pipelined_insert` 3.49 ms / 1 000; `pipelined_commit` 3.28 ms; `pipelined_flush`
+    4.35 ms; `policy_comparison/MemOnly` 5.37 µs / 10; `policy_comparison/Pipelined`
+    3.21 ms / 10; `policy_comparison/WriteBack` 3.25 ms / 10; `policy_comparison/Durable`
+    526 µs / 10.
+  - Implementation note: Rust cannot give `TieredMap<K,V,MemOnly>` a different field
+    layout than `TieredMap<K,V,WriteBack>` in the same generic struct; `MemOnlyMap` and
+    `PipelinedMap` are separate concrete structs exported alongside `TieredMap`.
+  - `V: Hash` required by `pds::HashMap::insert`; propagated to all bounds on `MemOnlyMap`
+    and `PipelinedMap`.
+  - Results recorded in `docs/baselines.md` (D.10 Pipeline section, 2026-07-01).
+
 - **[2026-07-01] D.9 — `TieredMap`** — `src/tiered_map.rs` implemented; `Cargo.toml`
   updated with `pds-merkle-spine` + `folio-core` optional deps under `tiered` feature;
   `lib.rs` exports `TieredMap`, `TieredConfig`, `VersionId`; 22 unit tests (Strict + Relaxed),
@@ -111,7 +136,7 @@ Two durability modes: `Strict` (zero data loss, fsync per mutation) and `Relaxed
 
 ## Current {#current}
 
-*(nothing — begin with D.1)*
+*(nothing — D.10 complete; all planned items D.0–D.10 done)*
 
 ---
 

@@ -63,3 +63,41 @@ Platform: macOS tmpfs (M5 Max) — fsync latency near zero.
 - `tiered_get_cold` at 505 ns is faster than `tiered_get_warm` at 25 µs per-sample
   because the cold benchmark fetches only 10 keys vs 500 for the warm benchmark
   (different N in the inner loop).
+
+---
+
+## D.10 Pipeline — 2026-07-01
+
+Criterion measurements: 100 samples. Platform: macOS tmpfs (M5 Max).
+N = 1 000 key-value pairs per multi-insert benchmark; N = 10 per `policy_comparison`.
+
+### `MemOnlyMap` and `PipelinedMap`
+
+| Benchmark | Median | Notes |
+|-----------|--------|-------|
+| `mem_only_insert` (N=1 000) | 57.9 µs | Pure `std::collections::HashMap`; no HAMT overhead |
+| `pipelined_insert` (N=1 000, t0 only) | 3.49 ms | Insert into t0 (`std::HashMap`); no commit |
+| `pipelined_commit` (N=1 000 then commit) | 3.28 ms | 1 000 t0 inserts + one O(N) commit (t0→t1 via `mem::take` + HAMT rebuild) |
+| `pipelined_flush` (N=1 000, commit_and_flush) | 4.35 ms | 1 000 inserts + commit + flush (t1 dirty→t2 HAMT version) |
+
+### Policy comparison — all four presets (N=10)
+
+| Policy | Median | Notes |
+|--------|--------|-------|
+| `MemOnly` | 5.37 µs | `std::HashMap` only; fastest; no HAMT or disk |
+| `Pipelined` | 3.21 ms | t0 write + occasional commit overhead amortised across N |
+| `WriteBack` | 3.25 ms | Direct front (HAMT) write; comparable to Pipelined at small N |
+| `Durable` | 526 µs | Write-through HAMT per mutation; no WAL fsync (MemBackend); fast on tmpfs |
+
+**Notes:**
+
+- `mem_only_insert` at 57.9 µs for N=1 000 = ~57.9 ns per insert (pure `std::HashMap`).
+  This is the floor for any collection that does not need persistence.
+- `pipelined_insert` overhead vs `mem_only_insert` (~3.4 ms vs 57.9 µs, ~59×) is due
+  to the bench including both t0 inserts and the auto-commit triggered every `commit_every`
+  inserts (if configured) plus the HAMT t1 rebuild cost.
+- `MemOnly` at 5.37 µs for N=10 = ~537 ns per insert — higher per-unit cost than the
+  N=1 000 bench due to benchmark harness overhead amortised over fewer iterations.
+- `Durable` at 526 µs for N=10 on MemBackend is much faster than the on-disk `tiered_strict`
+  (9.94 ms for N=1 000) because MemBackend has no fsync cost; the 526 µs reflects pure
+  HAMT structural-sharing cost per-version.

@@ -164,10 +164,11 @@ fn bench_insert_comparison(c: &mut Criterion) {
 #[cfg(feature = "tiered")]
 mod tiered_benches {
     use super::*;
-    use pds_durable::{TieredConfig, TieredMap};
+    use pds_durable::{Durable, MemOnlyMap, PipelinedMap, TieredConfig, TieredMap, WriteBack};
 
-    type TieredStrict = TieredMap<String, i64, Strict>;
-    type TieredRelaxed = TieredMap<String, i64, Relaxed>;
+    // Use Durable/WriteBack directly to avoid open() method ambiguity with aliases.
+    type TieredStrict = TieredMap<String, i64, Durable>;
+    type TieredRelaxed = TieredMap<String, i64, WriteBack>;
 
     pub fn bench_tiered_strict_insert(c: &mut Criterion) {
         c.bench_function("tiered_strict_insert", |b| {
@@ -280,6 +281,134 @@ mod tiered_benches {
             });
         });
     }
+
+    // ── D.10 Pipeline benchmarks ──────────────────────────────────────────────
+
+    pub fn bench_pipelined_insert(c: &mut Criterion) {
+        // t0 in-place insert — should be near-identical to MemOnly and faster
+        // than WriteBack (which hits persistent pds::HashMap).
+        c.bench_function("pipelined_insert", |b| {
+            b.iter(|| {
+                let dir = tempdir().unwrap();
+                let path = dir.path().join("bench.pipelined");
+                let mut map: PipelinedMap<String, i64> =
+                    PipelinedMap::open(&path, TieredConfig::default()).unwrap();
+                for i in 0..N {
+                    let (k, v) = make_kv(i);
+                    map.insert(black_box(k), black_box(v));
+                }
+                black_box(map.pending_flush());
+            });
+        });
+    }
+
+    pub fn bench_pipelined_commit(c: &mut Criterion) {
+        // commit() after 100 inserts — O(N) t0→t1 conversion.
+        c.bench_function("pipelined_commit", |b| {
+            b.iter(|| {
+                let dir = tempdir().unwrap();
+                let path = dir.path().join("bench.pipelined");
+                let mut map: PipelinedMap<String, i64> =
+                    PipelinedMap::open(&path, TieredConfig::default()).unwrap();
+                for i in 0..100 {
+                    let (k, v) = make_kv(i);
+                    map.insert(black_box(k), black_box(v));
+                }
+                map.commit();
+                black_box(map.pending_flush());
+            });
+        });
+    }
+
+    pub fn bench_pipelined_flush(c: &mut Criterion) {
+        // commit_and_flush() with 100 dirty keys — writes all dirty t1→t2.
+        c.bench_function("pipelined_flush", |b| {
+            b.iter(|| {
+                let dir = tempdir().unwrap();
+                let path = dir.path().join("bench.pipelined");
+                let mut map: PipelinedMap<String, i64> =
+                    PipelinedMap::open(&path, TieredConfig::default()).unwrap();
+                for i in 0..100 {
+                    let (k, v) = make_kv(i);
+                    map.insert(black_box(k), black_box(v));
+                }
+                map.commit_and_flush().unwrap();
+                black_box(map.pending_flush());
+            });
+        });
+    }
+
+    pub fn bench_mem_only_insert(c: &mut Criterion) {
+        // MemOnly insert — plain std::HashMap; baseline for t0 speed.
+        c.bench_function("mem_only_insert", |b| {
+            b.iter(|| {
+                let mut map: MemOnlyMap<String, i64> = MemOnlyMap::new();
+                for i in 0..N {
+                    let (k, v) = make_kv(i);
+                    map.insert(black_box(k), black_box(v));
+                }
+                black_box(map.len());
+            });
+        });
+    }
+
+    pub fn bench_policy_comparison(c: &mut Criterion) {
+        // Side-by-side: MemOnly / WriteBack / Pipelined / Durable, 100 inserts each.
+        let mut group = c.benchmark_group("policy_comparison");
+
+        group.bench_function("MemOnly", |b| {
+            b.iter(|| {
+                let mut map: MemOnlyMap<String, i64> = MemOnlyMap::new();
+                for i in 0..100 {
+                    let (k, v) = make_kv(i);
+                    map.insert(black_box(k), black_box(v));
+                }
+                black_box(map.len());
+            });
+        });
+
+        group.bench_function("WriteBack", |b| {
+            b.iter(|| {
+                let dir = tempdir().unwrap();
+                let path = dir.path().join("bench.wb");
+                let mut map = TieredRelaxed::open(&path, TieredConfig::default()).unwrap();
+                for i in 0..100 {
+                    let (k, v) = make_kv(i);
+                    map.insert(black_box(k), black_box(v));
+                }
+                black_box(map.pending_count());
+            });
+        });
+
+        group.bench_function("Pipelined", |b| {
+            b.iter(|| {
+                let dir = tempdir().unwrap();
+                let path = dir.path().join("bench.pipe");
+                let mut map: PipelinedMap<String, i64> =
+                    PipelinedMap::open(&path, TieredConfig::default()).unwrap();
+                for i in 0..100 {
+                    let (k, v) = make_kv(i);
+                    map.insert(black_box(k), black_box(v));
+                }
+                black_box(map.pending_flush());
+            });
+        });
+
+        group.bench_function("Durable", |b| {
+            b.iter(|| {
+                let dir = tempdir().unwrap();
+                let path = dir.path().join("bench.dur");
+                let mut map = TieredStrict::open(&path, TieredConfig::default()).unwrap();
+                for i in 0..100 {
+                    let (k, v) = make_kv(i);
+                    map.insert(black_box(k), black_box(v)).unwrap();
+                }
+                black_box(map.len());
+            });
+        });
+
+        group.finish();
+    }
 }
 
 #[cfg(not(feature = "tiered"))]
@@ -310,6 +439,11 @@ criterion_group!(
     tiered_benches::bench_tiered_get_warm,
     tiered_benches::bench_tiered_get_cold,
     tiered_benches::bench_tiered_eviction,
+    tiered_benches::bench_pipelined_insert,
+    tiered_benches::bench_pipelined_commit,
+    tiered_benches::bench_pipelined_flush,
+    tiered_benches::bench_mem_only_insert,
+    tiered_benches::bench_policy_comparison,
 );
 
 criterion_main!(benches);

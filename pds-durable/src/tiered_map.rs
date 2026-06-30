@@ -683,7 +683,7 @@ where
     ///
     /// Time: O(N) — each t0 entry is inserted into `pds::HashMap`.
     pub fn commit(&mut self) {
-        let old_t0 = mem::replace(&mut self.t0, std::collections::HashMap::new());
+        let old_t0 = mem::take(&mut self.t0);
         let mut new_t1 = HashMap::new();
         for (k, v) in old_t0 {
             new_t1.insert(k, v);
@@ -728,7 +728,7 @@ where
     /// Returns [`DurableError`] on folio I/O or codec failure.
     pub fn commit_and_flush(&mut self) -> Result<VersionId, DurableError> {
         // Commit without triggering a recursive auto-flush.
-        let old_t0 = mem::replace(&mut self.t0, std::collections::HashMap::new());
+        let old_t0 = mem::take(&mut self.t0);
         let mut new_t1 = HashMap::new();
         for (k, v) in old_t0 {
             new_t1.insert(k, v);
@@ -951,8 +951,9 @@ mod tests {
     #[test]
     fn strict_alias_compiles() {
         let (_dir, path) = tmp_path();
-        let mut m: TieredMap<String, u64, Strict> =
-            TieredMap::open(&path, TieredConfig::default()).unwrap();
+        // Use Durable explicitly to avoid open() ambiguity; Strict is an alias.
+        let mut m: TieredMap<String, u64, Durable> =
+            TieredMap::<String, u64, Durable>::open(&path, TieredConfig::default()).unwrap();
         m.insert("a".to_string(), 1).unwrap();
         assert_eq!(m.get(&"a".to_string()), Some(&1));
     }
@@ -1129,8 +1130,9 @@ mod tests {
     #[test]
     fn relaxed_alias_compiles() {
         let (_dir, path) = tmp_path();
-        let mut m: TieredMap<String, u64, Relaxed> =
-            TieredMap::open(&path, TieredConfig::default()).unwrap();
+        // Use WriteBack explicitly to avoid open() ambiguity; Relaxed is an alias.
+        let mut m: TieredMap<String, u64, WriteBack> =
+            TieredMap::<String, u64, WriteBack>::open(&path, TieredConfig::default()).unwrap();
         m.insert("a".to_string(), 1);
         assert_eq!(m.get(&"a".to_string()), Some(&1));
     }
