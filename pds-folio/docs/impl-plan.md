@@ -19,6 +19,36 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.1 — Core node types and slab layout.**
+  `src/node.rs` implements the 512-byte slab slot type and both HAMT node variants.
+
+  `HamtNodePage([u8; 512])` — `#[repr(transparent)]` newtype with `Pod` + `Zeroable`
+  derived via `bytemuck`'s proc-macro (no `unsafe` in this crate). Discriminant at
+  byte 0 identifies leaf (`0x01`) vs internal (`0x02`) vs unallocated (`0x00`).
+
+  Fixed-header leaf layout (avoids data shifting on append):
+  - Bytes 0..2: discriminant + count
+  - Bytes 2..130: `key_hashes [u64; LEAF_CAP]`
+  - Bytes 130..164: `entry_offsets [u16; LEAF_CAP+1]` — offsets[count] = total data written
+  - Bytes 164..512: data section (348 bytes); entries framed as `[key_len: u16][key][value]`
+
+  `LEAF_CAP = 16` (max entries before split).
+
+  Internal node layout (5-bit HAMT, 32-bit bitmap, compressed child array):
+  - Bytes 0..8: discriminant + 3-byte pad + bitmap u32
+  - Bytes 8..: `children [u64; popcount(bitmap)]` — max 264 bytes total
+
+  `LeafBuilder` / `LeafReader` — write/read leaf pages with `push_framed` / `get_entry`.
+  `build_internal` / `InternalReader` — construct and read internal pages.
+
+  13 unit tests: size assertions, Pod check, leaf empty/single/multiple/overflow round-trips
+  with PostcardCodec and PodCodec, internal node single/three/all-32 children round-trips,
+  discriminant uniqueness. All green. Full workspace `test.sh` passes.
+
+  Design note: `LEAF_CAP = 16` uses a fixed-width header rather than variable offsets to
+  avoid shifting existing data on each `push_framed`. This wastes at most 10*(16−count)
+  header bytes but simplifies addressing to O(1) with no memmove.
+
 - **[2026-06-30] G.0 — Scaffold.**
   Created `pds-folio` as a Cargo workspace member of the `pds` repo.
   `Cargo.toml` with deps: `folio-core` (path), `folio-collections` (path),
@@ -38,7 +68,7 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ## Future {#future}
 
-### G.1 — Core node types and slab layout
+### G.1 — Core node types and slab layout (DONE — see above)
 
 - `LeafNode` — variable-length layout: `discriminant: u8 | count: u8 | key_hashes: [u64; count] | entry_offsets: [u16; count] | data: [u8; …]`
 - `InternalNode` — `discriminant: u8 | bitmap: u64 | children: [SlabPageId; popcount(bitmap)]`

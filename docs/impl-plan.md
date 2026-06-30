@@ -59,6 +59,15 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-07-01] pds-folio G.1 — Core node types and slab layout.**
+  `src/node.rs` in `pds-folio`: `HamtNodePage([u8; 512])` Pod slab slot type;
+  fixed-header leaf layout (2 + 128 + 34 + 348 bytes = discriminant + hashes +
+  offsets + data) with `LeafBuilder` / `LeafReader`; 5-bit bitmap internal node
+  with `build_internal` / `InternalReader`. `LEAF_CAP = 16`, `BRANCH_BITS = 5`.
+  13 tests: size checks, Pod round-trip, PostcardCodec and PodCodec leaf round-trips,
+  overflow rejection, all-32-children internal round-trip. All green, clippy clean,
+  full workspace `test.sh` passes.
+
 - **[2026-06-30] pds-folio G.0 — Scaffold.**
   Created `pds-folio` as a Cargo workspace member of the `pds` repo.
   `pds-folio/Cargo.toml` with deps: `folio-core` (path), `folio-collections` (path),
