@@ -19,6 +19,35 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-06-30] G.5 — `HamtIndex`: `PageIndexBackend`.**
+  `src/hamt_index.rs`: `HamtIndex<B>` implements `merkle_spine::index::PageIndexBackend`
+  using a `HamtMap<IndexKey, IndexValue, PodCodec, B>` as the underlying store.
+
+  `IndexKey` — `#[repr(C)]` Pod pair `(region_id: u64, page_id: u64)`.
+  `IndexValue` — 48-byte `#[repr(C)]` Pod encoding of `PageEntry` (content_hash,
+  folio_page_id, encoding_tag, chain_depth, 6-byte pad).
+
+  `HamtIndex` maintains an in-memory `HashMap<Hash, HamtMap<…>>` keyed by the 32-byte
+  Merkle root hash.  `ZERO_HASH` is always the genesis root (empty HAMT).  All snapshots
+  share the same `Arc<Mutex<NodeStore>>` created from the `FolioStore` passed to `new()`.
+
+  `compute_root_hash`: sorts all `(IndexKey, IndexValue)` pairs by `(region_id, page_id)`,
+  serialises them into a flat byte buffer, and hashes with `hash_hamt_node` (BLAKE3
+  keyed with `ms:hamt-node-v1`).  Empty HAMT maps to `hash_hamt_node(b"")`.
+
+  `PageIndexBackend` methods:
+  - `lookup` — O(log N) HAMT get at the requested root.
+  - `commit_delta` — clone parent snapshot (O(1)), apply all inserts, compute new
+    Merkle root, store snapshot.
+  - `delete_index_page` — removes snapshot from map; HAMT `Drop` frees folio pages.
+  - `snapshot` — HAMT is already a complete snapshot; returns `index_root` unchanged.
+
+  `merkle-spine` path dep added to `pds-folio/Cargo.toml`.
+
+  9 unit tests: empty genesis, single entry, multiple entries, chained commits,
+  overwrite, same-content hash identity, snapshot, delete, unknown-root error,
+  multi-region.  All 61 lib + 7 doc tests green.  Full workspace `test.sh` passes.
+
 - **[2026-06-30] G.4 — `HamtSet` wrapper.**
   `src/set.rs`: `HamtSet<A, C, B>` as a thin newtype over `HamtMap<A, (), C, B>`.
 
@@ -146,36 +175,11 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ### G.2 — `HamtMap` CRUD (DONE — see above)
 
-### G.3 — Reference counting and `Drop`
+### G.3 — Reference counting and `Drop` (DONE — see above)
 
-- `FolioBTree<SlabPageId, u32>` refcount table (stored in same folio store)
-- `Clone` impl: increment root refcount
-- `Drop` impl: decrement refcount, recursively free nodes at zero, batch via folio S66 (`free_pages`)
-- Optimisation: absent from table = refcount 1 (store only refcounts > 1)
-- Tests: clone + drop frees nothing while shared; all copies dropped → store empty
+### G.4 — `HamtSet` wrapper (DONE — see above)
 
-**Acceptance:** `cargo test` green; refcount semantics verified.
-
-### G.4 — `HamtSet` wrapper
-
-- Newtype `HamtSet<A, B>(HamtMap<A, (), B>)`
-- Full API: `contains`, `insert`, `remove`, `union`, `intersection`, `difference`, `symmetric_difference`
-- Tests: all set operations
-
-**Acceptance:** `cargo test` green; all set operations correct.
-
-### G.5 — `HamtIndex`: PageIndexBackend
-
-**Blocked by:** merkle-spine Stage 1 (for the `PageIndexBackend` trait definition).
-
-- `HamtIndex<B>(HamtMap<u64, [u8; 32], B>)`
-- Node-level BLAKE3 Merkle hashing: each node hash covers its child hashes recursively
-- `root_hash()`: hash of root node (O(1) cached)
-- `prove_inclusion(page_id) -> Option<MerkleProof>`
-- `impl merkle_spine::PageIndexBackend for HamtIndex<B>`
-- Tests: root hash changes when any entry changes; proof verifies; empty index has known hash
-
-**Acceptance:** `cargo test` green; `HamtIndex` passes all `PageIndexBackend` contract tests.
+### G.5 — `HamtIndex`: PageIndexBackend (DONE — see above)
 
 ### G.6 — Implement pds cross-variant traits (HashMap / HashSet)
 

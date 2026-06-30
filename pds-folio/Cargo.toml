@@ -25,6 +25,8 @@ folio-core = { path = "../../folio/folio-core" }
 folio-collections = { path = "../../folio/folio-collections" }
 # pds cross-variant traits — PersistentMap, PersistentSet, etc.
 pds = { workspace = true, features = ["traits"] }
+# merkle-spine — PageIndexBackend trait (G.5 HamtIndex integration).
+merkle-spine = { path = "../../merkle-spine" }
 # Serialisation for keys and values (PostcardCodec).
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
