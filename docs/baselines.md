@@ -189,6 +189,80 @@ significant changes that may have affected the numbers.
 
 ---
 
+## pds-folio — Folio-backed persistent collections {#sec:pds-folio}
+
+**Date:** 2026-07-01
+**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
+**Rust:** 1.85.0 (stable, via Nix rust-overlay)
+**Crate:** `pds-folio` — HAMT and B+ tree collections backed by `FolioStore<MemBackend>`
+**Bench command:** `direnv exec . cargo bench -p pds-folio 2>&1 | tee /private/tmp/bench_pds_baseline_1782849793.txt`
+**Notes:** All median times from criterion. Each benchmark iteration creates a fresh store
+(in-memory backend); store creation and teardown are included in the `insert` timings.
+B+ tree inserts create O(log N) new pages per mutation (path-copy semantics); store page
+headroom is 16× the element count to accommodate version accumulation.
+
+### HamtMap<u64, u64>
+
+| Operation | 10 | 100 | 1 000 | 10 000 |
+|-----------|---:|----:|------:|-------:|
+| insert (build from empty) | 27 µs | 502 µs | 7.9 ms | 95.5 ms |
+| get (single lookup, n/2 key) | 261 ns | 508 ns | 749 ns | 751 ns |
+| remove (build + remove all) | 47.9 µs | 1.02 ms | 16.7 ms | 206.5 ms |
+| clone (O(1) snapshot, refcount) | 44 ns | 44 ns | 45 ns | 44 ns |
+
+Insert and remove are full round-trips (build from empty + all operations); get and clone
+build the map once outside the timing loop. Clone is O(1) for all sizes — refcount increment only.
+
+### HamtSet<u64>
+
+| Operation | 10 | 100 | 1 000 | 10 000 |
+|-----------|---:|----:|------:|-------:|
+| contains (single probe, n/2 key) | 263 ns | 514 ns | 762 ns | 764 ns |
+
+Probe cost scales with HAMT depth: O(log₃₂ n) — effectively constant across these sizes.
+
+### FolioVector<u32>
+
+| Operation | 10 | 100 | 1 000 | 10 000 |
+|-----------|---:|----:|------:|-------:|
+| push_back (build from empty) | 23 µs | 386 µs | 5.1 ms | 76 ms |
+| get (single read, n/2 index) | 266 ns | 528 ns | 532 ns | 800 ns |
+
+Push_back is a full build from empty; get builds once outside the timing loop.
+
+### FolioOrdMap<u32, u32> (B+ tree, BTREE_ORDER=32)
+
+| Operation | 10 | 100 | 1 000 | 10 000 |
+|-----------|---:|----:|------:|-------:|
+| insert sequential (build from empty) | 53 µs | 681 µs | 10.86 ms | 139 ms |
+| insert random (build from empty) | 55 µs | 690 µs | 10.36 ms | 137 ms |
+| iter (full scan, map built outside loop) | 359 ns | 2.4 µs | 23.1 µs | 238 µs |
+
+Sequential vs random insert times are very similar — B+ tree split cost dominates over
+key-ordering effects at these sizes. Iteration is fast due to contiguous leaf arrays
+(cache-friendly sequential reads after descent to the leftmost leaf).
+
+### FolioOrdSet<u32> (B+ tree)
+
+| Operation | 10 | 100 | 1 000 | 10 000 |
+|-----------|---:|----:|------:|-------:|
+| insert (build from empty) | 53 µs | 630 µs | 10.6 ms | 134 ms |
+
+Similar profile to FolioOrdMap; slightly faster at 100–1 000 because no value bytes
+are stored per entry.
+
+### Bug fix note
+
+A layout bug in `btree.rs` was discovered and fixed during this benchmark run. The
+`INTERNAL_CHILDREN_END` constant allocated only `BTREE_ORDER` (32) child slots per
+internal node, but an internal node with `BTREE_ORDER` separator keys requires
+`BTREE_ORDER + 1` (33) children. The 33rd child's bytes overlapped the `key_offsets`
+region, corrupting `child[32]` when the root became full (at approximately 530
+sequential inserts). Fixed: `INTERNAL_CHILDREN_END = 4 + (BTREE_ORDER + 1) * 8 = 268`.
+See `docs/decisions.md` for the full analysis.
+
+---
+
 ## OrdMap vs HashMap — head-to-head {#sec:ordmap-vs-hashmap}
 
 **Date:** 2026-04-27

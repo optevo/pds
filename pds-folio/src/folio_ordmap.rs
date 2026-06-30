@@ -1144,6 +1144,46 @@ mod tests {
         }
     }
 
+    fn make_store_n(pages: u64) -> FolioStore<MemBackend> {
+        let backend = folio_core::backend::MemBackend::new(4096, pages);
+        folio_core::store::FolioStore::create(
+            backend,
+            4096,
+            pages,
+            folio_core::checksum::ChecksumKind::Xxh3,
+            true,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn insert_sequential_past_internal_full() {
+        // Regression test: sequential inserts must succeed past the point where the root
+        // internal node fills (BTREE_ORDER=32 separator keys, 33 children).  A layout bug
+        // previously caused child[32] to overlap the key_offsets region, corrupting the
+        // rightmost child page ID and panicking at insert #530.
+        let mut m: FolioOrdMap<u32, u32, PostcardCodec, MemBackend> =
+            FolioOrdMap::new(make_store_n(16256));
+        for i in 0..600u32 {
+            m = m.insert(i, i * 3).unwrap_or_else(|e| {
+                panic!(
+                    "insert {i} failed (len={}, height={}): {e:?}",
+                    m.len(),
+                    m.height
+                )
+            });
+        }
+        assert_eq!(m.len(), 600);
+        // Verify all keys can be retrieved.
+        for i in 0..600u32 {
+            assert_eq!(
+                m.get(&i).unwrap(),
+                Some(i * 3),
+                "key {i} missing after sequential insert past internal-full"
+            );
+        }
+    }
+
     #[test]
     fn range_query_basic() {
         let m = empty_map()

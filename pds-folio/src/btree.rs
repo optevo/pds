@@ -307,23 +307,28 @@ impl<'a> LeafReader<'a> {
 //   [0]        discriminant: u8
 //   [1]        count:        u8  (number of separator keys; children = count+1)
 //   [2..4]     _pad:         [u8; 2]
-//   [4..260]   children:     [u64; BTREE_ORDER] = [u64; 32]  (256 bytes)
-//   [260..324] key_offsets:  [u16; BTREE_ORDER] = [u16; 32]  (64 bytes)
-//   [324..512] key_data:     [u8; 188]
+//   [4..268]   children:     [u64; BTREE_ORDER+1] = [u64; 33]  (264 bytes)
+//   [268..332] key_offsets:  [u16; BTREE_ORDER]   = [u16; 32]  (64 bytes)
+//   [332..512] key_data:     [u8; 180]
 //
-// Verify: 1 + 1 + 2 + 256 + 64 + 188 = 512 ✓
+// Verify: 1 + 1 + 2 + 264 + 64 + 180 = 512 ✓
+//
+// NOTE: the children array must hold BTREE_ORDER+1 entries (not BTREE_ORDER)
+// because an internal node with N separator keys has N+1 children.  The
+// original layout used [u64; BTREE_ORDER] which was one slot short, causing
+// the 33rd child to overlap the key_offsets region and corrupt page IDs.
 
 const INTERNAL_DISCRIMINANT_OFFSET: usize = 0;
 const INTERNAL_COUNT_OFFSET: usize = 1;
-const INTERNAL_CHILDREN_START: usize = 4; // [u64; BTREE_ORDER]
-const INTERNAL_CHILDREN_END: usize = 4 + BTREE_ORDER * 8; // 4 + 256 = 260
-const INTERNAL_KEY_OFFSETS_START: usize = INTERNAL_CHILDREN_END; // 260
-const INTERNAL_KEY_OFFSETS_END: usize = INTERNAL_KEY_OFFSETS_START + BTREE_ORDER * 2; // 260 + 64 = 324
-const INTERNAL_KEY_DATA_START: usize = INTERNAL_KEY_OFFSETS_END; // 324
+const INTERNAL_CHILDREN_START: usize = 4; // [u64; BTREE_ORDER+1]
+const INTERNAL_CHILDREN_END: usize = 4 + (BTREE_ORDER + 1) * 8; // 4 + 264 = 268
+const INTERNAL_KEY_OFFSETS_START: usize = INTERNAL_CHILDREN_END; // 268
+const INTERNAL_KEY_OFFSETS_END: usize = INTERNAL_KEY_OFFSETS_START + BTREE_ORDER * 2; // 268 + 64 = 332
+const INTERNAL_KEY_DATA_START: usize = INTERNAL_KEY_OFFSETS_END; // 332
 const INTERNAL_KEY_DATA_END: usize = 512;
 
 /// Number of bytes available for separator key data in an internal node.
-pub const DATA_SECTION_INTERNAL: usize = INTERNAL_KEY_DATA_END - INTERNAL_KEY_DATA_START; // 188
+pub const DATA_SECTION_INTERNAL: usize = INTERNAL_KEY_DATA_END - INTERNAL_KEY_DATA_START; // 180
 
 /// Builds a B+ tree internal (separator) node page.
 ///
@@ -535,8 +540,9 @@ mod tests {
         let header: usize = 1 + 1 + 8 + (BTREE_ORDER + 1) * 2;
         assert_eq!(header + DATA_SECTION_LEAF, 512);
 
-        // Internal layout: 1 + 1 + 2 + BTREE_ORDER*8 + BTREE_ORDER*2 + DATA_SECTION_INTERNAL = 512
-        let internal_fixed: usize = 1 + 1 + 2 + BTREE_ORDER * 8 + BTREE_ORDER * 2;
+        // Internal layout: 1 + 1 + 2 + (BTREE_ORDER+1)*8 + BTREE_ORDER*2 + DATA_SECTION_INTERNAL = 512
+        // Children array is BTREE_ORDER+1 (one more than separator count) to hold N+1 children.
+        let internal_fixed: usize = 1 + 1 + 2 + (BTREE_ORDER + 1) * 8 + BTREE_ORDER * 2;
         assert_eq!(internal_fixed + DATA_SECTION_INTERNAL, 512);
     }
 
