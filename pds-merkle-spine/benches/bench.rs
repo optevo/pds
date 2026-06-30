@@ -50,7 +50,10 @@ fn make_versioned(n: usize) -> VersionedHamt<u64, u64, PostcardCodec, MemBackend
 /// without rebuilding inside the timing loop.
 fn make_versioned_with_mid(
     n: usize,
-) -> (VersionedHamt<u64, u64, PostcardCodec, MemBackend>, VersionId) {
+) -> (
+    VersionedHamt<u64, u64, PostcardCodec, MemBackend>,
+    VersionId,
+) {
     let mid = n / 2;
     let mut vh = VersionedHamt::new(make_store(n));
     let mut mid_version = vh.version(); // v0 fallback

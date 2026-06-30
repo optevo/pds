@@ -1,0 +1,32 @@
+[package]
+name = "pds-durable"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Durable persistence layer for pds heap collections — WAL-backed with Relaxed and Strict durability modes"
+repository = "https://github.com/optevo/pds"
+license = "MPL-2.0+"
+categories = ["data-structures"]
+keywords = ["persistent", "wal", "durable", "write-ahead-log"]
+
+[dependencies]
+# Wrapped heap collections
+pds = { path = "..", features = ["std", "persist", "traits"] }
+
+# WAL serialisation
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+
+# CRC32C for WAL entry integrity
+crc32c = "0.6"
+
+# Error handling
+thiserror = "2"
+
+# Tracing
+tracing = "0.1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+proptest = "1"

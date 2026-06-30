@@ -59,8 +59,7 @@ fn bench_compare_insert_hamt(c: &mut Criterion) {
     for &n in &[10usize, 100, 1000, 10000] {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             b.iter(|| {
-                let mut map: HamtMap<u64, u64> =
-                    HamtMap::new(make_store(hamt_pages(n)));
+                let mut map: HamtMap<u64, u64> = HamtMap::new(make_store(hamt_pages(n)));
                 for i in 0..n as u64 {
                     map = map.insert(black_box(i), black_box(i * 7)).unwrap();
                 }
@@ -76,8 +75,7 @@ fn bench_compare_insert_ordmap(c: &mut Criterion) {
     for &n in &[10usize, 100, 1000, 10000] {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             b.iter(|| {
-                let mut map: FolioOrdMap<u64, u64> =
-                    FolioOrdMap::new(make_store(ordmap_pages(n)));
+                let mut map: FolioOrdMap<u64, u64> = FolioOrdMap::new(make_store(ordmap_pages(n)));
                 for i in 0..n as u64 {
                     map = map.insert(black_box(i), black_box(i * 7)).unwrap();
                 }
@@ -249,4 +247,8 @@ criterion_group!(
     bench_compare_clone_vector,
 );
 
-criterion_main!(compare_insert_benches, compare_get_benches, compare_clone_benches);
+criterion_main!(
+    compare_insert_benches,
+    compare_get_benches,
+    compare_clone_benches
+);

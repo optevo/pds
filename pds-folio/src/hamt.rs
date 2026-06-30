@@ -36,7 +36,7 @@
 //! - `C` — codec; defaults to [`crate::codec::PostcardCodec`]
 //! - `B` — folio backend; defaults to [`folio_core::backend::MemBackend`]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
@@ -80,6 +80,12 @@ pub enum HamtError {
 // NodeStore — typed page operations
 // ---------------------------------------------------------------------------
 
+/// Maximum number of decoded pages held in the `NodeStore` page cache.
+///
+/// Upper HAMT levels are read on every `get` — caching them avoids repeated
+/// folio store reads and memcopies.  128 entries × 512 bytes = 64 KiB.
+const PAGE_CACHE_CAP: usize = 128;
+
 /// A thin wrapper around [`FolioStore`] that reads and writes [`HamtNodePage`]
 /// values as folio page payloads.
 ///
@@ -88,16 +94,29 @@ pub enum HamtError {
 /// The `refcounts` table tracks structural sharing across `HamtMap` snapshots.
 /// A refcount of 1 is implicit — page IDs absent from the table have exactly
 /// one live reference.  Only refcounts ≥ 2 are stored.
+///
+/// # Page cache
+///
+/// `page_cache` holds the most recently read decoded pages (up to
+/// [`PAGE_CACHE_CAP`] entries, evicted FIFO).  Cache is invalidated on
+/// `alloc_node` (write) and `free_nodes` (free).
 #[derive(Debug)]
 pub(crate) struct NodeStore<B> {
     /// The underlying folio page store.
     pub(crate) store: FolioStore<B>,
     /// Shared-page refcount table.  Absent = refcount 1 (unique).
     pub(crate) refcounts: HashMap<u64, u32>,
+    /// Decoded page cache: page_id → decoded HamtNodePage.
+    page_cache: HashMap<u64, HamtNodePage>,
+    /// FIFO eviction queue: page IDs in insertion order.
+    cache_order: VecDeque<u64>,
 }
 
 impl<B: Backend<Error = BackendError>> NodeStore<B> {
     /// Allocates a new folio page and writes `page` as its payload.
+    ///
+    /// The new page is inserted into the cache immediately so that subsequent
+    /// reads in the same operation hit the cache rather than the store.
     ///
     /// Returns the folio page ID of the new node.
     ///
@@ -107,20 +126,47 @@ impl<B: Backend<Error = BackendError>> NodeStore<B> {
     pub(crate) fn alloc_node(&mut self, page: &HamtNodePage) -> Result<u64, HamtError> {
         let page_id = self.store.alloc_page(PageType::Data)?;
         self.store.write_page_data(page_id, &page.0)?;
+        // Cache the freshly written page.
+        self.cache_insert(page_id, *page);
         Ok(page_id)
     }
 
     /// Reads the [`HamtNodePage`] stored at `page_id`.
     ///
+    /// Returns the cached copy if present; otherwise reads from the folio store
+    /// and populates the cache.
+    ///
     /// # Errors
     ///
     /// Returns [`HamtError::Store`] if reading the page fails.
-    pub(crate) fn read_node(&self, page_id: u64) -> Result<HamtNodePage, HamtError> {
+    pub(crate) fn read_node(&mut self, page_id: u64) -> Result<HamtNodePage, HamtError> {
+        if let Some(cached) = self.page_cache.get(&page_id) {
+            return Ok(*cached);
+        }
         let data = self.store.read_page_data(page_id)?;
         let mut page = HamtNodePage::default();
         let len = data.len().min(crate::node::PAGE_BYTES);
         page.0[..len].copy_from_slice(&data[..len]);
+        self.cache_insert(page_id, page);
         Ok(page)
+    }
+
+    /// Inserts `page` into the cache under `page_id`, evicting the oldest
+    /// entry when the cache is at capacity.
+    fn cache_insert(&mut self, page_id: u64, page: HamtNodePage) {
+        if self.page_cache.contains_key(&page_id) {
+            // Already cached — update in place (no FIFO re-order needed for FIFO).
+            self.page_cache.insert(page_id, page);
+            return;
+        }
+        if self.cache_order.len() >= PAGE_CACHE_CAP {
+            // Evict the oldest entry.
+            if let Some(evict_id) = self.cache_order.pop_front() {
+                self.page_cache.remove(&evict_id);
+            }
+        }
+        self.page_cache.insert(page_id, page);
+        self.cache_order.push_back(page_id);
     }
 
     /// Frees the folio page at `page_id`.
@@ -130,18 +176,23 @@ impl<B: Backend<Error = BackendError>> NodeStore<B> {
     /// Returns [`HamtError::Store`] on folio I/O failure.
     #[allow(dead_code)] // used in future stages
     pub(crate) fn free_node(&mut self, page_id: u64) -> Result<(), HamtError> {
+        self.page_cache.remove(&page_id);
         self.store.free_page(page_id)?;
         Ok(())
     }
 
     /// Batch-frees a set of folio pages.
     ///
-    /// Uses `free_pages` for a single WAL commit rather than one per page.
+    /// Invalidates cache entries for all freed pages, then uses `free_pages`
+    /// for a single WAL commit rather than one per page.
     ///
     /// # Errors
     ///
     /// Returns [`HamtError::Store`] on folio I/O failure.
     pub(crate) fn free_nodes(&mut self, page_ids: &[u64]) -> Result<(), HamtError> {
+        for &id in page_ids {
+            self.page_cache.remove(&id);
+        }
         self.store.free_pages(page_ids)?;
         Ok(())
     }
@@ -244,6 +295,8 @@ where
             node_store: Arc::new(Mutex::new(NodeStore {
                 store,
                 refcounts: HashMap::new(),
+                page_cache: HashMap::new(),
+                cache_order: VecDeque::new(),
             })),
             root: None,
             len: 0,
@@ -310,7 +363,7 @@ where
     /// Time: O(log N).
     pub fn get(&self, key: &K) -> Result<Option<V>, HamtError> {
         let hash = hash_key(key);
-        let store = self.node_store.lock().expect("mutex not poisoned");
+        let mut store = self.node_store.lock().expect("mutex not poisoned");
 
         let Some(mut page_id) = self.root else {
             return Ok(None);
@@ -1015,7 +1068,7 @@ where
             // Pop the next page from the work stack.
             let page_id = self.work_stack.pop()?;
 
-            let store = self.node_store.lock().expect("mutex not poisoned");
+            let mut store = self.node_store.lock().expect("mutex not poisoned");
             let page = match store.read_node(page_id) {
                 Ok(p) => p,
                 Err(e) => return Some(Err(e)),

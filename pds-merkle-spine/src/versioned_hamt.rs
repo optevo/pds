@@ -174,17 +174,6 @@ where
             .map(|e| &e.snapshot)
     }
 
-    /// Looks up the `VersionId` for `version`, or `None` if unknown.
-    ///
-    /// The returned `VersionId` may still have a placeholder `root_hash` if
-    /// the root has not been computed yet.  Use `ensure_root` to populate it.
-    fn get_id(&self, version: &VersionId) -> Option<VersionId> {
-        self.entries
-            .get(version.seq as usize)
-            .filter(|e| e.id.seq == version.seq)
-            .map(|e| e.id)
-    }
-
     /// Appends a new version with a deferred (lazy) Merkle root and returns its `VersionId`.
     ///
     /// The `id.root_hash` in the stored entry is a placeholder (`SpineHash::default()`);
@@ -1544,6 +1533,128 @@ mod tests {
         assert!(
             s.contains("poison") || s.contains("Poison") || s.contains("mutex"),
             "unexpected format: {s}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // H.9: Lazy Merkle root computation
+    // -----------------------------------------------------------------------
+
+    /// After inserting a key, the history entry's root must NOT yet be computed.
+    ///
+    /// We verify this by checking that `current.root_hash` is still the
+    /// placeholder `SpineHash::default()` (all zeroes).  Under H.9, `push()`
+    /// never computes the hash — that is deferred to `root_hash()`.
+    #[test]
+    fn lazy_root_not_computed_after_insert() {
+        let m0 = empty_map();
+        let m1 = m0.insert("key".to_string(), 42u64).unwrap();
+        // The VersionId stored in `current` has the placeholder hash.
+        assert_eq!(
+            m1.current.root_hash,
+            SpineHash::default(),
+            "root_hash must be the placeholder before root_hash() is called"
+        );
+        // Confirm the history entry is also not yet computed.
+        let hist = m1.history.lock().unwrap();
+        let entry = &hist.entries[m1.current.seq as usize];
+        assert!(
+            !entry.root_computed,
+            "root_computed must be false after insert and before root_hash()"
+        );
+    }
+
+    /// Calling `root_hash()` returns the correct BLAKE3 hash and caches it.
+    ///
+    /// We verify correctness by running `compute_merkle_root` directly on the
+    /// same snapshot and comparing — this is the oracle (the old eager path).
+    #[test]
+    fn lazy_root_correct_after_root_hash_call() {
+        const N: u64 = 50;
+        let mut m = empty_map();
+        for i in 0..N {
+            m = m.insert(format!("k{i}"), i).unwrap();
+        }
+
+        // Trigger lazy computation.
+        let lazy_hash = m.root_hash();
+        assert_ne!(
+            lazy_hash,
+            SpineHash::default(),
+            "root_hash() must not return the placeholder"
+        );
+
+        // The history entry must now be marked computed.
+        {
+            let hist = m.history.lock().unwrap();
+            let entry = &hist.entries[m.current.seq as usize];
+            assert!(
+                entry.root_computed,
+                "root_computed must be true after root_hash() call"
+            );
+        }
+
+        // Cross-check: compute independently and compare.
+        let oracle_hash = compute_merkle_root(&m.data).expect("compute_merkle_root failed");
+        assert_eq!(
+            lazy_hash, oracle_hash,
+            "lazy root_hash() must equal the directly-computed Merkle root"
+        );
+    }
+
+    /// `prove_inclusion` works correctly without a prior `root_hash()` call.
+    ///
+    /// The inclusion proof must be valid even when the root was computed lazily
+    /// as a side-effect of `prove_inclusion` itself.
+    #[test]
+    fn prove_inclusion_lazy() {
+        let m = empty_map()
+            .insert("alpha".to_string(), 1u64)
+            .unwrap()
+            .insert("beta".to_string(), 2u64)
+            .unwrap()
+            .insert("gamma".to_string(), 3u64)
+            .unwrap();
+
+        // Do NOT call root_hash() first — the proof must trigger lazy computation.
+        let proof = m
+            .prove_inclusion(&"beta".to_string())
+            .expect("prove_inclusion must succeed")
+            .expect("key must be present");
+
+        // The proof's root_hash must be the real hash (not the placeholder).
+        assert_ne!(
+            proof.root_hash,
+            SpineHash::default(),
+            "proof root_hash must not be the placeholder"
+        );
+
+        // Verify the proof against the root now returned by root_hash().
+        let root = m.root_hash();
+        assert_eq!(
+            proof.root_hash, root,
+            "proof root_hash must match root_hash()"
+        );
+        assert!(
+            VersionedHamt::<String, u64, PostcardCodec, MemBackend>::verify_proof(
+                &root,
+                &"beta".to_string(),
+                &2u64,
+                &proof,
+            )
+            .unwrap(),
+            "proof verification must succeed"
+        );
+    }
+
+    /// `VersionedHamtError::VersionNotFound` has the expected Display format.
+    #[test]
+    fn version_not_found_error_formats() {
+        let err = VersionedHamtError::VersionNotFound(42);
+        let s = format!("{err}");
+        assert!(
+            s.contains("42"),
+            "VersionNotFound display must include the seq: {s}"
         );
     }
 }
