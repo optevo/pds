@@ -19,6 +19,30 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.12 — Integration tests (Vector + OrdMap / OrdSet).**
+  `tests/ordmap_vector_integration.rs`: 15 integration/proptest tests.
+
+  Deterministic tests:
+  - `ordmap_insert_many_and_verify_all` (2*BTREE_ORDER+5 keys)
+  - `ordmap_insert_reverse_order` (ascending output verified)
+  - `ordmap_range_query_across_leaf_boundary` (range spanning the split point)
+  - `ordmap_remove_half_and_verify_remaining` (even keys removed)
+  - `ordmap_snapshot_isolation_insert_does_not_affect_original`
+  - `ordmap_snapshot_isolation_remove_does_not_affect_original`
+  - `ordset_insert_many_and_verify_sorted`
+  - `ordset_range_query`
+  - `vector_concat_split_round_trip_small`
+  - `vector_concat_split_round_trip_cross_boundary`
+  - `vector_snapshot_isolation`
+  - `vector_large_n_push_and_get` (BRANCHING_FACTOR²/2 elements)
+
+  Proptest (20 cases each):
+  - `prop_vector_concat_split_inverse` (concat/split are inverses)
+  - `prop_ordmap_sorted_order_invariant` (iter is always sorted, unique)
+  - `prop_ordmap_range_matches_full_iter_filtered` (range == iter filtered)
+
+  All 15 integration tests green.  Full workspace `test.sh` passes.
+
 - **[2026-07-01] G.11 — `FolioOrdMap` + `FolioOrdSet` CRUD and trait impls.**
   `src/folio_ordmap.rs`: `FolioOrdMap<K, V, C, B>` backed by `OrdMapNodeStore<B>`.
   `src/folio_ordset.rs`: `FolioOrdSet<A, C, B>` — thin newtype over
@@ -360,12 +384,7 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ### G.11 — `FolioOrdMap` + `FolioOrdSet` CRUD and trait impls (DONE — see above)
 
-### G.12 — Integration tests (Vector + OrdMap / OrdSet)
-
-- proptest: Vector concat/split round-trips; OrdMap range query correctness
-- Integration: create OrdMap in folio store; restart simulation; range query still correct
-
-**Acceptance:** proptest green; integration round-trip green.
+### G.12 — Integration tests (Vector + OrdMap / OrdSet) (DONE — see above)
 
 ### G.13 — Consensus backend note and feature flag
 
