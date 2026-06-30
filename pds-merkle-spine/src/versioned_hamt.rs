@@ -12,9 +12,12 @@
 //! `Arc<Mutex<…>>`).  Each history entry holds a `HamtMap` clone — keeping
 //! folio refcounts alive so that historical snapshots remain readable.
 //!
-//! The Merkle root is computed by hashing all key-value pairs in sorted order
-//! with BLAKE3 (domain key `ms:hamt-node-v1`).  Equal entry sets always produce
-//! the same hash.
+//! The Merkle root is computed lazily (H.9): it is deferred until the first call
+//! to [`VersionedHamt::root_hash`], [`VersionedHamt::root_hash_at`], or
+//! `prove_inclusion*()`.  The result is cached in the [`VersionEntry`] so that
+//! subsequent calls are O(1).  This removes the O(N) BLAKE3 pass from
+//! [`VersionedHamt::insert`] and [`VersionedHamt::remove`], reducing an N-insert
+//! build from O(N²) to O(N log N).
 //!
 //! # Structural sharing
 //!
@@ -52,6 +55,9 @@ pub enum VersionedHamtError {
     /// The version history mutex was poisoned.
     #[error("version history mutex poisoned")]
     Poisoned,
+    /// The requested version sequence number is not in the history.
+    #[error("version {0} not found in history")]
+    VersionNotFound(u64),
 }
 
 // ---------------------------------------------------------------------------
@@ -65,11 +71,23 @@ pub enum VersionedHamtError {
 /// the BLAKE3 Merkle root of all key-value pairs at that version — it is
 /// self-certifying: equal hashes imply identical contents (up to BLAKE3's
 /// collision resistance).
+///
+/// # Warning — lazy root hash (H.9)
+///
+/// `root_hash` contains a placeholder (`[0u8; 32]`) until
+/// [`VersionedHamt::root_hash`] or [`VersionedHamt::root_hash_at`] has been
+/// called for this version.  **Do not read `root_hash` directly**; always use
+/// `VersionedHamt::root_hash_at(version_id)` to obtain the verified hash.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct VersionId {
     /// Monotonic sequence number.  Version 0 is the empty initial map.
     pub seq: u64,
     /// BLAKE3 Merkle root hash of the HAMT at this version.
+    ///
+    /// This field is `[0u8; 32]` (a placeholder) until the root hash has been
+    /// computed via [`VersionedHamt::root_hash`] or
+    /// [`VersionedHamt::root_hash_at`].  Always access this value through those
+    /// methods rather than reading the field directly.
     pub root_hash: SpineHash,
 }
 
@@ -82,6 +100,10 @@ pub struct VersionId {
 ///
 /// Storing the `HamtMap` clone keeps folio refcounts alive for the historical
 /// snapshot, preventing premature page deallocation.
+///
+/// The `root_computed` flag implements H.9 lazy root hashing: when `false`,
+/// `id.root_hash` is a placeholder (`[0u8; 32]`); `ensure_root` computes the
+/// hash on first demand and sets `root_computed = true`.
 struct VersionEntry<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
@@ -89,8 +111,13 @@ where
     C: Codec,
     B: Backend<Error = BackendError>,
 {
-    /// The stable version identifier.
+    /// The stable version identifier.  `id.root_hash` is a placeholder until
+    /// `root_computed` is `true`.
     id: VersionId,
+    /// Whether `id.root_hash` has been computed and cached.
+    ///
+    /// `false` means `id.root_hash == SpineHash::default()` (placeholder).
+    root_computed: bool,
     /// The `HamtMap` snapshot at this version (keeps nodes alive via refcount).
     snapshot: HamtMap<K, V, C, B>,
 }
@@ -121,14 +148,18 @@ where
     B: Backend<Error = BackendError>,
 {
     /// Creates a new history with the genesis version (v0 = empty map).
+    ///
+    /// The genesis entry computes its root hash eagerly — `hash_hamt_node(b"")`
+    /// is an O(1) constant, so the lazy optimisation is unnecessary here.
     fn new(genesis: HamtMap<K, V, C, B>) -> Self {
         let id = VersionId {
             seq: 0,
-            root_hash: hash_hamt_node(b""), // canonical empty-HAMT Merkle root
+            root_hash: hash_hamt_node(b""), // canonical empty-HAMT Merkle root (O(1))
         };
         Self {
             entries: vec![VersionEntry {
                 id,
+                root_computed: true, // genesis root is always eagerly computed
                 snapshot: genesis,
             }],
         }
@@ -136,26 +167,64 @@ where
 
     /// Looks up the `HamtMap` snapshot for `version`, or `None` if unknown.
     fn get_snapshot(&self, version: &VersionId) -> Option<&HamtMap<K, V, C, B>> {
+        // Lookup by seq index (O(1)) when the seq is within range.
         self.entries
-            .iter()
-            .find(|e| e.id == *version)
+            .get(version.seq as usize)
+            .filter(|e| e.id.seq == version.seq)
             .map(|e| &e.snapshot)
     }
 
     /// Looks up the `VersionId` for `version`, or `None` if unknown.
+    ///
+    /// The returned `VersionId` may still have a placeholder `root_hash` if
+    /// the root has not been computed yet.  Use `ensure_root` to populate it.
     fn get_id(&self, version: &VersionId) -> Option<VersionId> {
-        self.entries.iter().find(|e| e.id == *version).map(|e| e.id)
+        self.entries
+            .get(version.seq as usize)
+            .filter(|e| e.id.seq == version.seq)
+            .map(|e| e.id)
     }
 
-    /// Appends a new version and returns its `VersionId`.
-    fn push(&mut self, snapshot: HamtMap<K, V, C, B>, merkle_root: SpineHash) -> VersionId {
+    /// Appends a new version with a deferred (lazy) Merkle root and returns its `VersionId`.
+    ///
+    /// The `id.root_hash` in the stored entry is a placeholder (`SpineHash::default()`);
+    /// the actual hash is computed on demand by `ensure_root`.
+    fn push(&mut self, snapshot: HamtMap<K, V, C, B>) -> VersionId {
         let seq = self.entries.len() as u64;
         let id = VersionId {
             seq,
-            root_hash: merkle_root,
+            root_hash: SpineHash::default(), // placeholder — computed lazily
         };
-        self.entries.push(VersionEntry { id, snapshot });
+        self.entries.push(VersionEntry {
+            id,
+            root_computed: false,
+            snapshot,
+        });
         id
+    }
+
+    /// Computes and caches the Merkle root for entry `seq`, returning the hash.
+    ///
+    /// If the root was already computed, returns the cached value (O(1)).
+    /// On the first call, iterates all key-value pairs and hashes them (O(N)).
+    ///
+    /// # Errors
+    ///
+    /// Returns `VersionedHamtError::VersionNotFound` if `seq` is out of bounds,
+    /// or a `VersionedHamtError::Hamt` error on folio I/O or codec failure.
+    fn ensure_root(&mut self, seq: u64) -> Result<SpineHash, VersionedHamtError> {
+        let entry = self
+            .entries
+            .get_mut(seq as usize)
+            .ok_or(VersionedHamtError::VersionNotFound(seq))?;
+        debug_assert_eq!(entry.id.seq, seq);
+        if entry.root_computed {
+            return Ok(entry.id.root_hash);
+        }
+        let hash = compute_merkle_root(&entry.snapshot)?;
+        entry.id.root_hash = hash;
+        entry.root_computed = true;
+        Ok(hash)
     }
 }
 
@@ -403,24 +472,26 @@ where
 
     /// Returns a new `VersionedHamt` with `key` → `value` inserted.
     ///
-    /// Creates a new version.  The original is unchanged.
+    /// Creates a new version.  The original is unchanged.  The Merkle root of
+    /// the new version is computed lazily — only on the first call to
+    /// [`root_hash`][Self::root_hash] or [`root_hash_at`][Self::root_hash_at].
     ///
-    /// Time: O(log N).  Allocates O(log N) new folio pages.
+    /// Time: O(log N).  Allocates O(log N) new folio pages.  No Merkle pass.
     ///
     /// # Errors
     ///
     /// Returns [`VersionedHamtError`] on folio I/O or codec failure.
     pub fn insert(&self, key: K, value: V) -> Result<Self, VersionedHamtError> {
         let new_data = self.data.insert(key, value)?;
-        let merkle_root = compute_merkle_root(&new_data)?;
         // Clone is O(1): increments HAMT root refcount so the snapshot is kept alive.
         let snapshot = new_data.clone();
 
+        // No merkle root computed here — deferred to first root_hash() call (H.9).
         let new_current = self
             .history
             .lock()
             .map_err(|_| VersionedHamtError::Poisoned)?
-            .push(snapshot, merkle_root);
+            .push(snapshot);
 
         Ok(Self {
             data: new_data,
@@ -431,23 +502,25 @@ where
 
     /// Returns a new `VersionedHamt` with `key` removed, plus the evicted value.
     ///
-    /// Creates a new version.  The original is unchanged.
+    /// Creates a new version.  The original is unchanged.  The Merkle root of
+    /// the new version is computed lazily — only on the first call to
+    /// [`root_hash`][Self::root_hash] or [`root_hash_at`][Self::root_hash_at].
     ///
-    /// Time: O(log N).  Allocates O(log N) new folio pages.
+    /// Time: O(log N).  Allocates O(log N) new folio pages.  No Merkle pass.
     ///
     /// # Errors
     ///
     /// Returns [`VersionedHamtError`] on folio I/O or codec failure.
     pub fn remove(&self, key: &K) -> Result<(Self, Option<V>), VersionedHamtError> {
         let (new_data, evicted) = self.data.remove(key)?;
-        let merkle_root = compute_merkle_root(&new_data)?;
+        // No merkle root computed here — deferred to first root_hash() call (H.9).
         let snapshot = new_data.clone();
 
         let new_current = self
             .history
             .lock()
             .map_err(|_| VersionedHamtError::Poisoned)?
-            .push(snapshot, merkle_root);
+            .push(snapshot);
 
         Ok((
             Self {
@@ -493,9 +566,17 @@ where
     ///
     /// Two `VersionedHamt` values with equal root hashes have identical contents.
     ///
-    /// Time: O(1) — cached in the version record.
+    /// The first call after a mutation iterates all N key-value pairs to compute
+    /// the hash (O(N)) and acquires the history mutex.  Subsequent calls return
+    /// the cached value (O(1) + mutex acquire).
+    ///
+    /// Time: O(N) first call; O(1) thereafter.  Acquires a mutex.
     pub fn root_hash(&self) -> SpineHash {
-        self.current.root_hash
+        self.history
+            .lock()
+            .map_err(|_| VersionedHamtError::Poisoned)
+            .and_then(|mut h| h.ensure_root(self.current.seq))
+            .unwrap_or_default()
     }
 }
 
@@ -565,20 +646,27 @@ where
     ///
     /// Returns `None` if `version` is unknown.
     ///
-    /// Time: O(1).
+    /// The first call for a version that has not yet been hashed iterates all N
+    /// key-value pairs to compute the hash (O(N)).  Subsequent calls return the
+    /// cached value (O(1) + mutex acquire).
+    ///
+    /// Time: O(N) first call; O(1) thereafter.  Acquires a mutex.
     ///
     /// # Errors
     ///
-    /// Returns [`VersionedHamtError`] on lock failure.
+    /// Returns [`VersionedHamtError`] on lock failure or folio I/O/codec error.
     pub fn root_hash_at(
         &self,
         version: VersionId,
     ) -> Result<Option<SpineHash>, VersionedHamtError> {
-        let hist = self
+        let mut hist = self
             .history
             .lock()
             .map_err(|_| VersionedHamtError::Poisoned)?;
-        Ok(hist.get_id(&version).map(|id| id.root_hash))
+        if hist.get_snapshot(&version).is_none() {
+            return Ok(None);
+        }
+        Ok(Some(hist.ensure_root(version.seq)?))
     }
 }
 
@@ -595,11 +683,13 @@ where
 {
     /// Returns all entries that differ between version `from` and version `to`.
     ///
-    /// Exploits Merkle root hashes: if `from.root_hash == to.root_hash`, the
-    /// maps are identical and the diff is empty (O(1) fast path).  Otherwise,
-    /// both historical maps are iterated and compared entry-by-entry (O(N)).
+    /// Exploits Merkle root hashes: if both roots are equal after lazy
+    /// computation, the maps are identical and the diff is empty (O(1) fast path
+    /// once both roots are cached).  Otherwise both historical maps are iterated
+    /// and compared entry-by-entry (O(N)).
     ///
-    /// Time: O(1) if `from == to`; O(N) in general.
+    /// Time: O(N) first call (lazy root computation); O(1) fast path thereafter
+    /// when roots are already cached and identical.
     ///
     /// # Errors
     ///
@@ -609,17 +699,24 @@ where
         from: VersionId,
         to: VersionId,
     ) -> Result<Vec<DiffEntry<K, V>>, VersionedHamtError> {
-        // O(1) fast path: identical Merkle roots ↔ identical content.
-        if from.root_hash == to.root_hash {
-            return Ok(vec![]);
-        }
-
-        // Retrieve both historical snapshots (clones keep refcounts alive).
+        // Lazy-aware fast path: compute (and cache) both root hashes, then compare.
+        // The mutex is released before the full diff computation to avoid holding
+        // it across the slow O(N) iteration below.
         let (from_snap, to_snap) = {
-            let hist = self
+            let mut hist = self
                 .history
                 .lock()
                 .map_err(|_| VersionedHamtError::Poisoned)?;
+            let from_exists = hist.get_snapshot(&from).is_some();
+            let to_exists = hist.get_snapshot(&to).is_some();
+            if from_exists && to_exists {
+                let fh = hist.ensure_root(from.seq)?;
+                let th = hist.ensure_root(to.seq)?;
+                if fh == th {
+                    return Ok(vec![]);
+                }
+            }
+            // Retrieve clones while we have the lock, then release.
             let from_snap = match hist.get_snapshot(&from) {
                 None => return Ok(vec![]),
                 Some(s) => s.clone(),
@@ -713,7 +810,10 @@ where
     ///
     /// Returns `None` if `key` is absent at that version or the version is unknown.
     ///
-    /// Time: O(log N).
+    /// The first call for a version that has not yet been hashed computes the
+    /// Merkle root lazily (O(N)) so the proof's `root_hash` field is populated.
+    ///
+    /// Time: O(N) first call (lazy root); O(log N) thereafter.
     ///
     /// # Errors
     ///
@@ -724,13 +824,17 @@ where
         key: &K,
     ) -> Result<Option<MerkleProof>, VersionedHamtError> {
         let (snapshot, version_root_hash) = {
-            let hist = self
+            let mut hist = self
                 .history
                 .lock()
                 .map_err(|_| VersionedHamtError::Poisoned)?;
             match hist.get_snapshot(&version) {
                 None => return Ok(None),
-                Some(s) => (s.clone(), version.root_hash),
+                Some(s) => {
+                    let snapshot = s.clone();
+                    let root_hash = hist.ensure_root(version.seq)?;
+                    (snapshot, root_hash)
+                }
             }
         };
 
@@ -823,9 +927,25 @@ where
     /// Tests equality by comparing Merkle root hashes.
     ///
     /// Two `VersionedHamt` instances are equal iff their current version's
-    /// Merkle root hashes are equal (O(1); no tree traversal).
+    /// Merkle root hashes are equal.  The first call after a mutation computes
+    /// the root (O(N)) and acquires the history mutex.  Avoid calling in tight
+    /// loops before any `root_hash()` call has been made.
+    ///
+    /// Time: O(N) on first call; O(1) thereafter.  Acquires a mutex on each side.
     fn eq(&self, other: &Self) -> bool {
-        self.current.root_hash == other.current.root_hash
+        let lhs = self
+            .history
+            .lock()
+            .ok()
+            .and_then(|mut h| h.ensure_root(self.current.seq).ok())
+            .unwrap_or_default();
+        let rhs = other
+            .history
+            .lock()
+            .ok()
+            .and_then(|mut h| h.ensure_root(other.current.seq).ok())
+            .unwrap_or_default();
+        lhs == rhs
     }
 }
 
@@ -1026,6 +1146,8 @@ mod tests {
     fn insert_changes_root_hash() {
         let m0 = empty_map();
         let m1 = m0.insert("a".to_string(), 1).unwrap();
+        // After H.9 lazy root: VersionId.root_hash is a placeholder until
+        // root_hash() is called explicitly.
         assert_ne!(m0.root_hash(), m1.root_hash());
     }
 
