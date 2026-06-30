@@ -59,6 +59,17 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-06-30] Phase W.0 + W.1 — Workspace consolidation.**
+  Added `[workspace]` table to root `Cargo.toml` with `members = []`,
+  `resolver = "2"`, and a `[workspace.dependencies]` stub for `pds` itself.
+  `cargo metadata` confirms workspace root at `/Users/rd/projects/pds`.
+  `build.sh` updated to pass `--workspace`; `test.sh` adds a
+  `cargo test --workspace` smoke-check step. CI (`ci.yml`) adds
+  `cargo test --workspace` to the test matrix and switches clippy to
+  `--workspace`. `docs/architecture.md` gains a Workspace layout section with
+  the three-crate dependency diagram. `test.sh` green with all nine steps
+  (fmt, test ×3, check, clippy, doc, workspace smoke, audit).
+
 - **[2026-06-30] Phase F.0 + F.1 — Cross-variant trait layer (`src/traits.rs`).**
   Defined the portable trait hierarchy covering all five in-memory pds collection
   types. New `traits` Cargo feature (requires `std`) gates the module.

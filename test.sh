@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Quality gate — all steps must pass for work items to be considered done.
+#
+# Workspace note: once member crates are added (pds-folio at G.0, pds-merkle-spine
+# at H.0), the `--workspace` smoke-check step below catches cross-crate regressions.
+# Per-crate steps target the root `pds` crate only (no --workspace) because member
+# crates define their own feature sets and may not share all features with the root.
 
 echo "--- cargo fmt --check ---"
 cargo fmt --check
@@ -23,6 +28,11 @@ cargo clippy --all-features -- -D warnings
 
 echo "--- cargo doc ---"
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+
+echo "--- cargo test --workspace (smoke check) ---"
+# Smoke check across the full workspace — catches cross-crate breakage.
+# Member crates (pds-folio, pds-merkle-spine) are included once added.
+cargo test --workspace
 
 echo "--- cargo audit ---"
 cargo audit

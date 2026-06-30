@@ -1,3 +1,17 @@
+[workspace]
+# Members are added as Phase G (pds-folio) and Phase H (pds-merkle-spine) are created.
+# The root `pds` crate is an implicit member (package + workspace coexist in the same
+# Cargo.toml — the standard Cargo pattern for a root crate that is also the workspace root).
+members = []
+resolver = "2"
+
+# Shared dependency versions inherited by member crates.
+# Each member uses `dep.workspace = true` to pin consistently.
+# Entries are added here as member crates (G.0, H.0) bring in new deps.
+[workspace.dependencies]
+# pds itself — member crates depend on it for the cross-variant traits.
+pds = { path = ".", default-features = false }
+
 [package]
 name = "pds"
 version = "1.0.0"

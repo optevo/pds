@@ -7,6 +7,7 @@ before modifying any module described here.
 
 ## Contents
 
+- [Workspace layout](#workspace-layout)
 - [Overview](#overview)
 - [SharedPointer abstraction](#shared-pointer)
 - [HAMT — Hash Array Mapped Trie](#hamt)
@@ -14,6 +15,35 @@ before modifying any module described here.
 - [B+ tree](#btree)
 - [Focus and FocusMut](#focus)
 - [Unsafe inventory](#unsafe-inventory)
+
+---
+
+## Workspace layout {#workspace-layout}
+
+The pds repository is a Cargo workspace with three member crates that sit at
+different layers of the storage hierarchy:
+
+```
+pds (root crate — in-memory, heap-backed)
+  ├── pds-folio  (folio page-backed HAMT — Phase G)
+  │     └── depends on: pds (traits feature), folio-core, merkle-spine
+  └── pds-merkle-spine  (versioned HAMT with Merkle identity — Phase H)
+        └── depends on: pds-folio, merkle-spine, pds (traits feature)
+```
+
+**Dependency direction:** `pds-merkle-spine` → `pds-folio` → `pds`. The root
+`pds` crate never depends on member crates — the arrow flows outward only.
+
+**Cross-variant trait layer (`traits` feature):** The `pds::traits` module
+defines `PersistentCollection`, `PersistentMap`, `PersistentSet`,
+`PersistentVector`, `PersistentOrdMap`, `PersistentOrdSet`,
+`VersionedPersistentMap`, and `MerklePersistentMap`. These are implemented by
+all three crates so callers can be generic over the storage backend.
+
+**Status:**
+- `pds` — shipped (v1.0.0), `traits` feature added in Phase F.0
+- `pds-folio` — planned (Phase G); scaffold at G.0
+- `pds-merkle-spine` — planned (Phase H); scaffold at H.0
 
 ---
 
