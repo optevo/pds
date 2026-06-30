@@ -471,7 +471,7 @@ mod tests {
         // children end: 130 + 32 * 8 = 130 + 256 = 386 ≤ 512.
         assert_eq!(INTERNAL_SIZES_START, 2);
         assert_eq!(INTERNAL_CHILDREN_START, 130);
-        assert!(INTERNAL_CHILDREN_START + BRANCHING_FACTOR * 8 <= PAGE_BYTES);
+        const { assert!(INTERNAL_CHILDREN_START + BRANCHING_FACTOR * 8 <= PAGE_BYTES) }
     }
 
     // --- Discriminant uniqueness ---

@@ -36,6 +36,8 @@
 
 pub mod btree;
 pub mod codec;
+pub mod folio_ordmap;
+pub mod folio_ordset;
 pub mod folio_vector;
 pub mod hamt;
 pub mod hamt_index;

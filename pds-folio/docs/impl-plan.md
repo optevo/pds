@@ -19,6 +19,42 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.11 — `FolioOrdMap` + `FolioOrdSet` CRUD and trait impls.**
+  `src/folio_ordmap.rs`: `FolioOrdMap<K, V, C, B>` backed by `OrdMapNodeStore<B>`.
+  `src/folio_ordset.rs`: `FolioOrdSet<A, C, B>` — thin newtype over
+  `FolioOrdMap<A, (), C, B>`.
+
+  Key operations — all path-copy, O(log N):
+  - `get(key)` / `contains_key(key)` — descend via `find_child` separator routing.
+  - `insert(key, value)` — decode/merge entries in leaf; split leaf at midpoint when
+    full (`BTREE_ORDER` entries); propagate split separator up through internal nodes;
+    grow tree height when root splits.  Internal nodes split likewise when they absorb
+    a child split and exceed `BTREE_ORDER` separators.
+  - `remove(key)` — remove from leaf (no rebalancing); propagate empty-child removal
+    upward; collapse single-child root.
+  - `first()` / `last()` — descend to leftmost / rightmost leaf entry.
+  - `range(bounds)` — recursive in-order tree walk with subtree pruning against bounds.
+  - `iter()` — delegates to `range(..)`.
+
+  Refcount invariant: same path-copy pattern as HAMT G.3 and FolioVector G.9.
+  Unchanged siblings have refcounts incremented on every internal-node rebuild.
+  Newly allocated pages (from recursive splits) are never double-incremented.
+
+  `Clone` — O(1) root refcount increment.
+  `Drop` — iterative DFS over reachable pages; decrement refcounts; free pages
+  that reach zero via batch `free_nodes`.
+
+  `PersistentCollection` / `PersistentOrdMap<K, V>` / `PersistentOrdSet<A>` impls
+  delegate to inherent methods with `.expect()`.
+
+  Two clippy fixes in pre-existing test code:
+  - `folio_vector.rs`: removed unused `use pds::traits::PersistentVector` import.
+  - `node.rs`, `vector.rs`: changed `assert!(const_expr)` → `const { assert!(...) }`.
+
+  FolioOrdMap: 18 unit tests.  FolioOrdSet: 9 unit tests.
+  All 151 lib + 12 integration + 7 doc tests green.
+  Full workspace `test.sh` passes (fmt + tests + clippy + doc).
+
 - **[2026-07-01] G.10 — OrdMap / OrdSet: B+ tree node types and slab layout.**
   `src/btree.rs`: `BTreeNodePage([u8; 512])` — `#[repr(transparent)]` Pod + Zeroable
   newtype (manual `Default` via `bytemuck::Zeroable::zeroed()`).  Two discriminant
@@ -322,17 +358,7 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ### G.10 — OrdMap / OrdSet: B+ tree node types and slab layout (DONE — see above)
 
-### G.11 — `OrdMap` + `OrdSet` CRUD and trait impls
-
-- `OrdMap<K, V, C = PostcardCodec, B = DefaultBackend>` — `K: Serialize + DeserializeOwned + Ord + Clone`
-- `new`, `get`, `insert`, `remove`, `first`, `last`, `range`, `len`, `contains_key`, `iter`
-- B+ tree split/merge on insert/remove; path-copy; shared refcount table from G.3
-- `OrdSet<A, C, B>` wrapper over `OrdMap<A, (), C, B>`
-- `impl PersistentOrdMap<K, V> for OrdMap<K, V, C, B>`
-- `impl PersistentOrdSet<A> for OrdSet<A, C, B>`
-- Tests: empty, insert, remove, range queries, ordering invariants; proptest sorted order
-
-**Acceptance:** `cargo test` green; sorted order invariant verified; range queries correct.
+### G.11 — `FolioOrdMap` + `FolioOrdSet` CRUD and trait impls (DONE — see above)
 
 ### G.12 — Integration tests (Vector + OrdMap / OrdSet)
 

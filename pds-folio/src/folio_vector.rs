@@ -950,7 +950,6 @@ mod tests {
     use super::*;
     use crate::codec::{PodCodec, PostcardCodec};
     use folio_core::{backend::MemBackend, checksum::ChecksumKind, store::FolioStore};
-    use pds::traits::PersistentVector;
 
     fn make_store() -> FolioStore<MemBackend> {
         let backend = MemBackend::new(4096, 512);

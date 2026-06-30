@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn internal_node_max_size_fits_in_slot() {
         // 8-byte header + 32 children × 8 bytes = 264 bytes ≤ PAGE_BYTES.
-        assert!(8 + 32 * 8 <= PAGE_BYTES);
+        const { assert!(8 + 32 * 8 <= PAGE_BYTES) }
     }
 
     // -----------------------------------------------------------------------
