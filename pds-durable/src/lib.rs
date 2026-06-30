@@ -31,7 +31,7 @@
 //!
 //! # See also
 //!
-//! - `docs/impl-plan.md` — phased implementation plan (D.0–D.9)
+//! - `docs/impl-plan.md` — phased implementation plan (D.0–D.10)
 
 pub mod checkpoint;
 pub mod durable_map;
@@ -46,6 +46,9 @@ pub mod durable_set;
 pub mod durable_ordmap;
 
 #[cfg(feature = "tiered")]
+pub mod policy;
+
+#[cfg(feature = "tiered")]
 pub mod tiered_map;
 
 pub use durable_map::{DurableConfig, DurableMap, Relaxed, Strict};
@@ -54,4 +57,6 @@ pub use error::DurableError;
 #[cfg(feature = "tiered")]
 pub use pds_merkle_spine::VersionId;
 #[cfg(feature = "tiered")]
-pub use tiered_map::{TieredConfig, TieredMap};
+pub use policy::{Durable, MemOnly, Pipelined, TierPolicy, WriteBack};
+#[cfg(feature = "tiered")]
+pub use tiered_map::{MemOnlyMap, PipelinedMap, TieredConfig, TieredMap};

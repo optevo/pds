@@ -48,6 +48,62 @@ Two durability modes: `Strict` (zero data loss, fsync per mutation) and `Relaxed
   - Benchmarks gated with `#[cfg(feature = "tiered")]` in `bench.rs`; separate
     `criterion_group!` macro invocations for `tiered` vs default builds.
 
+- **[2026-07-01] D.8 — Benchmarks** — `benches/bench.rs` implemented with 6 criterion
+  benchmarks: `durable_map_strict_insert`, `durable_map_relaxed_insert`,
+  `durable_map_relaxed_insert_flush`, `durable_map_get`, `durable_map_checkpoint`,
+  `heap_reference`; `insert_comparison` group comparing heap_only vs relaxed_no_flush vs
+  strict_fsync; `[[bench]]` entry added to `Cargo.toml`; results recorded in
+  `docs/baselines.md` (D.1–D.8 baseline, 2026-07-01).
+  - Benchmark highlights (M5 Max, macOS tmpfs): strict insert 4.86 s / 1 000 entries;
+    relaxed insert 389 µs / 1 000 entries; relaxed+flush 5.63 ms (100 + flush); get 49.3 µs.
+
+- **[2026-07-01] D.7 — Additional collection types** — `src/durable_set.rs`
+  (`DurableSet<T, Mode>`) and `src/durable_ordmap.rs` (`DurableOrdMap<K,V,Mode>`)
+  implemented; each wraps its `pds` counterpart with the same WAL infrastructure;
+  per-collection recovery functions (`recover_set`, `recover_ord_map`); Strict and
+  Relaxed impls for each type; feature flags `durable-set`, `durable-ordmap` added to
+  `Cargo.toml`; `lib.rs` exports gated on features; 4 unit tests (2 per type, covering
+  both modes); all tests green.
+
+- **[2026-07-01] D.6 — Tests and proptest suite** — `tests/durable_map.rs` implemented
+  with 3 proptest suites (`strict_round_trip`, `relaxed_flush_semantics`,
+  `checkpoint_recovery`) and 8 edge-case unit tests; all 11 integration tests pass;
+  proptest default 256 cases; `proptest` added to `dev-dependencies`.
+
+- **[2026-07-01] D.5 — Checkpoint and WAL compaction** — `src/checkpoint.rs`
+  implemented; `write_checkpoint` serialises the collection and appends a `Checkpoint`
+  entry with fsync; `compact_wal` writes a new WAL at `<path>.wal.tmp` containing only
+  the checkpoint entry, then atomically renames it over the original; 2 unit tests
+  covering compaction and post-checkpoint recovery; all green.
+
+- **[2026-07-01] D.4 — `DurableMap<K,V,Relaxed>`** — Relaxed impl added to
+  `src/durable_map.rs`; write-behind: mutations land in `inner` immediately and
+  WAL entries buffer in `wal.pending`; `flush()` drains pending + writes `FlushMarker`
+  + `sync_data()`; `pending_count()` exposes buffer depth; auto-flush/checkpoint via
+  `DurableConfig`; data loss window documented in doc comments; 6 unit tests green.
+
+- **[2026-07-01] D.3 — `DurableMap<K,V,Strict>`** — `src/durable_map.rs` implemented;
+  `DurableConfig` struct; `Strict` and `Relaxed` zero-sized mode tags; `DurableMap`
+  struct; Strict impl: `open` (open_or_create + recover_map), `insert`/`remove` (WAL
+  append with fsync=true then heap mutation), `get`, `contains_key`, `len`, `is_empty`,
+  `checkpoint`, `inner`, `maybe_checkpoint`; 5 unit tests green.
+
+- **[2026-07-01] D.2 — Recovery: load checkpoint + replay** — `src/recovery.rs`
+  implemented; `recover_map<K,V>` collects all valid entries, finds last `Checkpoint`,
+  deserialises snapshot, replays subsequent Insert/Remove, truncates corrupt tail;
+  `compute_entry_end` helper; 6 unit tests covering empty WAL, full replay, checkpoint
+  with post-ops, remove idempotency, partial tail truncation, and CRC-corrupt entry;
+  all green.
+
+- **[2026-07-01] D.1 — WAL format and append** — `src/wal.rs` and `src/error.rs`
+  implemented; magic `b"PDSW"`, version 1, per-entry CRC32C; `WalEntry` enum
+  (Insert, Remove, Checkpoint, FlushMarker); `Wal` struct with `create`, `open`,
+  `open_or_create`, `append` (fsync flag), `flush` (drain pending), `entries_from`
+  (CRC-validated iterator), `file_len`, `truncate`; `DurableError` enum; 8 unit tests
+  green.
+  - Key fix: pds dep requires `features = ["std", "persist", "serde", "traits"]` —
+    `serde` feature gates the actual Serialize/Deserialize impls (separate from `persist`).
+
 - **[2026-07-01] Workspace scaffold** — crate directory, `Cargo.toml`, `src/lib.rs`,
   `docs/impl-plan.md` created; added to workspace `members` in root `Cargo.toml`.
 

@@ -2,44 +2,25 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-//! `TieredMap` — an in-memory heap cache with a `VersionedHamt` backing store.
+//! `TieredMap` and companion preset types — pluggable storage-tier policies.
 //!
-//! The heap collection acts as an L1 write-back cache; `pds_merkle_spine::VersionedHamt`
-//! is the crash-safe, versioned L2 store.  Each `flush()` (Relaxed) or mutation
-//! (Strict) creates a new `VersionId` with a Merkle root — a complete audit trail
-//! of heap state over time.
+//! Four storage presets are provided:
 //!
-//! # Architecture
+//! | Type | Policy | Tiers | Durability | Speed |
+//! |------|--------|-------|------------|-------|
+//! | [`TieredMap<K,V,WriteBack>`] | [`WriteBack`] | t1 + t2 | Write-behind | Heap speed |
+//! | [`TieredMap<K,V,Durable>`] | [`Durable`] | t1 + t2 (write-through) | Per-mutation | Slowest |
+//! | [`MemOnlyMap<K,V>`] | [`MemOnly`] | t0 only — `std::HashMap` | None | Fastest |
+//! | [`PipelinedMap<K,V>`] | [`Pipelined`] | t0 + t1 + t2 | 2-stage write-behind | Near-heap speed |
 //!
-//! ```text
-//! TieredMap<K, V, Mode>
-//!   ├── front:          pds::HashMap<K, V>         — hot tier; RAM-bounded LRU cache
-//!   ├── dirty:          HashSet<K>                 — entries not yet flushed to back
-//!   ├── eviction_queue: VecDeque<K>                — approximate LRU order
-//!   └── back:           VersionedHamt<K, V>        — cold tier; versioned, crash-safe
-//! ```
-//!
-//! # Mode semantics
-//!
-//! | Mode | Write sequence | Recovery | Versioning |
-//! |------|---------------|----------|------------|
-//! | [`Strict`] | Write to `back` (new version per mutation) then `front` | Latest version; front warms on demand | One version per mutation |
-//! | [`Relaxed`] | Write to `front` only; `flush()` pushes dirty entries to `back` | Latest version; state = last flush | One version per flush |
-//!
-//! # LRU eviction
-//!
-//! When `max_front_entries > 0` and `front.len()` would exceed that limit after
-//! an insert, the head of `eviction_queue` (oldest key) is evicted.  If the key
-//! is dirty, it is written to `back` first (creating a single-entry version).
-//! Future reads that miss `front` fall through to `back`.
-//!
-//! The eviction queue is approximate FIFO-within-generation — good enough to keep
-//! `front.len()` bounded without the complexity of a doubly-linked LRU list.
+//! The names `Strict` and `Relaxed` are backward-compatibility aliases for
+//! `Durable` and `WriteBack` respectively.
 
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::mem;
 
 use folio_core::{backend::MemBackend, checksum::ChecksumKind, store::FolioStore};
 use pds::HashMap;
@@ -47,24 +28,45 @@ use pds_merkle_spine::versioned_hamt::VersionedHamtError;
 use pds_merkle_spine::{VersionId, VersionedHamt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::durable_map::{Relaxed, Strict};
 use crate::error::DurableError;
+pub use crate::policy::{Durable, MemOnly, Pipelined, WriteBack};
+
+// ── Backward-compatibility aliases ────────────────────────────────────────────
+
+/// Backward-compatibility alias for [`Durable`].
+///
+/// Prefer `Durable` in new code.
+pub type Strict = Durable;
+
+/// Backward-compatibility alias for [`WriteBack`].
+///
+/// Prefer `WriteBack` in new code.
+pub type Relaxed = WriteBack;
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
-/// Configuration for [`TieredMap`] (both Strict and Relaxed modes).
+/// Configuration for all `TieredMap` presets.
 #[derive(Debug, Clone)]
 pub struct TieredConfig {
     /// Evict LRU entries from front when it exceeds this count.
     ///
     /// When zero, the front cache is unbounded and no eviction occurs.
+    /// Only applies to `WriteBack` and `Durable` presets.
     pub max_front_entries: usize,
 
-    /// Auto-flush in Relaxed mode every N mutations (0 = manual only).
+    /// Auto-flush every N mutations (0 = manual only).
     ///
-    /// When non-zero, `flush()` is called automatically after every Nth dirty
-    /// entry is added to the front cache.  Has no effect in Strict mode.
+    /// In `WriteBack` mode, `flush()` fires after every Nth dirty entry is added.
+    /// In `Pipelined` mode (via [`PipelinedMap`]), this controls how many dirty
+    /// keys must accumulate before an auto-flush is triggered.
+    /// Has no effect in `Durable` or `MemOnly` mode.
     pub flush_every: usize,
+
+    /// Auto-commit in `Pipelined` mode every N t0 mutations (0 = manual only).
+    ///
+    /// When non-zero, `commit()` is called automatically after every Nth mutation
+    /// to t0 in [`PipelinedMap`].  Has no effect in other modes.
+    pub commit_every: usize,
 
     /// Retain this many historical versions in the backing store (0 = all).
     ///
@@ -74,12 +76,13 @@ pub struct TieredConfig {
 }
 
 impl Default for TieredConfig {
-    /// Creates a `TieredConfig` with no eviction, no auto-flush, and unlimited
-    /// version retention.
+    /// Creates a `TieredConfig` with no eviction, no auto-flush, no auto-commit,
+    /// and unlimited version retention.
     fn default() -> Self {
         Self {
             max_front_entries: 0,
             flush_every: 0,
+            commit_every: 0,
             max_versions: 0,
         }
     }
@@ -102,62 +105,64 @@ fn make_mem_store() -> FolioStore<MemBackend> {
         .expect("in-memory FolioStore creation must succeed")
 }
 
-// ── TieredMap struct ──────────────────────────────────────────────────────────
+// ── TieredMap — 2-tier struct (WriteBack / Durable) ──────────────────────────
 
 /// A tiered map with an in-memory heap cache backed by a versioned HAMT.
 ///
-/// The type parameter `Mode` is either [`Strict`] or [`Relaxed`]:
+/// The type parameter `Mode` selects between the two 2-tier presets:
+/// [`Durable`] (write-through) and [`WriteBack`] (write-behind).
 ///
-/// - In [`Strict`] mode, every mutation writes to `back` (creating a new version)
-///   and then to `front`.  The mutation is durable on return.
-/// - In [`Relaxed`] mode, mutations write only to `front` (and the `dirty` set).
-///   Call [`flush()`][TieredMap::flush] to push dirty entries to `back` as a
-///   single new version.
-pub struct TieredMap<K, V, Mode = Relaxed>
+/// For the no-disk `MemOnly` preset use [`MemOnlyMap`]; for the 3-tier pipeline
+/// use [`PipelinedMap`].
+///
+/// The backward-compatibility aliases [`Strict`] and [`Relaxed`] refer to
+/// [`Durable`] and [`WriteBack`] respectively.
+///
+/// # Architecture
+///
+/// ```text
+/// TieredMap<K, V, Mode>
+///   ├── front:          pds::HashMap<K, V>         — hot tier; RAM-bounded LRU cache
+///   ├── dirty:          HashSet<K>                 — entries not yet flushed to back
+///   ├── eviction_queue: VecDeque<K>                — approximate LRU order
+///   └── back:           VersionedHamt<K, V>        — cold tier; versioned, crash-safe
+/// ```
+pub struct TieredMap<K, V, Mode = WriteBack>
 where
     K: Clone + Hash + Eq + Serialize + for<'de> Deserialize<'de>,
     V: Clone + Hash + Serialize + for<'de> Deserialize<'de>,
 {
     /// Hot tier: in-memory `pds::HashMap` cache.
-    front: HashMap<K, V>,
+    pub(crate) front: HashMap<K, V>,
 
     /// Dirty-entry tracker: keys in `front` not yet flushed to `back`.
-    ///
-    /// In Strict mode, this is always empty (every mutation goes to `back`
-    /// immediately).  In Relaxed mode, it grows with each mutation and is
-    /// cleared on `flush()`.
-    dirty: HashSet<K>,
+    pub(crate) dirty: HashSet<K>,
 
-    /// Approximate LRU eviction queue.  Keys are pushed to the back on
-    /// insert and popped from the front when the cache exceeds
-    /// `config.max_front_entries`.
-    eviction_queue: VecDeque<K>,
+    /// Approximate LRU eviction queue.
+    pub(crate) eviction_queue: VecDeque<K>,
 
-    /// Cold tier: versioned, crash-safe HAMT.  Every mutation in Strict mode
-    /// or `flush()` in Relaxed mode creates a new version here.
-    back: VersionedHamt<K, V>,
+    /// Cold tier: versioned, crash-safe HAMT.
+    pub(crate) back: VersionedHamt<K, V>,
 
     /// Configuration controlling eviction, auto-flush, and version retention.
-    config: TieredConfig,
+    pub(crate) config: TieredConfig,
 
     /// Zero-sized mode tag.
-    _mode: PhantomData<Mode>,
+    pub(crate) _mode: PhantomData<Mode>,
 }
 
-// ── Strict mode ───────────────────────────────────────────────────────────────
+// ── Durable mode ──────────────────────────────────────────────────────────────
 
-impl<K, V> TieredMap<K, V, Strict>
+impl<K, V> TieredMap<K, V, Durable>
 where
     K: Clone + Hash + Eq + Serialize + for<'de> Deserialize<'de> + DeserializeOwned,
     V: Clone + Hash + Serialize + for<'de> Deserialize<'de> + DeserializeOwned + PartialEq,
 {
-    /// Opens or creates a `TieredMap` at `path` in Strict mode.
+    /// Opens or creates a `TieredMap` at `path` in `Durable` mode.
     ///
     /// The `path` argument is accepted for API symmetry with `DurableMap::open`
     /// but is currently unused — the backing `VersionedHamt` uses an in-memory
     /// `MemBackend`.  A file-backed backend will be supported in a future release.
-    ///
-    /// The `front` cache starts empty; entries are warmed lazily on `get`.
     ///
     /// Time: O(1).
     pub fn open(_path: &std::path::Path, config: TieredConfig) -> Result<Self, DurableError> {
@@ -183,18 +188,12 @@ where
     ///
     /// Returns [`DurableError`] on folio I/O or codec failure.
     pub fn insert(&mut self, k: K, v: V) -> Result<Option<V>, DurableError> {
-        // Write to back first — durable.
         self.back = self.back.insert(k.clone(), v.clone())?;
-
-        // Write to front.
         let prev = self.front.insert(k.clone(), v);
-
-        // Maintain approximate LRU queue.
         self.eviction_queue.push_back(k.clone());
         if self.config.max_front_entries > 0 && self.front.len() > self.config.max_front_entries {
             self.evict_one()?;
         }
-
         Ok(prev)
     }
 
@@ -208,22 +207,15 @@ where
     ///
     /// Returns [`DurableError`] on folio I/O or codec failure.
     pub fn remove(&mut self, k: &K) -> Result<Option<V>, DurableError> {
-        // Remove from back — durable.
         let (new_back, _evicted) = self.back.remove(k)?;
         self.back = new_back;
-
-        // Remove from front.
         let prev = self.front.remove(k);
         Ok(prev)
     }
 
     /// Returns a reference to the value for `k` in the front cache, if present.
     ///
-    /// In Strict mode, every key is written to `front` on insert, so all known
-    /// keys are in `front` (unless evicted).  Evicted keys require a `get_cold`
-    /// call (not yet provided) to fetch from `back`.
-    ///
-    /// To look up an evicted key, call [`get_or_fetch`][Self::get_or_fetch].
+    /// Use [`get_or_fetch`][Self::get_or_fetch] for evicted keys.
     ///
     /// Time: O(log N) — heap lookup.
     pub fn get(&self, k: &K) -> Option<&V> {
@@ -233,18 +225,13 @@ where
     /// Returns a reference to the value for `k`, fetching from `back` on a
     /// front-cache miss.
     ///
-    /// When `k` is not in `front`, the value is fetched from `back` and
-    /// inserted into `front` for future lookups.
-    ///
-    /// Time: O(log N) — heap lookup; O(log N) HAMT read + O(log N) heap insert
-    /// on a cold miss.
+    /// Time: O(log N) hit; O(log N) HAMT read + O(log N) heap insert on cold miss.
     ///
     /// # Errors
     ///
     /// Returns [`DurableError`] on folio I/O or codec failure.
     pub fn get_or_fetch(&mut self, k: &K) -> Result<Option<&V>, DurableError> {
         if !self.front.contains_key(k) {
-            // Cold miss — fetch from back.
             if let Some(v) = self.back.get(k)? {
                 self.front.insert(k.clone(), v);
                 self.eviction_queue.push_back(k.clone());
@@ -267,9 +254,6 @@ where
 
     /// Returns the number of entries in `front`.
     ///
-    /// In Strict mode with `max_front_entries = 0`, this equals the total
-    /// number of entries ever inserted (since nothing is evicted).
-    ///
     /// Time: O(1).
     pub fn len(&self) -> usize {
         self.front.len()
@@ -291,45 +275,27 @@ where
 
     /// Returns the `VersionId` of the latest committed version in `back`.
     ///
-    /// Each mutation in Strict mode produces a new version.
-    ///
     /// Time: O(1).
     pub fn latest_version(&self) -> Option<VersionId> {
-        // The VersionedHamt always has at least v0 (the genesis version).
         Some(self.back.version())
     }
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
-
-    /// Evicts the oldest entry from `eviction_queue` and `front`.
-    ///
-    /// In Strict mode there are no dirty entries (back is always up to date),
-    /// so eviction only removes from `front`.
-    ///
-    /// Time: O(log N) — heap remove.
     fn evict_one(&mut self) -> Result<(), DurableError> {
         if let Some(evict_key) = self.eviction_queue.pop_front() {
-            // In Strict mode, back is already up to date — just remove from front.
             self.front.remove(&evict_key);
         }
         Ok(())
     }
 }
 
-// ── Relaxed mode ──────────────────────────────────────────────────────────────
+// ── WriteBack mode ────────────────────────────────────────────────────────────
 
-impl<K, V> TieredMap<K, V, Relaxed>
+impl<K, V> TieredMap<K, V, WriteBack>
 where
     K: Clone + Hash + Eq + Serialize + for<'de> Deserialize<'de> + DeserializeOwned,
     V: Clone + Hash + Serialize + for<'de> Deserialize<'de> + DeserializeOwned + PartialEq,
 {
-    /// Opens or creates a `TieredMap` at `path` in Relaxed mode.
-    ///
-    /// The `path` argument is accepted for API symmetry with `DurableMap::open`
-    /// but is currently unused — the backing `VersionedHamt` uses an in-memory
-    /// `MemBackend`.  A file-backed backend will be supported in a future release.
-    ///
-    /// The `front` cache starts empty; entries are warmed lazily on `get_or_fetch`.
+    /// Opens or creates a `TieredMap` at `path` in `WriteBack` mode.
     ///
     /// Time: O(1).
     pub fn open(_path: &std::path::Path, config: TieredConfig) -> Result<Self, DurableError> {
@@ -346,8 +312,7 @@ where
 
     /// Inserts `k` → `v` into `front` only.
     ///
-    /// The mutation is NOT yet durable; call [`flush()`][Self::flush] to persist
-    /// the dirty entries to `back` as a single new version.
+    /// The mutation is NOT yet durable; call [`flush()`][Self::flush] to persist.
     ///
     /// Returns the previous value for `k`, if any.
     ///
@@ -357,14 +322,10 @@ where
         self.dirty.insert(k.clone());
         self.eviction_queue.push_back(k.clone());
 
-        // Evict if over capacity.
         if self.config.max_front_entries > 0 && self.front.len() > self.config.max_front_entries {
-            // Eviction errors are silently ignored in infallible insert; callers
-            // that need error visibility should call flush() manually.
             let _ = self.evict_one();
         }
 
-        // Auto-flush.
         if self.config.flush_every > 0 && self.dirty.len() >= self.config.flush_every {
             let _ = self.flush();
         }
@@ -381,78 +342,59 @@ where
     /// Time: O(log N) — heap write; zero I/O.
     pub fn remove(&mut self, k: &K) -> Option<V> {
         let prev = self.front.remove(k);
-        // Mark dirty so flush writes the removal to back.
-        // Removals are tracked by inserting a tombstone-style absent key: on flush,
-        // we remove from back any dirty key not present in front.
         self.dirty.insert(k.clone());
         prev
     }
 
     /// Pushes all dirty entries to `back` as a single new version.
     ///
-    /// Returns the `VersionId` of the new version, which contains the Merkle
-    /// root of the full collection state at this flush point.
+    /// Returns the `VersionId` of the new version.
     ///
-    /// Time: O(D log N) where D is the number of dirty entries — one HAMT
-    /// mutation per dirty entry, amortised over all mutations since the last flush.
+    /// Time: O(D log N) where D = `dirty.len()`.
     ///
     /// # Errors
     ///
     /// Returns [`DurableError`] on folio I/O or codec failure.
     pub fn flush(&mut self) -> Result<VersionId, DurableError> {
-        // Apply each dirty key to back.  Each dirty entry is either:
-        //   - Present in front  → insert (or update) in back
-        //   - Absent from front → remove from back (tombstone scenario)
         for k in self.dirty.drain() {
             match self.front.get(&k) {
                 Some(v) => {
                     self.back = self.back.insert(k, v.clone())?;
                 }
                 None => {
-                    // Key was removed from front — propagate to back.
                     let (new_back, _) = self.back.remove(&k)?;
                     self.back = new_back;
                 }
             }
         }
-        // Return the version produced by the last mutation.  If dirty was empty,
-        // the back version is unchanged (no new version was created) — return
-        // the current version as a no-op flush.
         Ok(self.back.version())
     }
 
-    /// Returns the number of dirty (unflushed) mutations in `front`.
+    /// Returns the number of dirty (unflushed) mutations.
     ///
     /// Time: O(1).
     pub fn pending_count(&self) -> usize {
         self.dirty.len()
     }
 
-    /// Returns a reference to the value for `k` in the front cache, if present.
+    /// Returns a reference to the value for `k` in `front`, if present.
     ///
-    /// Does NOT fall through to `back` on a miss — use
-    /// [`get_or_fetch`][Self::get_or_fetch] for cold keys.
+    /// Use [`get_or_fetch`][Self::get_or_fetch] for cold keys.
     ///
     /// Time: O(log N) — heap lookup.
     pub fn get(&self, k: &K) -> Option<&V> {
         self.front.get(k)
     }
 
-    /// Returns a reference to the value for `k`, fetching from `back` on a
-    /// front-cache miss.
+    /// Returns a reference to the value for `k`, fetching from `back` on miss.
     ///
-    /// When `k` is not in `front`, the value is fetched from `back` and
-    /// inserted into `front` for future lookups.
-    ///
-    /// Time: O(log N) — heap lookup; O(log N) HAMT read + O(log N) heap insert
-    /// on a cold miss.
+    /// Time: O(log N) hit; O(log N) HAMT read + O(log N) heap insert on cold miss.
     ///
     /// # Errors
     ///
     /// Returns [`DurableError`] on folio I/O or codec failure.
     pub fn get_or_fetch(&mut self, k: &K) -> Result<Option<&V>, DurableError> {
         if !self.front.contains_key(k) {
-            // Cold miss — fetch from back.
             if let Some(v) = self.back.get(k)? {
                 self.front.insert(k.clone(), v);
                 self.eviction_queue.push_back(k.clone());
@@ -496,35 +438,17 @@ where
 
     /// Returns the `VersionId` of the latest committed version in `back`.
     ///
-    /// This is the version as of the last successful `flush()`.  Mutations
-    /// added since the last flush are in `front` but not yet reflected in `back`.
-    ///
     /// Time: O(1).
     pub fn latest_version(&self) -> Option<VersionId> {
         Some(self.back.version())
     }
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
-
-    /// Evicts the oldest entry from `eviction_queue` and `front`.
-    ///
-    /// If the evicted key is dirty, it is written to `back` immediately
-    /// (a single-entry micro-version) so the data is not lost.
-    ///
-    /// Time: O(log N) — heap remove; O(log N) HAMT write if dirty.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DurableError`] on folio I/O or codec failure.
     fn evict_one(&mut self) -> Result<(), DurableError> {
-        // Pop the oldest key from the eviction queue.
         while let Some(evict_key) = self.eviction_queue.pop_front() {
             if !self.front.contains_key(&evict_key) {
-                // Already evicted or removed; skip stale queue entries.
                 continue;
             }
             if self.dirty.contains(&evict_key) {
-                // Dirty — flush to back before eviction.
                 if let Some(v) = self.front.get(&evict_key) {
                     self.back = self.back.insert(evict_key.clone(), v.clone())?;
                 }
@@ -537,6 +461,371 @@ where
     }
 }
 
+// ── MemOnly preset ────────────────────────────────────────────────────────────
+
+/// A memory-only map with no disk backing — the fastest storage preset.
+///
+/// All mutations land in a plain `std::collections::HashMap` with no structural-sharing
+/// overhead.  Call [`into_persistent()`][Self::into_persistent] to consume the map
+/// and produce a persistent `pds::HashMap<K, V>`.
+///
+/// There is no durability — all data is lost on drop without calling
+/// `into_persistent()`.
+///
+/// Corresponds to the [`MemOnly`] policy.
+pub struct MemOnlyMap<K, V> {
+    inner: std::collections::HashMap<K, V>,
+}
+
+impl<K, V> MemOnlyMap<K, V>
+where
+    K: Clone + Hash + Eq,
+    V: Clone + Hash,
+{
+    /// Creates a new, empty `MemOnlyMap`.
+    ///
+    /// Time: O(1).
+    pub fn new() -> Self {
+        Self {
+            inner: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Inserts `k` → `v` into the map.
+    ///
+    /// Returns the previous value for `k`, if any.
+    ///
+    /// Time: O(1) amortised.
+    pub fn insert(&mut self, k: K, v: V) -> Option<V> {
+        self.inner.insert(k, v)
+    }
+
+    /// Removes `k` from the map.
+    ///
+    /// Returns the previous value for `k`, if any.
+    ///
+    /// Time: O(1) amortised.
+    pub fn remove(&mut self, k: &K) -> Option<V> {
+        self.inner.remove(k)
+    }
+
+    /// Returns a reference to the value for `k`, if present.
+    ///
+    /// Time: O(1) amortised.
+    pub fn get(&self, k: &K) -> Option<&V> {
+        self.inner.get(k)
+    }
+
+    /// Tests whether `k` is present in the map.
+    ///
+    /// Time: O(1) amortised.
+    pub fn contains_key(&self, k: &K) -> bool {
+        self.inner.contains_key(k)
+    }
+
+    /// Returns the number of entries in the map.
+    ///
+    /// Time: O(1).
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Tests whether the map is empty.
+    ///
+    /// Time: O(1).
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Freezes the map into a persistent `pds::HashMap<K, V>`.
+    ///
+    /// Each entry is inserted into a new `pds::HashMap` individually.  The resulting
+    /// persistent map supports structural sharing, snapshotting, and all other
+    /// `pds::HashMap` operations.
+    ///
+    /// Time: O(N log N).
+    pub fn into_persistent(self) -> HashMap<K, V> {
+        let mut out = HashMap::new();
+        for (k, v) in self.inner {
+            out.insert(k, v);
+        }
+        out
+    }
+}
+
+impl<K, V> Default for MemOnlyMap<K, V>
+where
+    K: Clone + Hash + Eq,
+    V: Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Pipelined preset ──────────────────────────────────────────────────────────
+
+/// A 3-tier pipeline map: transient write buffer → heap snapshot → versioned HAMT.
+///
+/// - **t0** (`std::collections::HashMap`): low-overhead write buffer.  All mutations
+///   land here.  O(1) amortised insert with no structural-sharing overhead.
+/// - **t1** (`pds::HashMap`): last committed snapshot.
+///   [`commit()`][Self::commit] atomically replaces t0 with a fresh empty map
+///   and converts the old t0 into t1 (O(N) — persistent HAMT insert per key).
+/// - **t2** (`VersionedHamt`): crash-safe durable replica.
+///   [`flush()`][Self::flush] pushes dirty t1 entries to t2 as a single new version.
+///
+/// # Data loss windows
+///
+/// - t0 mutations not yet committed → lost on crash.
+/// - t1 mutations not yet flushed → lost on crash.
+/// - t2 is always crash-safe; [`open()`][Self::open] resumes at the latest version.
+///
+/// Corresponds to the [`Pipelined`] policy.
+pub struct PipelinedMap<K, V>
+where
+    K: Clone + Hash + Eq + Serialize + for<'de> Deserialize<'de>,
+    V: Clone + Hash + Serialize + for<'de> Deserialize<'de>,
+{
+    /// Tier 0: low-overhead write buffer.
+    t0: std::collections::HashMap<K, V>,
+
+    /// Tier 1: last committed persistent snapshot.
+    t1: HashMap<K, V>,
+
+    /// Tier 2: crash-safe versioned HAMT.
+    t2: VersionedHamt<K, V>,
+
+    /// Keys mutated since the last `flush()`.
+    dirty: HashSet<K>,
+
+    /// Number of mutations accumulated in t0 since the last `commit()`.
+    t0_count: usize,
+
+    /// Configuration controlling auto-commit and auto-flush thresholds.
+    config: TieredConfig,
+}
+
+impl<K, V> PipelinedMap<K, V>
+where
+    K: Clone + Hash + Eq + Serialize + for<'de> Deserialize<'de> + DeserializeOwned,
+    V: Clone + Hash + Serialize + for<'de> Deserialize<'de> + DeserializeOwned + PartialEq,
+{
+    /// Opens or creates a `PipelinedMap` at `path`.
+    ///
+    /// The `path` argument is accepted for API symmetry but is currently unused —
+    /// the backing `VersionedHamt` uses an in-memory `MemBackend`.  A file-backed
+    /// backend will be supported in a future release.
+    ///
+    /// On open, t0 and t1 start empty; t2 opens at the latest stored version.
+    ///
+    /// Time: O(1).
+    pub fn open(_path: &std::path::Path, config: TieredConfig) -> Result<Self, DurableError> {
+        let t2 = VersionedHamt::new(make_mem_store());
+        Ok(Self {
+            t0: std::collections::HashMap::new(),
+            t1: HashMap::new(),
+            t2,
+            dirty: HashSet::new(),
+            t0_count: 0,
+            config,
+        })
+    }
+
+    /// Inserts `k` → `v` into t0 only.
+    ///
+    /// The mutation is NOT yet durable.  Call [`commit()`][Self::commit] to
+    /// freeze t0 into t1, and [`flush()`][Self::flush] to push t1 entries to t2.
+    ///
+    /// Returns the previous value for `k` from t0, if any.
+    ///
+    /// Time: O(1) amortised — plain `std::HashMap` insert.
+    pub fn insert(&mut self, k: K, v: V) -> Option<V> {
+        let prev = self.t0.insert(k.clone(), v);
+        self.dirty.insert(k);
+        self.t0_count += 1;
+
+        if self.config.commit_every > 0 && self.t0_count >= self.config.commit_every {
+            self.commit();
+        }
+
+        prev
+    }
+
+    /// Removes `k` from t0.
+    ///
+    /// The removal is tracked in `dirty` so a subsequent `flush()` will remove
+    /// the key from t2 as well.
+    ///
+    /// Returns the previous value for `k` from t0, if any.
+    ///
+    /// Time: O(1) amortised.
+    pub fn remove(&mut self, k: &K) -> Option<V> {
+        let prev = self.t0.remove(k);
+        self.dirty.insert(k.clone());
+        self.t0_count += 1;
+
+        if self.config.commit_every > 0 && self.t0_count >= self.config.commit_every {
+            self.commit();
+        }
+
+        prev
+    }
+
+    /// Freezes t0 into t1, replacing t0 with a fresh empty map.
+    ///
+    /// After `commit()`, all entries previously in t0 are available in t1.
+    /// Dirty keys accumulated in t0 are retained in `self.dirty`; they remain
+    /// unflushed until a subsequent [`flush()`][Self::flush].
+    ///
+    /// Time: O(N) — each t0 entry is inserted into `pds::HashMap`.
+    pub fn commit(&mut self) {
+        let old_t0 = mem::replace(&mut self.t0, std::collections::HashMap::new());
+        let mut new_t1 = HashMap::new();
+        for (k, v) in old_t0 {
+            new_t1.insert(k, v);
+        }
+        self.t1 = new_t1;
+        self.t0_count = 0;
+    }
+
+    /// Pushes all dirty entries from t1 to t2 as a single new version.
+    ///
+    /// Returns the `VersionId` of the new version.  If `dirty` is empty, this
+    /// is a no-op and the current version is returned.
+    ///
+    /// Time: O(D log N) where D = `dirty.len()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DurableError`] on folio I/O or codec failure.
+    pub fn flush(&mut self) -> Result<VersionId, DurableError> {
+        for k in self.dirty.drain() {
+            match self.t1.get(&k) {
+                Some(v) => {
+                    self.t2 = self.t2.insert(k, v.clone())?;
+                }
+                None => {
+                    let (new_t2, _) = self.t2.remove(&k)?;
+                    self.t2 = new_t2;
+                }
+            }
+        }
+        Ok(self.t2.version())
+    }
+
+    /// Commits t0 into t1, then flushes t1 dirty entries to t2.
+    ///
+    /// Equivalent to `commit()` then `flush()` in sequence.
+    ///
+    /// Time: O(N) commit + O(D log N) flush.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DurableError`] on folio I/O or codec failure.
+    pub fn commit_and_flush(&mut self) -> Result<VersionId, DurableError> {
+        // Commit without triggering a recursive auto-flush.
+        let old_t0 = mem::replace(&mut self.t0, std::collections::HashMap::new());
+        let mut new_t1 = HashMap::new();
+        for (k, v) in old_t0 {
+            new_t1.insert(k, v);
+        }
+        self.t1 = new_t1;
+        self.t0_count = 0;
+        self.flush()
+    }
+
+    /// Returns a reference to the value for `k`, searching t0 → t1 in order.
+    ///
+    /// Keys present only in t2 (data from before the current session) are not
+    /// returned here.  Use [`get_from_t2()`][Self::get_from_t2] for those.
+    ///
+    /// Time: O(1) amortised if found in t0; O(log N) if found in t1.
+    pub fn get(&self, k: &K) -> Option<&V> {
+        self.t0.get(k).or_else(|| self.t1.get(k))
+    }
+
+    /// Returns the value for `k` from t2, if present.
+    ///
+    /// Consults only the durable backing store.  Use this for keys that
+    /// predate the current session (present in t2 but not in t0 or t1).
+    ///
+    /// Time: O(log N) — HAMT read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DurableError`] on folio I/O or codec failure.
+    pub fn get_from_t2(&self, k: &K) -> Result<Option<V>, DurableError> {
+        Ok(self.t2.get(k)?)
+    }
+
+    /// Tests whether `k` is present in t0 or t1.
+    ///
+    /// Does NOT consult t2.  Use [`get_from_t2()`][Self::get_from_t2] for
+    /// keys that exist only in the durable store.
+    ///
+    /// Time: O(1) amortised (t0) + O(log N) (t1 on t0 miss).
+    pub fn contains_key(&self, k: &K) -> bool {
+        self.t0.contains_key(k) || self.t1.contains_key(k)
+    }
+
+    /// Returns the combined entry count of t0 and t1 (with t0 shadowing t1).
+    ///
+    /// Keys present in both t0 and t1 are counted once.
+    ///
+    /// Time: O(N) — requires iterating t1 to count non-shadowed keys.
+    pub fn len(&self) -> usize {
+        let extra_in_t1 = self
+            .t1
+            .iter()
+            .filter(|(k, _)| !self.t0.contains_key(k))
+            .count();
+        self.t0.len() + extra_in_t1
+    }
+
+    /// Tests whether both t0 and t1 are empty.
+    ///
+    /// Time: O(1).
+    pub fn is_empty(&self) -> bool {
+        self.t0.is_empty() && self.t1.is_empty()
+    }
+
+    /// Returns the number of uncommitted mutations in t0 since the last `commit()`.
+    ///
+    /// Time: O(1).
+    pub fn pending_commit(&self) -> usize {
+        self.t0_count
+    }
+
+    /// Returns the number of dirty keys not yet flushed to t2.
+    ///
+    /// Time: O(1).
+    pub fn pending_flush(&self) -> usize {
+        self.dirty.len()
+    }
+
+    /// Returns the `VersionId` of the latest committed version in t2.
+    ///
+    /// Time: O(1).
+    pub fn latest_version(&self) -> Option<VersionId> {
+        Some(self.t2.version())
+    }
+
+    /// Returns a read-only reference to t0 (the current write buffer).
+    ///
+    /// Time: O(1).
+    pub fn t0(&self) -> &std::collections::HashMap<K, V> {
+        &self.t0
+    }
+
+    /// Returns a read-only reference to t1 (the last committed snapshot).
+    ///
+    /// Time: O(1).
+    pub fn t1(&self) -> &HashMap<K, V> {
+        &self.t1
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -544,38 +833,32 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    // Type aliases for test brevity.
-    type StrictMap = TieredMap<String, u64, Strict>;
-    type RelaxedMap = TieredMap<String, u64, Relaxed>;
-
     fn tmp_path() -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("tiered.dat");
         (dir, path)
     }
 
-    fn strict_open(path: &std::path::Path) -> StrictMap {
-        StrictMap::open(path, TieredConfig::default()).unwrap()
-    }
+    // ── Durable mode tests ────────────────────────────────────────────────────
 
-    fn relaxed_open(path: &std::path::Path) -> RelaxedMap {
-        RelaxedMap::open(path, TieredConfig::default()).unwrap()
-    }
+    type DurableMapT = TieredMap<String, u64, Durable>;
 
-    // ── Strict mode tests ─────────────────────────────────────────────────────
+    fn durable_open(path: &std::path::Path) -> DurableMapT {
+        DurableMapT::open(path, TieredConfig::default()).unwrap()
+    }
 
     #[test]
-    fn strict_open_empty() {
+    fn durable_open_empty() {
         let (_dir, path) = tmp_path();
-        let m = strict_open(&path);
+        let m = durable_open(&path);
         assert!(m.is_empty());
         assert_eq!(m.len(), 0);
     }
 
     #[test]
-    fn strict_insert_get() {
+    fn durable_insert_get() {
         let (_dir, path) = tmp_path();
-        let mut m = strict_open(&path);
+        let mut m = durable_open(&path);
         let prev = m.insert("hello".to_string(), 42).unwrap();
         assert_eq!(prev, None);
         assert_eq!(m.get(&"hello".to_string()), Some(&42));
@@ -583,9 +866,9 @@ mod tests {
     }
 
     #[test]
-    fn strict_insert_returns_old_value() {
+    fn durable_insert_returns_old_value() {
         let (_dir, path) = tmp_path();
-        let mut m = strict_open(&path);
+        let mut m = durable_open(&path);
         m.insert("k".to_string(), 1).unwrap();
         let prev = m.insert("k".to_string(), 2).unwrap();
         assert_eq!(prev, Some(1));
@@ -593,9 +876,9 @@ mod tests {
     }
 
     #[test]
-    fn strict_remove() {
+    fn durable_remove() {
         let (_dir, path) = tmp_path();
-        let mut m = strict_open(&path);
+        let mut m = durable_open(&path);
         m.insert("x".to_string(), 7).unwrap();
         let prev = m.remove(&"x".to_string()).unwrap();
         assert_eq!(prev, Some(7));
@@ -604,87 +887,94 @@ mod tests {
     }
 
     #[test]
-    fn strict_remove_absent_key() {
+    fn durable_remove_absent_key() {
         let (_dir, path) = tmp_path();
-        let mut m = strict_open(&path);
+        let mut m = durable_open(&path);
         let prev = m.remove(&"missing".to_string()).unwrap();
         assert_eq!(prev, None);
     }
 
     #[test]
-    fn strict_latest_version_advances_per_mutation() {
+    fn durable_latest_version_advances_per_mutation() {
         let (_dir, path) = tmp_path();
-        let mut m = strict_open(&path);
+        let mut m = durable_open(&path);
         let v0 = m.latest_version().unwrap();
         m.insert("a".to_string(), 1).unwrap();
         let v1 = m.latest_version().unwrap();
         m.insert("b".to_string(), 2).unwrap();
         let v2 = m.latest_version().unwrap();
-        // Each mutation creates a new version.
-        assert!(v1.seq > v0.seq, "v1 must be later than v0");
-        assert!(v2.seq > v1.seq, "v2 must be later than v1");
+        assert!(v1.seq > v0.seq);
+        assert!(v2.seq > v1.seq);
     }
 
     #[test]
-    fn strict_get_cold_via_get_or_fetch() {
+    fn durable_get_cold_via_get_or_fetch() {
         let (_dir, path) = tmp_path();
-        // Insert with a very small front capacity so the key gets evicted.
         let config = TieredConfig {
             max_front_entries: 1,
             ..TieredConfig::default()
         };
-        let mut m: StrictMap = StrictMap::open(&path, config).unwrap();
+        let mut m: DurableMapT = DurableMapT::open(&path, config).unwrap();
         m.insert("a".to_string(), 1).unwrap();
-        // Insert a second key — "a" will be evicted from front.
         m.insert("b".to_string(), 2).unwrap();
-        // "a" is evicted from front but lives in back.
         let v = m.get_or_fetch(&"a".to_string()).unwrap();
         assert_eq!(v, Some(&1));
     }
 
     #[test]
-    fn strict_eviction_keeps_front_bounded() {
+    fn durable_eviction_keeps_front_bounded() {
         let (_dir, path) = tmp_path();
         let config = TieredConfig {
             max_front_entries: 3,
             ..TieredConfig::default()
         };
-        let mut m: StrictMap = StrictMap::open(&path, config).unwrap();
+        let mut m: DurableMapT = DurableMapT::open(&path, config).unwrap();
         for i in 0u64..10 {
             m.insert(format!("k{i}"), i).unwrap();
         }
-        // After all inserts, front never exceeds max_front_entries.
-        assert!(
-            m.len() <= 3,
-            "front must be at most max_front_entries; got {}",
-            m.len()
-        );
+        assert!(m.len() <= 3, "front must be bounded; got {}", m.len());
     }
 
     #[test]
-    fn strict_front_accessor() {
+    fn durable_front_accessor() {
         let (_dir, path) = tmp_path();
-        let mut m = strict_open(&path);
+        let mut m = durable_open(&path);
         m.insert("a".to_string(), 1).unwrap();
         m.insert("b".to_string(), 2).unwrap();
         assert_eq!(m.front().len(), 2);
     }
 
-    // ── Relaxed mode tests ────────────────────────────────────────────────────
+    /// Verifies that the backward-compat `Strict` alias resolves to `Durable`.
+    #[test]
+    fn strict_alias_compiles() {
+        let (_dir, path) = tmp_path();
+        let mut m: TieredMap<String, u64, Strict> =
+            TieredMap::open(&path, TieredConfig::default()).unwrap();
+        m.insert("a".to_string(), 1).unwrap();
+        assert_eq!(m.get(&"a".to_string()), Some(&1));
+    }
+
+    // ── WriteBack mode tests ──────────────────────────────────────────────────
+
+    type WriteBackMapT = TieredMap<String, u64, WriteBack>;
+
+    fn writeback_open(path: &std::path::Path) -> WriteBackMapT {
+        WriteBackMapT::open(path, TieredConfig::default()).unwrap()
+    }
 
     #[test]
-    fn relaxed_open_empty() {
+    fn writeback_open_empty() {
         let (_dir, path) = tmp_path();
-        let m = relaxed_open(&path);
+        let m = writeback_open(&path);
         assert!(m.is_empty());
         assert_eq!(m.len(), 0);
         assert_eq!(m.pending_count(), 0);
     }
 
     #[test]
-    fn relaxed_insert_get() {
+    fn writeback_insert_get() {
         let (_dir, path) = tmp_path();
-        let mut m = relaxed_open(&path);
+        let mut m = writeback_open(&path);
         let prev = m.insert("hello".to_string(), 42);
         assert_eq!(prev, None);
         assert_eq!(m.get(&"hello".to_string()), Some(&42));
@@ -692,9 +982,9 @@ mod tests {
     }
 
     #[test]
-    fn relaxed_insert_is_dirty_until_flush() {
+    fn writeback_insert_is_dirty_until_flush() {
         let (_dir, path) = tmp_path();
-        let mut m = relaxed_open(&path);
+        let mut m = writeback_open(&path);
         assert_eq!(m.pending_count(), 0);
         m.insert("a".to_string(), 1);
         assert_eq!(m.pending_count(), 1);
@@ -705,163 +995,151 @@ mod tests {
     }
 
     #[test]
-    fn relaxed_flush_creates_new_version() {
+    fn writeback_flush_creates_new_version() {
         let (_dir, path) = tmp_path();
-        let mut m = relaxed_open(&path);
+        let mut m = writeback_open(&path);
         let v0 = m.latest_version().unwrap();
         m.insert("a".to_string(), 1);
         m.insert("b".to_string(), 2);
         let v1 = m.flush().unwrap();
-        // After flushing two inserts (each is one HAMT mutation), v1.seq > v0.seq.
         assert!(v1.seq > v0.seq, "flush must create a new version");
     }
 
     #[test]
-    fn relaxed_flush_returns_version_id() {
+    fn writeback_flush_returns_version_id() {
         let (_dir, path) = tmp_path();
-        let mut m = relaxed_open(&path);
+        let mut m = writeback_open(&path);
         m.insert("k".to_string(), 99);
         let vid = m.flush().unwrap();
-        // The returned VersionId matches latest_version().
         assert_eq!(vid, m.latest_version().unwrap());
     }
 
     #[test]
-    fn relaxed_flush_empty_dirty_returns_current_version() {
+    fn writeback_flush_empty_dirty_returns_current_version() {
         let (_dir, path) = tmp_path();
-        let mut m = relaxed_open(&path);
+        let mut m = writeback_open(&path);
         let v_before = m.latest_version().unwrap();
-        // No mutations — flush should be a no-op.
         let v_after = m.flush().unwrap();
         assert_eq!(v_before.seq, v_after.seq);
     }
 
     #[test]
-    fn relaxed_remove_propagated_on_flush() {
+    fn writeback_remove_propagated_on_flush() {
         let (_dir, path) = tmp_path();
-        let mut m = relaxed_open(&path);
+        let mut m = writeback_open(&path);
         m.insert("k".to_string(), 5);
         m.flush().unwrap();
         m.remove(&"k".to_string());
         m.flush().unwrap();
-        // After flush, key should be absent from back.
         let from_back = m.back.get(&"k".to_string()).unwrap();
-        assert_eq!(
-            from_back, None,
-            "removed key must be absent from back after flush"
-        );
+        assert_eq!(from_back, None, "removed key must be absent from back");
     }
 
     #[test]
-    fn relaxed_auto_flush_on_threshold() {
+    fn writeback_auto_flush_on_threshold() {
         let (_dir, path) = tmp_path();
         let config = TieredConfig {
             flush_every: 3,
             ..TieredConfig::default()
         };
-        let mut m: RelaxedMap = RelaxedMap::open(&path, config).unwrap();
+        let mut m: WriteBackMapT = WriteBackMapT::open(&path, config).unwrap();
         let v0 = m.latest_version().unwrap();
         m.insert("a".to_string(), 1);
         m.insert("b".to_string(), 2);
-        // Third insert triggers auto-flush.
         m.insert("c".to_string(), 3);
-        // Auto-flush should have fired.
         assert_eq!(m.pending_count(), 0, "auto-flush must clear dirty set");
-        assert!(
-            m.latest_version().unwrap().seq > v0.seq,
-            "auto-flush must create a new version"
-        );
+        assert!(m.latest_version().unwrap().seq > v0.seq);
     }
 
     #[test]
-    fn relaxed_cold_get_via_get_or_fetch() {
+    fn writeback_cold_get_via_get_or_fetch() {
         let (_dir, path) = tmp_path();
         let config = TieredConfig {
             max_front_entries: 1,
             ..TieredConfig::default()
         };
-        let mut m: RelaxedMap = RelaxedMap::open(&path, config).unwrap();
+        let mut m: WriteBackMapT = WriteBackMapT::open(&path, config).unwrap();
         m.insert("a".to_string(), 10);
         m.flush().unwrap();
-        // Insert a second key — "a" will be evicted from front.
         m.insert("b".to_string(), 20);
-        // "a" is evicted; fetch from back.
         let v = m.get_or_fetch(&"a".to_string()).unwrap();
         assert_eq!(v, Some(&10));
     }
 
     #[test]
-    fn relaxed_eviction_flushes_dirty_key() {
+    fn writeback_eviction_flushes_dirty_key() {
         let (_dir, path) = tmp_path();
         let config = TieredConfig {
             max_front_entries: 1,
             ..TieredConfig::default()
         };
-        let mut m: RelaxedMap = RelaxedMap::open(&path, config).unwrap();
-        // Insert "a" — it's dirty and in front.
+        let mut m: WriteBackMapT = WriteBackMapT::open(&path, config).unwrap();
         m.insert("a".to_string(), 1);
-        // Insert "b" — this evicts "a"; since "a" is dirty, it must be flushed to back.
         m.insert("b".to_string(), 2);
-        // "a" was dirty-evicted; it must now be in back.
         let v = m.back.get(&"a".to_string()).unwrap();
         assert_eq!(v, Some(1), "dirty-evicted key must be in back");
-        // front only has "b".
         assert_eq!(m.len(), 1);
     }
 
     #[test]
-    fn relaxed_eviction_keeps_front_bounded() {
+    fn writeback_eviction_keeps_front_bounded() {
         let (_dir, path) = tmp_path();
         let config = TieredConfig {
             max_front_entries: 3,
             ..TieredConfig::default()
         };
-        let mut m: RelaxedMap = RelaxedMap::open(&path, config).unwrap();
+        let mut m: WriteBackMapT = WriteBackMapT::open(&path, config).unwrap();
         for i in 0u64..10 {
             m.insert(format!("k{i}"), i);
         }
-        assert!(
-            m.len() <= 3,
-            "front must be at most max_front_entries after eviction; got {}",
-            m.len()
-        );
+        assert!(m.len() <= 3, "front must be bounded; got {}", m.len());
     }
 
     #[test]
-    fn relaxed_latest_version_before_flush() {
+    fn writeback_latest_version_before_flush() {
         let (_dir, path) = tmp_path();
-        let mut m = relaxed_open(&path);
+        let mut m = writeback_open(&path);
         let v0 = m.latest_version().unwrap();
         m.insert("x".to_string(), 1);
-        // latest_version reflects back, which hasn't changed yet.
         assert_eq!(m.latest_version().unwrap().seq, v0.seq);
     }
 
     #[test]
-    fn relaxed_insert_returns_old_value() {
+    fn writeback_insert_returns_old_value() {
         let (_dir, path) = tmp_path();
-        let mut m = relaxed_open(&path);
+        let mut m = writeback_open(&path);
         m.insert("k".to_string(), 1);
         let prev = m.insert("k".to_string(), 2);
         assert_eq!(prev, Some(1));
     }
 
     #[test]
-    fn relaxed_front_accessor() {
+    fn writeback_front_accessor() {
         let (_dir, path) = tmp_path();
-        let mut m = relaxed_open(&path);
+        let mut m = writeback_open(&path);
         m.insert("a".to_string(), 1);
         m.insert("b".to_string(), 2);
         assert_eq!(m.front().len(), 2);
     }
 
-    // ── Shared behaviour tests ────────────────────────────────────────────────
+    /// Verifies that the backward-compat `Relaxed` alias resolves to `WriteBack`.
+    #[test]
+    fn relaxed_alias_compiles() {
+        let (_dir, path) = tmp_path();
+        let mut m: TieredMap<String, u64, Relaxed> =
+            TieredMap::open(&path, TieredConfig::default()).unwrap();
+        m.insert("a".to_string(), 1);
+        assert_eq!(m.get(&"a".to_string()), Some(&1));
+    }
+
+    // ── Shared config test ────────────────────────────────────────────────────
 
     #[test]
     fn tiered_config_default() {
         let cfg = TieredConfig::default();
         assert_eq!(cfg.max_front_entries, 0);
         assert_eq!(cfg.flush_every, 0);
+        assert_eq!(cfg.commit_every, 0);
         assert_eq!(cfg.max_versions, 0);
     }
 }

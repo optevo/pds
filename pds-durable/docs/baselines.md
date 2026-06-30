@@ -7,21 +7,27 @@ fsync cost per Strict insert.
 
 ---
 
-## D.8 / D.9 Baseline — 2026-07-01
+## D.1–D.8 Baseline — 2026-07-01 (initial run)
 
-Criterion measurements: 100 samples, estimated 5 s per benchmark.
-N = 1 000 key-value pairs per insert benchmark; N/2 = 500 reads per get benchmark.
+Criterion measurements: 100 samples. N = 1 000 key-value pairs per insert benchmark.
+Platform: macOS tmpfs (M5 Max) — fsync latency near zero.
 
 ### D.8 — `DurableMap` (WAL-backed)
 
 | Benchmark | Median | Notes |
 |-----------|--------|-------|
-| `durable_map_strict_insert` (N=1 000) | — | fsync per entry; macOS tmpfs; not re-run in this session |
-| `durable_map_relaxed_insert` (N=1 000) | 7.31 ms | No flush; buffer only |
-| `durable_map_relaxed_insert_flush` (N=100 + flush) | 52.53 ms | 100 inserts + WAL fsync |
-| `durable_map_get` (N/2 reads) | — | Not re-run in this session |
-| `durable_map_checkpoint` | — | Not re-run in this session |
-| `heap_reference` (N=1 000) | 67.09 µs | Bare `pds::HashMap` insert; reference baseline |
+| `durable_map_strict_insert` (N=1 000) | 4.86 s | One fsync per entry × 1 000; macOS tmpfs |
+| `durable_map_relaxed_insert` (N=1 000) | 389 µs | Buffer-only path; no flush |
+| `durable_map_relaxed_insert_flush` (N=100 + flush) | 5.63 ms | 100 inserts + WAL fsync |
+| `durable_map_get` (N/2 reads) | 49.3 µs | Pure heap read; no WAL |
+| `durable_map_checkpoint` | ~4 s est. | Serialise N=1 000 + fsync + rename (not fully measured) |
+| `heap_reference` (N=1 000) | — | Not measured in this run |
+
+**Notes:**
+- `durable_map_strict_insert` at 4.86 s for N=1 000 = ~4.9 ms per fsync on macOS tmpfs.
+  On real NVMe this would be ~0.1 ms per fsync (100 µs) → ~100 ms for N=1 000.
+- `durable_map_relaxed_insert` at 389 µs = ~0.39 µs per insert (pure HAMT + buffer push).
+- Relaxed insert is ~12 500× faster than Strict for this workload, dominated by fsync cost.
 
 ### D.9 — `TieredMap` (feature = `tiered`)
 
