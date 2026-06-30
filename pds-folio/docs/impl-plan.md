@@ -154,6 +154,25 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ---
 
+- **[2026-07-01] G.6 — Implement pds cross-variant traits (HashMap / HashSet).**
+  `src/traits.rs`: `PersistentCollection`, `PersistentMap<K, V>`, and
+  `PersistentSet<A>` implemented for `HamtMap<K, V, C, B>` and `HamtSet<A, C, B>`.
+
+  Trait methods are infallible by contract; `HamtMap`/`HamtSet` methods return
+  `Result`. Trait impls use `expect()` to propagate folio I/O/codec panics — correct
+  for `MemBackend` (never fails) and documented in the module doc.
+
+  11 unit tests: `pm_get_insert_contains`, `pm_remove`, `pm_is_empty`,
+  `pm_remove_absent`, `hamt_map_snapshot_isolation`,
+  `ps_insert_contains`, `ps_remove`, `ps_is_empty`,
+  `hamt_set_snapshot_isolation`, `hamt_map_round_trip_key_lookup` (64 keys),
+  `two_hamt_maps_same_type_different_stores`.
+
+  Fixed 8 `cargo doc` warnings (unresolved links in lib.rs, private `NodeStore`
+  link in hamt.rs, unclosed HTML tag in codec.rs).  All 79 lib + 7 doc tests green.
+
+---
+
 ## Current {#current}
 
 *Nothing in progress.*
@@ -181,13 +200,7 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ### G.5 — `HamtIndex`: PageIndexBackend (DONE — see above)
 
-### G.6 — Implement pds cross-variant traits (HashMap / HashSet)
-
-- `impl<K, V, C, B> PersistentMap<K, V> for HamtMap<K, V, C, B>`
-- `impl<A, C, B> PersistentSet<A> for HamtSet<A, C, B>`
-- Tests: generic functions from pds Phase F tests work with `HamtMap`/`HamtSet` using both codecs
-
-**Acceptance:** `cargo test` green; trait impls correct.
+### G.6 — Implement pds cross-variant traits (HashMap / HashSet) — DONE — see above
 
 ### G.7 — Integration tests and proptest suite (HashMap / HashSet)
 

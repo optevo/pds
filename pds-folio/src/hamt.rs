@@ -11,7 +11,7 @@
 //! payload is written into the page's data section.  The remaining page bytes
 //! (header, checksum) are managed by folio's page format.
 //!
-//! A shared [`NodeStore<B>`] wraps the `FolioStore<B>` and provides
+//! A shared `NodeStore<B>` wraps the `FolioStore<B>` and provides
 //! typed node read/write operations.  Multiple `HamtMap` snapshots (created
 //! by successive inserts or removes) share the same `NodeStore` via
 //! `Arc<Mutex<NodeStore<B>>>`.

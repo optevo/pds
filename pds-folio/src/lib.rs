@@ -1,14 +1,14 @@
 //! `pds-folio` — folio-backed persistent data structures with structural sharing.
 //!
-//! Provides [`HashMap`], [`HashSet`], [`Vector`], [`OrdMap`], and [`OrdSet`]
+//! Provides `HashMap`, `HashSet`, `Vector`, `OrdMap`, and `OrdSet`
 //! backed by folio mmap'd pages. All five types implement the cross-variant traits
 //! from [`pds::traits`] so callers can be generic over the storage backend.
 //!
 //! # Storage model
 //!
-//! Nodes are stored in a shared [`folio_collections::slab::FolioSlab`] backed
+//! Nodes are stored in a shared `FolioSlab` backed
 //! by a [`folio_core::backend::Backend`] (default: CoW + WAL). Each collection
-//! root is a [`SlabPageId`] (a `u64`). The empty collection uses `root: None`.
+//! root is a `SlabPageId` (a `u64`). The empty collection uses `root: None`.
 //!
 //! # Codec
 //!
@@ -39,3 +39,4 @@ pub mod hamt;
 pub mod hamt_index;
 pub mod node;
 pub mod set;
+pub mod traits;

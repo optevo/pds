@@ -131,7 +131,7 @@ impl Codec for PodCodec {
 impl PodCodec {
     /// Encodes a [`bytemuck::Pod`] value as raw bytes — zero-copy, no framing.
     ///
-    /// Time: O(size_of::<T>()).
+    /// Time: O(`size_of::<T>()`).
     ///
     /// # Examples
     ///
