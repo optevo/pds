@@ -30,11 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use pds::traits::{PersistentCollection, PersistentMap, PersistentSet};
 
-use crate::{
-    codec::Codec,
-    hamt::HamtMap,
-    set::HamtSet,
-};
+use crate::{codec::Codec, hamt::HamtMap, set::HamtSet};
 
 // ---------------------------------------------------------------------------
 // PersistentCollection
@@ -77,7 +73,8 @@ where
     ///
     /// Time: O(log N).
     fn get_cloned(&self, key: &K) -> Option<V> {
-        self.get(key).expect("HamtMap::get failed in PersistentMap::get_cloned")
+        self.get(key)
+            .expect("HamtMap::get failed in PersistentMap::get_cloned")
     }
 
     /// Returns a new map with `key` mapped to `value`.
@@ -88,8 +85,7 @@ where
     ///
     /// Time: O(log N).
     fn insert(&self, key: K, value: V) -> Self {
-        HamtMap::insert(self, key, value)
-            .expect("HamtMap::insert failed in PersistentMap::insert")
+        HamtMap::insert(self, key, value).expect("HamtMap::insert failed in PersistentMap::insert")
     }
 
     /// Returns a new map with `key` removed, plus the evicted value.
@@ -100,8 +96,7 @@ where
     ///
     /// Time: O(log N).
     fn remove(&self, key: &K) -> (Self, Option<V>) {
-        HamtMap::remove(self, key)
-            .expect("HamtMap::remove failed in PersistentMap::remove")
+        HamtMap::remove(self, key).expect("HamtMap::remove failed in PersistentMap::remove")
     }
 
     /// Returns the number of key-value pairs.
@@ -142,8 +137,7 @@ where
     ///
     /// Time: O(log N).
     fn contains(&self, value: &A) -> bool {
-        HamtSet::contains(self, value)
-            .expect("HamtSet::contains failed in PersistentSet::contains")
+        HamtSet::contains(self, value).expect("HamtSet::contains failed in PersistentSet::contains")
     }
 
     /// Returns a new set with `value` inserted.
@@ -154,8 +148,7 @@ where
     ///
     /// Time: O(log N).
     fn insert(&self, value: A) -> Self {
-        HamtSet::insert(self, value)
-            .expect("HamtSet::insert failed in PersistentSet::insert")
+        HamtSet::insert(self, value).expect("HamtSet::insert failed in PersistentSet::insert")
     }
 
     /// Returns a new set with `value` removed.
@@ -166,8 +159,8 @@ where
     ///
     /// Time: O(log N).
     fn remove(&self, value: &A) -> Self {
-        let (new_set, _removed) = HamtSet::remove(self, value)
-            .expect("HamtSet::remove failed in PersistentSet::remove");
+        let (new_set, _removed) =
+            HamtSet::remove(self, value).expect("HamtSet::remove failed in PersistentSet::remove");
         new_set
     }
 
@@ -294,21 +287,12 @@ mod tests {
         }
 
         let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
-        let base = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(
-            &map,
-            "base".to_string(),
-            0u64,
-        );
-        let a = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(
-            &base,
-            "only_a".to_string(),
-            1u64,
-        );
-        let b = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(
-            &base,
-            "only_b".to_string(),
-            2u64,
-        );
+        let base =
+            <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&map, "base".to_string(), 0u64);
+        let a =
+            <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&base, "only_a".to_string(), 1u64);
+        let b =
+            <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&base, "only_b".to_string(), 2u64);
 
         check_isolation(
             &a,
@@ -408,11 +392,7 @@ mod tests {
         let mut m: HamtMap<String, u64, PostcardCodec, MemBackend> = map;
         let n = 64u64;
         for i in 0..n {
-            m = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(
-                &m,
-                format!("k{i}"),
-                i * 10,
-            );
+            m = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&m, format!("k{i}"), i * 10);
         }
         assert_eq!(m.len(), n as usize);
         for i in 0..n {

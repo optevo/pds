@@ -19,6 +19,37 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.8 — Vector: RRB-tree node types and slab layout.**
+  `src/vector.rs`: `VectorNodePage([u8; 512])` — `#[repr(transparent)]` Pod + Zeroable
+  newtype (manual `Default` via `bytemuck::Zeroable::zeroed()` since `[u8; 512]` lacks
+  a `derive(Default)`).  Discriminant byte 0: `0x01` = leaf, `0x02` = internal.
+
+  Leaf layout (`BRANCHING_FACTOR = 32`):
+  - Bytes 0..2: discriminant + count
+  - Bytes 2..68: `entry_offsets [u16; 33]` — `offsets[i]` is start of entry `i` in the
+    data section; `offsets[count]` = total data bytes.
+  - Bytes 68..512: data section (444 bytes); entries are variable-length, no framing.
+
+  Internal layout:
+  - Bytes 0..2: discriminant + count
+  - Bytes 2..130: `sizes [u32; 32]` — cumulative subtree element counts.
+  - Bytes 130..386: `children [u64; 32]` — folio page IDs.
+  - Bytes 386..512: reserved.
+
+  `LeafBuilder` / `LeafReader` — write/read leaf pages with `push_encoded<T,C>` /
+  `get_entry<T,C>` and `entry_bytes`.  `build_internal(children, cumulative_sizes)`
+  / `InternalReader` — construct and read internal pages.  `InternalReader::find_child`
+  locates the child containing a given position via O(count) linear scan on
+  cumulative sizes (count ≤ 32).
+
+  `CodecError::EncodeTooLarge` variant added to `codec.rs`.
+
+  14 unit tests: size assertions, Pod check, discriminant uniqueness, leaf
+  empty/single/multiple/full/overflow round-trips with PostcardCodec and PodCodec,
+  `is_full` flag, internal empty/single/three-children/max-children round-trips and
+  `find_child` correctness.  All 106 tests (87 lib + 12 integration + 7 doc) green.
+  Full workspace `test.sh` passes.
+
 - **[2026-06-30] G.5 — `HamtIndex`: `PageIndexBackend`.**
   `src/hamt_index.rs`: `HamtIndex<B>` implements `merkle_spine::index::PageIndexBackend`
   using a `HamtMap<IndexKey, IndexValue, PodCodec, B>` as the underlying store.
@@ -223,13 +254,7 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ### G.7 — Integration tests and proptest suite (HashMap / HashSet) — DONE — see above
 
-### G.8 — Vector: RRB-tree node types and slab layout
-
-- `VectorLeaf` and `VectorInternal` page layouts (BRANCHING_FACTOR = 32)
-- `FolioSlab<VectorNodePage>` wrapper
-- Unit tests: node size checks; leaf insert/read round-trip
-
-**Acceptance:** `cargo test` green; size assertions pass.
+### G.8 — Vector: RRB-tree node types and slab layout (DONE — see above)
 
 ### G.9 — `Vector` CRUD and `PersistentVector` trait impl
 

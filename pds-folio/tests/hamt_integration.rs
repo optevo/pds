@@ -54,10 +54,8 @@ fn insert_remove_half_and_verify_remaining() {
     }
     // Remove the even-numbered keys.
     for i in (0..n).filter(|x| x % 2 == 0) {
-        let (new_m, removed) = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::remove(
-            &m,
-            &format!("k{i}"),
-        );
+        let (new_m, removed) =
+            <HamtMap<_, _, _, _> as PersistentMap<_, _>>::remove(&m, &format!("k{i}"));
         assert_eq!(removed, Some(i * 10), "expected to remove k{i}");
         m = new_m;
     }
@@ -98,8 +96,7 @@ fn snapshot_isolation_remove_does_not_affect_original() {
     let m1 = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&map, "a".to_string(), 1);
     let m2 = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&m1, "b".to_string(), 2);
 
-    let (m3, removed) =
-        <HamtMap<_, _, _, _> as PersistentMap<_, _>>::remove(&m2, &"a".to_string());
+    let (m3, removed) = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::remove(&m2, &"a".to_string());
     assert_eq!(removed, Some(1));
 
     // m2 still has "a".

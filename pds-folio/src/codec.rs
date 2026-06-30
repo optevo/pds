@@ -48,6 +48,9 @@ pub enum CodecError {
     /// Decoding failed.
     #[error("decode error: {0}")]
     Decode(String),
+    /// Encoded value is too large to fit in the available page space.
+    #[error("encoded value is too large for the available page space")]
+    EncodeTooLarge,
 }
 
 /// Encodes values into node page bytes and decodes them back.

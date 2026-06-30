@@ -40,3 +40,4 @@ pub mod hamt_index;
 pub mod node;
 pub mod set;
 pub mod traits;
+pub mod vector;
