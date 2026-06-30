@@ -600,6 +600,20 @@ all entries before it. A file-level CRC only tells you something is wrong, not w
 
 ## Design decisions (continued)
 
+### Write-behind in `TieredMap<Relaxed>` — minimal hot-path overhead
+
+`Relaxed` mode is a write-behind cache: mutations land in `front` only; the folio
+write is deferred to `flush()`. The hot path is:
+
+```
+insert() → front.insert() + dirty.insert()           O(log N) heap, zero I/O
+flush()  → per dirty entry: back.insert(k, v)        amortised over N mutations
+```
+
+Per-mutation overhead in Relaxed mode is identical to a bare `pds::HashMap` — no
+fsync, no page writes. The durability cost is paid at flush boundaries and amortised
+across all mutations since the last flush. Data loss window = mutations since last flush.
+
 ### Why folio as the backing store, not a second WAL?
 
 pds-folio already provides: crash-safe WAL + CoW page writes, mmap-backed page
