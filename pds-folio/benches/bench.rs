@@ -354,6 +354,8 @@ criterion_group!(
     bench_hamtset_contains,
 );
 
+criterion_group!(pod_codec_benches, bench_pod_codec_get, bench_pod_codec_insert,);
+
 criterion_group!(vector_benches, bench_vector_push_back, bench_vector_get,);
 
 criterion_group!(
@@ -364,4 +366,4 @@ criterion_group!(
     bench_ordset_insert,
 );
 
-criterion_main!(hamt_benches, vector_benches, ordmap_benches);
+criterion_main!(hamt_benches, vector_benches, ordmap_benches, pod_codec_benches);
