@@ -11,9 +11,9 @@ use std::path::Path;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::checkpoint::write_checkpoint;
+use crate::durable_map::{DurableConfig, Relaxed, Strict};
 use crate::error::DurableError;
 use crate::wal::{Wal, WalEntry};
-use crate::durable_map::{DurableConfig, Strict, Relaxed};
 
 // ── WAL entry helpers for sets ───────────────────────────────────────────────
 
@@ -28,7 +28,9 @@ fn set_insert_entry<T: Serialize>(elem: &T) -> Result<WalEntry, DurableError> {
 
 fn set_remove_entry<T: Serialize>(elem: &T) -> Result<WalEntry, DurableError> {
     let elem_bytes = postcard::to_allocvec(elem).map_err(|e| DurableError::Serde(e.to_string()))?;
-    Ok(WalEntry::Remove { key_bytes: elem_bytes })
+    Ok(WalEntry::Remove {
+        key_bytes: elem_bytes,
+    })
 }
 
 /// Recovers a `pds::HashSet<T>` from a WAL by replaying Insert/Remove entries.
@@ -286,21 +288,22 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    type StrictSet = DurableSet<String, Strict>;
+    type RelaxedSet = DurableSet<i32, Relaxed>;
+
     #[test]
     fn durable_set_strict_round_trip() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("set.wal");
 
         {
-            let mut set: DurableSet<String, Strict> =
-                DurableSet::open(&path, DurableConfig::default()).unwrap();
+            let mut set = StrictSet::open(&path, DurableConfig::default()).unwrap();
             set.insert("apple".to_owned()).unwrap();
             set.insert("banana".to_owned()).unwrap();
             set.remove(&"banana".to_owned()).unwrap();
         }
 
-        let set: DurableSet<String, Strict> =
-            DurableSet::open(&path, DurableConfig::default()).unwrap();
+        let set = StrictSet::open(&path, DurableConfig::default()).unwrap();
         assert_eq!(set.len(), 1);
         assert!(set.contains(&"apple".to_owned()));
         assert!(!set.contains(&"banana".to_owned()));
@@ -312,16 +315,14 @@ mod tests {
         let path = dir.path().join("set.wal");
 
         {
-            let mut set: DurableSet<i32, Relaxed> =
-                DurableSet::open(&path, DurableConfig::default()).unwrap();
+            let mut set = RelaxedSet::open(&path, DurableConfig::default()).unwrap();
             set.insert(1);
             set.insert(2);
             set.insert(3);
             set.flush().unwrap();
         }
 
-        let set: DurableSet<i32, Relaxed> =
-            DurableSet::open(&path, DurableConfig::default()).unwrap();
+        let set = RelaxedSet::open(&path, DurableConfig::default()).unwrap();
         assert_eq!(set.len(), 3);
         assert!(set.contains(&1));
         assert!(set.contains(&2));

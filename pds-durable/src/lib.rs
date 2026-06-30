@@ -31,13 +31,13 @@
 //!
 //! # See also
 //!
-//! - `docs/impl-plan.md` — phased implementation plan (D.0–D.8)
+//! - `docs/impl-plan.md` — phased implementation plan (D.0–D.9)
 
-pub mod error;
-pub(crate) mod wal;
-pub(crate) mod recovery;
-pub mod durable_map;
 pub mod checkpoint;
+pub mod durable_map;
+pub mod error;
+pub(crate) mod recovery;
+pub(crate) mod wal;
 
 #[cfg(feature = "durable-set")]
 pub mod durable_set;
@@ -45,5 +45,13 @@ pub mod durable_set;
 #[cfg(feature = "durable-ordmap")]
 pub mod durable_ordmap;
 
-pub use error::DurableError;
+#[cfg(feature = "tiered")]
+pub mod tiered_map;
+
 pub use durable_map::{DurableConfig, DurableMap, Relaxed, Strict};
+pub use error::DurableError;
+
+#[cfg(feature = "tiered")]
+pub use pds_merkle_spine::VersionId;
+#[cfg(feature = "tiered")]
+pub use tiered_map::{TieredConfig, TieredMap};

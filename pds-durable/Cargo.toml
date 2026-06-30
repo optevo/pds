@@ -26,9 +26,20 @@ thiserror = "2"
 # Tracing
 tracing = "0.1"
 
+# Versioned HAMT backing store for TieredMap (feature = "tiered")
+pds-merkle-spine = { path = "../pds-merkle-spine", optional = true }
+
+# folio-core backend types for TieredMap (feature = "tiered")
+folio-core = { path = "../../folio/folio-core", optional = true }
+
+[[bench]]
+name = "bench"
+harness = false
+
 [features]
 durable-set = []
 durable-ordmap = []
+tiered = ["dep:pds-merkle-spine", "dep:folio-core"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

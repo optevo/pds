@@ -163,11 +163,9 @@ where
     /// Returns [`DurableError::Io`] or [`DurableError::Serde`].
     #[tracing::instrument(skip(self, k))]
     pub fn remove(&mut self, k: &K) -> Result<Option<V>, DurableError> {
-        let key_bytes =
-            postcard::to_allocvec(k).map_err(|e| DurableError::Serde(e.to_string()))?;
+        let key_bytes = postcard::to_allocvec(k).map_err(|e| DurableError::Serde(e.to_string()))?;
 
-        self.wal
-            .append(&WalEntry::Remove { key_bytes }, true)?;
+        self.wal.append(&WalEntry::Remove { key_bytes }, true)?;
 
         let prev = self.inner.remove(k);
         if prev.is_some() {
@@ -398,9 +396,7 @@ where
     /// Relaxed `insert`/`remove` methods infallible.  Any I/O failure
     /// will resurface on the next explicit `flush()` or `checkpoint()` call.
     fn maybe_auto_flush_and_checkpoint(&mut self) {
-        if self.config.flush_every > 0
-            && self.wal.pending.len() >= self.config.flush_every
-        {
+        if self.config.flush_every > 0 && self.wal.pending.len() >= self.config.flush_every {
             let _ = self.flush();
         }
         if self.config.checkpoint_every > 0
@@ -537,7 +533,10 @@ mod tests {
         }
 
         let map = RelaxedMap::open(&path, DurableConfig::default()).unwrap();
-        assert!(map.is_empty(), "unflushed mutations should be lost on crash");
+        assert!(
+            map.is_empty(),
+            "unflushed mutations should be lost on crash"
+        );
     }
 
     #[test]

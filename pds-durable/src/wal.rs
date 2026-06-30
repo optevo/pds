@@ -374,10 +374,7 @@ fn write_entry(file: &mut File, entry: &WalEntry) -> Result<(), DurableError> {
 ///
 /// Returns `Ok(Some((entry, total_bytes_consumed)))` on success,
 /// `Ok(None)` on a clean EOF at `pos`, and `Err(...)` on corruption.
-fn read_entry_at(
-    file: &mut File,
-    pos: u64,
-) -> Result<Option<(WalEntry, u64)>, DurableError> {
+fn read_entry_at(file: &mut File, pos: u64) -> Result<Option<(WalEntry, u64)>, DurableError> {
     file.seek(SeekFrom::Start(pos))?;
 
     // Read entry_len (u64 LE).
@@ -577,15 +574,12 @@ mod tests {
         assert_eq!(entries.len(), 3);
 
         match &entries[0].1 {
-            WalEntry::Insert { key_bytes, value_bytes } => {
-                assert_eq!(
-                    postcard::from_bytes::<String>(key_bytes).unwrap(),
-                    "alpha"
-                );
-                assert_eq!(
-                    postcard::from_bytes::<String>(value_bytes).unwrap(),
-                    "1"
-                );
+            WalEntry::Insert {
+                key_bytes,
+                value_bytes,
+            } => {
+                assert_eq!(postcard::from_bytes::<String>(key_bytes).unwrap(), "alpha");
+                assert_eq!(postcard::from_bytes::<String>(value_bytes).unwrap(), "1");
             }
             other => panic!("expected Insert, got {:?}", other),
         }
@@ -701,8 +695,14 @@ mod tests {
             let flip_offset = second_entry_offset + 8 + 1;
             f.seek(SeekFrom::Start(flip_offset)).unwrap();
             let mut byte = [0u8; 1];
-            File::open(&path).unwrap().seek(SeekFrom::Start(flip_offset)).unwrap();
-            std::fs::File::open(&path).unwrap().read_exact_at(&mut byte, flip_offset).unwrap();
+            File::open(&path)
+                .unwrap()
+                .seek(SeekFrom::Start(flip_offset))
+                .unwrap();
+            std::fs::File::open(&path)
+                .unwrap()
+                .read_exact_at(&mut byte, flip_offset)
+                .unwrap();
             byte[0] ^= 0xFF;
             f.seek(SeekFrom::Start(flip_offset)).unwrap();
             f.write_all(&byte).unwrap();
@@ -717,10 +717,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         match &entries[0].1 {
             WalEntry::Insert { key_bytes, .. } => {
-                assert_eq!(
-                    postcard::from_bytes::<String>(key_bytes).unwrap(),
-                    "a"
-                );
+                assert_eq!(postcard::from_bytes::<String>(key_bytes).unwrap(), "a");
             }
             other => panic!("expected Insert, got {:?}", other),
         }

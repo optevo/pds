@@ -10,9 +10,9 @@ use std::path::Path;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::checkpoint::write_checkpoint;
+use crate::durable_map::{DurableConfig, Relaxed, Strict};
 use crate::error::DurableError;
 use crate::wal::{Wal, WalEntry};
-use crate::durable_map::{DurableConfig, Strict, Relaxed};
 
 /// Recovers a `pds::OrdMap<K, V>` from a WAL.
 fn recover_ord_map<K, V>(wal: &mut Wal) -> Result<(pds::OrdMap<K, V>, u64), DurableError>
@@ -33,7 +33,10 @@ where
                     .map_err(|e| DurableError::Serde(e.to_string()))?;
                 last_offset = offset;
             }
-            WalEntry::Insert { key_bytes, value_bytes } => {
+            WalEntry::Insert {
+                key_bytes,
+                value_bytes,
+            } => {
                 let k: K = postcard::from_bytes(&key_bytes)
                     .map_err(|e| DurableError::Serde(e.to_string()))?;
                 let v: V = postcard::from_bytes(&value_bytes)
@@ -91,9 +94,17 @@ where
     ///
     /// Time: O(log N) + WAL append + fsync.
     pub fn insert(&mut self, k: K, v: V) -> Result<Option<V>, DurableError> {
-        let key_bytes = postcard::to_allocvec(&k).map_err(|e| DurableError::Serde(e.to_string()))?;
-        let value_bytes = postcard::to_allocvec(&v).map_err(|e| DurableError::Serde(e.to_string()))?;
-        self.wal.append(&WalEntry::Insert { key_bytes, value_bytes }, true)?;
+        let key_bytes =
+            postcard::to_allocvec(&k).map_err(|e| DurableError::Serde(e.to_string()))?;
+        let value_bytes =
+            postcard::to_allocvec(&v).map_err(|e| DurableError::Serde(e.to_string()))?;
+        self.wal.append(
+            &WalEntry::Insert {
+                key_bytes,
+                value_bytes,
+            },
+            true,
+        )?;
         let prev = self.inner.insert(k, v);
         self.checkpoint_counter += 1;
         self.maybe_checkpoint()?;
@@ -196,7 +207,10 @@ where
         let prev = self.inner.insert(k.clone(), v.clone());
         let key_bytes = postcard::to_allocvec(&k).unwrap_or_default();
         let value_bytes = postcard::to_allocvec(&v).unwrap_or_default();
-        self.wal.pending.push(WalEntry::Insert { key_bytes, value_bytes });
+        self.wal.pending.push(WalEntry::Insert {
+            key_bytes,
+            value_bytes,
+        });
         self.checkpoint_counter += 1;
         prev
     }
@@ -276,21 +290,22 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    type StrictOrdMap = DurableOrdMap<String, i64, Strict>;
+    type RelaxedOrdMap = DurableOrdMap<i32, String, Relaxed>;
+
     #[test]
     fn durable_ordmap_strict_round_trip() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("ordmap.wal");
 
         {
-            let mut map: DurableOrdMap<String, i64, Strict> =
-                DurableOrdMap::open(&path, DurableConfig::default()).unwrap();
+            let mut map = StrictOrdMap::open(&path, DurableConfig::default()).unwrap();
             map.insert("alpha".to_owned(), 1).unwrap();
             map.insert("beta".to_owned(), 2).unwrap();
             map.remove(&"alpha".to_owned()).unwrap();
         }
 
-        let map: DurableOrdMap<String, i64, Strict> =
-            DurableOrdMap::open(&path, DurableConfig::default()).unwrap();
+        let map = StrictOrdMap::open(&path, DurableConfig::default()).unwrap();
         assert_eq!(map.len(), 1);
         assert_eq!(map.get(&"beta".to_owned()), Some(&2));
         assert!(!map.contains_key(&"alpha".to_owned()));
@@ -302,15 +317,13 @@ mod tests {
         let path = dir.path().join("ordmap.wal");
 
         {
-            let mut map: DurableOrdMap<i32, String, Relaxed> =
-                DurableOrdMap::open(&path, DurableConfig::default()).unwrap();
+            let mut map = RelaxedOrdMap::open(&path, DurableConfig::default()).unwrap();
             map.insert(1, "one".to_owned());
             map.insert(2, "two".to_owned());
             map.flush().unwrap();
         }
 
-        let map: DurableOrdMap<i32, String, Relaxed> =
-            DurableOrdMap::open(&path, DurableConfig::default()).unwrap();
+        let map = RelaxedOrdMap::open(&path, DurableConfig::default()).unwrap();
         assert_eq!(map.len(), 2);
         assert_eq!(map.get(&1), Some(&"one".to_owned()));
         assert_eq!(map.get(&2), Some(&"two".to_owned()));

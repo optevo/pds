@@ -30,6 +30,18 @@ Two durability modes: `Strict` (zero data loss, fsync per mutation) and `Relaxed
 
 *Newest first.*
 
+- **[2026-07-01] D.9 — `TieredMap`** — `src/tiered_map.rs` implemented; `Cargo.toml`
+  updated with `pds-merkle-spine` + `folio-core` optional deps under `tiered` feature;
+  `lib.rs` exports `TieredMap`, `TieredConfig`, `VersionId`; 22 unit tests (Strict + Relaxed),
+  all passing; criterion benchmarks added (6 tiered scenarios, gated on `tiered` feature);
+  `cargo fmt` clean; `cargo clippy -D warnings` clean.
+  - Key design note: `VersionedHamt::insert/remove` are immutable (return new `Self`) so
+    `back` is reassigned on each mutation; `get` returns `Option<&V>` from front only —
+    cold lookups via `get_or_fetch(&mut self)` which re-warms front.
+  - `V: Hash` required by `pds::HashMap`; both mode `impl` bounds include it.
+  - Benchmarks gated with `#[cfg(feature = "tiered")]` in `bench.rs`; separate
+    `criterion_group!` macro invocations for `tiered` vs default builds.
+
 - **[2026-07-01] Workspace scaffold** — crate directory, `Cargo.toml`, `src/lib.rs`,
   `docs/impl-plan.md` created; added to workspace `members` in root `Cargo.toml`.
 

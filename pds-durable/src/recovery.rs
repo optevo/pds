@@ -35,9 +35,7 @@ use crate::wal::{Wal, WalEntry, WAL_HEADER_SIZE};
 /// Returns [`DurableError::Serde`] if the checkpoint snapshot cannot be
 /// deserialised, or [`DurableError::Io`] for filesystem errors.
 #[tracing::instrument(skip(wal))]
-pub(crate) fn recover_map<K, V>(
-    wal: &mut Wal,
-) -> Result<(pds::HashMap<K, V>, u64), DurableError>
+pub(crate) fn recover_map<K, V>(wal: &mut Wal) -> Result<(pds::HashMap<K, V>, u64), DurableError>
 where
     K: Clone + Hash + Eq + DeserializeOwned,
     V: Clone + Hash + DeserializeOwned,
@@ -61,7 +59,10 @@ where
     let end_of_valid = if all_entries.is_empty() {
         WAL_HEADER_SIZE
     } else {
-        let last_start = all_entries.last().map(|(o, _)| *o).unwrap_or(WAL_HEADER_SIZE);
+        let last_start = all_entries
+            .last()
+            .map(|(o, _)| *o)
+            .unwrap_or(WAL_HEADER_SIZE);
         compute_entry_end(wal, last_start)
     };
 
@@ -214,11 +215,8 @@ mod tests {
             // Post-checkpoint inserts.
             for i in 0..3i64 {
                 reference.insert(format!("post{}", i), i + 10);
-                wal.append(
-                    &make_insert_entry(&format!("post{}", i), i + 10),
-                    false,
-                )
-                .unwrap();
+                wal.append(&make_insert_entry(&format!("post{}", i), i + 10), false)
+                    .unwrap();
             }
         }
 
@@ -261,10 +259,7 @@ mod tests {
         let original_len = std::fs::metadata(&path).unwrap().len();
         let truncated_len = original_len - 4;
         {
-            let f = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&path)
-                .unwrap();
+            let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
             f.set_len(truncated_len).unwrap();
         }
 

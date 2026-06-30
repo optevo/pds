@@ -896,7 +896,9 @@ version = "0.1.0"
 dependencies = [
  "crc32c",
  "criterion 0.5.1",
+ "folio-core",
  "pds",
+ "pds-merkle-spine",
  "postcard",
  "proptest",
  "serde",
