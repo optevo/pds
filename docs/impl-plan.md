@@ -842,12 +842,12 @@ All residual items including R.17 and the range-view API refactor are now comple
 
 **Status:** Not started. No external blockers — can begin any time.
 
-**Goal:** Define the `PersistentMap<K, V>`, `PersistentSet<A>`, `VersionedPersistentMap<K, V>`,
-and `MerklePersistentMap<K, V>` traits in `pds` itself (behind a `traits` feature flag),
-and implement them for the existing in-memory collection types.
+**Goal:** Define the full cross-variant trait set in `pds` itself (behind a `traits` feature
+flag) and implement for existing in-memory collection types.
 
-These traits form the common interface that future pds-folio and pds-merkle-spine crates will
-implement, enabling generic code that works across all three storage backends.
+Traits: `PersistentMap<K, V>`, `PersistentSet<A>`, `PersistentVector<A>`,
+`PersistentOrdMap<K, V>`, `PersistentOrdSet<A>`, `VersionedPersistentMap<K, V>`,
+`MerklePersistentMap<K, V>`.
 
 **Full spec:** `docs/cross-variant-traits.md`
 
@@ -855,21 +855,21 @@ implement, enabling generic code that works across all three storage backends.
 
 ```
 pds (defines traits, impls for in-memory types)
-  └── pds-folio (impls PersistentMap + PersistentSet)
+  └── pds-folio (impls all five base traits)
         └── pds-merkle-spine (impls VersionedPersistentMap + MerklePersistentMap)
 ```
 
 ### F.0 — Define base traits in `src/traits.rs`
 
-- New `src/traits.rs` with `PersistentCollection`, `PersistentMap<K, V>`, `PersistentSet<A>`
-- Behind `features = ["traits"]` to avoid forcing the dependency on users who don't need it
-- Implement `PersistentMap<K, V>` for `HashMap<K, V>` (delegates `get_cloned` to `get().cloned()`)
-- Implement `PersistentSet<A>` for `HashSet<A>`
-- Re-export both traits at crate root under `traits` feature gate
-- Tests: generic function parameterised over `PersistentMap<K, V>` runs with `HashMap<K, V>`
+- New `src/traits.rs` with `PersistentCollection`, `PersistentMap<K, V>`, `PersistentSet<A>`,
+  `PersistentVector<A>`, `PersistentOrdMap<K, V>`, `PersistentOrdSet<A>`
+- Behind `features = ["traits"]`
+- Implement all five base traits for existing in-memory types:
+  `HashMap`, `HashSet`, `Vector`, `OrdMap`, `OrdSet`
+- Re-export at crate root under `traits` feature gate
+- Tests: generic function over each trait runs with the corresponding in-memory type
 
-**Acceptance:** `cargo test --features traits` green; trait impls compile; `get_cloned` on
-`HashMap` returns `None` for absent key, `Some(v.clone())` for present.
+**Acceptance:** `cargo test --features traits` green; all five trait impls compile.
 
 ### F.1 — Define versioning + Merkle traits
 
@@ -952,18 +952,51 @@ full HAMT page index work.
 - `impl merkle_spine::PageIndexBackend for HamtIndex<B>`
 - Tests: root hash changes when any entry changes; proof verifies; empty index has known hash
 
-### G.6 — Implement pds cross-variant traits
+### G.6 — Implement pds cross-variant traits (HashMap / HashSet)
 
-- `impl<K, V, C, B> PersistentMap<K, V> for HamtMap<K, V, C, B>` where K/V: Serialize+DeserializeOwned+Clone+Hash+Eq
-- `impl<A, C, B> PersistentSet<A> for HamtSet<A, C, B>`
-- Tests: generic functions from Phase F tests work with `HamtMap`/`HamtSet` using both `PodCodec` and `PostcardCodec`
+- `impl<K, V, C, B> PersistentMap<K, V> for HashMap<K, V, C, B>`
+- `impl<A, C, B> PersistentSet<A> for HashSet<A, C, B>`
+- Tests: generic functions from Phase F tests work with `HashMap`/`HashSet` using both codecs
 
-### G.7 — Integration tests and proptest suite
+### G.7 — Integration tests and proptest suite (HashMap / HashSet)
 
 - proptest: insert N random (K, V) pairs; all lookups correct; remove N/2; remaining correct
-- Miri run on all unsafe paths (if any remain after removing `#![deny(unsafe_code)]` only in
-  module that needs it)
-- Integration: create `HamtMap` in folio store; process restart; reopen store; lookups correct
+- Integration: create `HashMap` in folio store; process restart; reopen store; lookups correct
+
+### G.8 — Vector: RRB-tree node types and slab layout
+
+- `VectorLeaf` and `VectorInternal` page layouts (BRANCHING_FACTOR = 32)
+- `FolioSlab<VectorNodePage>` wrapper
+- Unit tests: node size checks; leaf insert/read round-trip
+
+### G.9 — `Vector` CRUD and `PersistentVector` trait impl
+
+- `Vector<A, C = PostcardCodec, B = DefaultBackend>` — `A: Serialize + DeserializeOwned + Clone, C: Codec`
+- `new`, `get`, `push_back`, `push_front`, `update`, `pop_back`, `pop_front`, `concat`, `split_at`, `len`, `iter`
+- Path-copy on all mutations; shared refcount table from G.3
+- `impl<A, C, B> PersistentVector<A> for Vector<A, C, B>`
+- Tests: empty, single push, multiple pushes, update, pop, concat, split; proptest round-trip
+
+### G.10 — OrdMap / OrdSet: B+ tree node types and slab layout
+
+- `BTreeLeaf` (chained via `next_leaf`) and `BTreeInternal` page layouts
+- `FolioSlab<BTreeNodePage>` wrapper
+- Unit tests: node size checks; leaf insert/read round-trip in sorted order
+
+### G.11 — `OrdMap` + `OrdSet` CRUD and trait impls
+
+- `OrdMap<K, V, C = PostcardCodec, B = DefaultBackend>` — `K: Serialize + DeserializeOwned + Ord + Clone`
+- `new`, `get`, `insert`, `remove`, `first`, `last`, `range`, `len`, `contains_key`, `iter`
+- B+ tree split/merge on insert/remove; path-copy; shared refcount table from G.3
+- `OrdSet<A, C, B>` wrapper over `OrdMap<A, (), C, B>`
+- `impl PersistentOrdMap<K, V> for OrdMap<K, V, C, B>`
+- `impl PersistentOrdSet<A> for OrdSet<A, C, B>`
+- Tests: empty, insert, remove, range queries, ordering invariants; proptest sorted order
+
+### G.12 — Integration tests (Vector + OrdMap / OrdSet)
+
+- proptest: Vector concat/split round-trips; OrdMap range query correctness
+- Integration: create OrdMap in folio store; restart; range query still correct
 
 ---
 

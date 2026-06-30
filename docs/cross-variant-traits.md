@@ -44,20 +44,27 @@ across all three backends without sacrificing backend-specific capabilities.
 ## Trait hierarchy
 
 ```
-PersistentCollection (marker; all three variants)
+PersistentCollection (marker; all variants)
     │
-    ├── PersistentMap<K, V>          (all three)
+    ├── PersistentMap<K, V>           (K: Hash + Eq; all hash map variants)
     │       │
     │       └── VersionedPersistentMap<K, V>    (pds-merkle-spine only)
     │               │
     │               └── MerklePersistentMap<K, V>  (pds-merkle-spine only)
     │
-    └── PersistentSet<A>             (all three)
+    ├── PersistentSet<A>              (A: Hash + Eq; all hash set variants)
+    │
+    ├── PersistentVector<A>           (all vector variants)
+    │
+    ├── PersistentOrdMap<K, V>        (K: Ord; all ordered map variants)
+    │
+    └── PersistentOrdSet<A>           (A: Ord; all ordered set variants)
 ```
 
-`PersistentMap` is the core abstraction. `VersionedPersistentMap` and
-`MerklePersistentMap` add capabilities that are only available in versioned,
-cryptographically-identified backends.
+`PersistentMap` and `PersistentOrdMap` are parallel, not related by inheritance:
+they have different key bounds (`Hash + Eq` vs `Ord`). Both extend
+`PersistentCollection`. Code generic over any persistent map must pick one or
+the other, not unify them.
 
 ---
 
@@ -144,6 +151,113 @@ where
     ///
     /// Time: O(log N).
     fn contains_key(&self, key: &K) -> bool;
+}
+```
+
+### `PersistentVector<A>`
+
+```rust
+/// A persistent (functional) vector with O(log N) point operations and O(1) clone.
+///
+/// Based on an RRB-tree. Index operations are O(log_{B} N) where B is the
+/// branching factor (typically 32 — effectively O(1) for practical sizes).
+pub trait PersistentVector<A>: PersistentCollection
+where
+    A: Clone,
+{
+    /// Returns the element at `index`, or `None` if out of bounds. Time: O(log N).
+    fn get(&self, index: usize) -> Option<A>;
+
+    /// Returns a new vector with `value` appended. Time: O(log N) amortised.
+    fn push_back(&self, value: A) -> Self;
+
+    /// Returns a new vector with `value` prepended. Time: O(log N) amortised.
+    fn push_front(&self, value: A) -> Self;
+
+    /// Returns a new vector with the element at `index` replaced. Time: O(log N).
+    fn update(&self, index: usize, value: A) -> Self;
+
+    /// Returns a new vector with the last element removed, plus the element.
+    fn pop_back(&self) -> (Self, Option<A>) where Self: Sized;
+
+    /// Returns a new vector with the first element removed, plus the element.
+    fn pop_front(&self) -> (Self, Option<A>) where Self: Sized;
+
+    /// Concatenates `self` and `other`. Time: O(log N).
+    fn concat(&self, other: &Self) -> Self;
+
+    /// Splits at `index`, returning `(left, right)`. Time: O(log N).
+    fn split_at(&self, index: usize) -> (Self, Self) where Self: Sized;
+
+    /// Returns the number of elements. Time: O(1).
+    fn len(&self) -> usize;
+
+    /// Tests whether the vector is empty. Time: O(1).
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+```
+
+### `PersistentOrdMap<K, V>`
+
+```rust
+/// A persistent ordered map with O(log N) point operations, O(log N + k) range
+/// queries, and O(1) clone.
+///
+/// `K: Ord` — keys are maintained in sorted order. Does not require `Hash + Eq`.
+/// Parallel to `PersistentMap` (hash-based); they are not related by inheritance.
+pub trait PersistentOrdMap<K, V>: PersistentCollection
+where
+    K: Clone + Ord,
+    V: Clone,
+{
+    /// Returns a clone of the value for `key`, or `None`. Time: O(log N).
+    fn get_cloned(&self, key: &K) -> Option<V>;
+
+    /// Returns a new map with `key` → `value` inserted. Time: O(log N).
+    fn insert(&self, key: K, value: V) -> Self;
+
+    /// Returns a new map with `key` removed, plus the evicted value. Time: O(log N).
+    fn remove(&self, key: &K) -> (Self, Option<V>) where Self: Sized;
+
+    /// Returns the number of key-value pairs. Time: O(1).
+    fn len(&self) -> usize;
+
+    /// Tests whether the map is empty. Time: O(1).
+    fn is_empty(&self) -> bool { self.len() == 0 }
+
+    /// Tests whether `key` is present. Time: O(log N).
+    fn contains_key(&self, key: &K) -> bool;
+
+    /// Returns the smallest key-value pair, or `None`. Time: O(log N).
+    fn first(&self) -> Option<(K, V)>;
+
+    /// Returns the largest key-value pair, or `None`. Time: O(log N).
+    fn last(&self) -> Option<(K, V)>;
+
+    /// Returns an iterator over pairs with keys in `bounds`, in ascending order.
+    /// Time: O(log N) to seek; O(k) to iterate k results.
+    fn range<R: RangeBounds<K>>(&self, bounds: R) -> impl Iterator<Item = (K, V)> + '_;
+}
+```
+
+### `PersistentOrdSet<A>`
+
+```rust
+/// A persistent ordered set. Parallel to `PersistentSet` (hash-based).
+pub trait PersistentOrdSet<A>: PersistentCollection
+where
+    A: Clone + Ord,
+{
+    fn contains(&self, value: &A) -> bool;
+    fn insert(&self, value: A) -> Self;
+    fn remove(&self, value: &A) -> Self;
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool { self.len() == 0 }
+    fn first(&self) -> Option<A>;
+    fn last(&self) -> Option<A>;
+    fn range<R: RangeBounds<A>>(&self, bounds: R) -> impl Iterator<Item = A> + '_;
 }
 ```
 
@@ -330,17 +444,28 @@ where
 
 ## Implementing types
 
-| Type | `PersistentCollection` | `PersistentMap` | `PersistentSet` | `VersionedPersistentMap` | `MerklePersistentMap` |
-|------|----------------------|-----------------|-----------------|--------------------------|----------------------|
-| `pds::HashMap<K, V>` | Y | Y | — | — | — |
-| `pds::HashSet<A>` | Y | — | Y | — | — |
-| `pds_folio::HamtMap<K, V, C>` | Y | Y | — | — | — |
-| `pds_folio::HamtSet<A, C>` | Y | — | Y | — | — |
-| `pds_merkle_spine::VersionedHamt<K, V, C>` | Y | Y | — | Y | Y |
+| Type | `PMap` | `PSet` | `PVec` | `POrdMap` | `POrdSet` | `VPMap` | `MPMap` |
+|------|--------|--------|--------|-----------|-----------|---------|---------|
+| `pds::HashMap<K, V>` | Y | — | — | — | — | — | — |
+| `pds::HashSet<A>` | — | Y | — | — | — | — | — |
+| `pds::Vector<A>` | — | — | Y | — | — | — | — |
+| `pds::OrdMap<K, V>` | — | — | — | Y | — | — | — |
+| `pds::OrdSet<A>` | — | — | — | — | Y | — | — |
+| `pds_folio::HashMap<K, V, C>` | Y | — | — | — | — | — | — |
+| `pds_folio::HashSet<A, C>` | — | Y | — | — | — | — | — |
+| `pds_folio::Vector<A, C>` | — | — | Y | — | — | — | — |
+| `pds_folio::OrdMap<K, V, C>` | — | — | — | Y | — | — | — |
+| `pds_folio::OrdSet<A, C>` | — | — | — | — | Y | — | — |
+| `pds_merkle_spine::VersionedHamt<K, V, C>` | Y | — | — | — | — | Y | Y |
 
-`C: Codec` defaults to `PostcardCodec` for general-purpose use. Pass `PodCodec`
-for fixed-size numeric keys/values where zero-copy storage matters, or `RkyvCodec`
-for zero-copy deserialisation from mmap'd pages.
+Column headers: `PMap` = `PersistentMap`, `PSet` = `PersistentSet`,
+`PVec` = `PersistentVector`, `POrdMap` = `PersistentOrdMap`,
+`POrdSet` = `PersistentOrdSet`, `VPMap` = `VersionedPersistentMap`,
+`MPMap` = `MerklePersistentMap`.
+
+`C: Codec` defaults to `PostcardCodec`. Use `PodCodec` for fixed-size numeric
+key/value types. `VersionedVector`, `VersionedOrdMap` etc. are future additions
+to pds-merkle-spine.
 
 `OrdMap`, `OrdSet`, `Vector` and the 15 derived types may gain `PersistentMap`
 / `PersistentSet` impls in a later pass.
