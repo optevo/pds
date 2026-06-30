@@ -785,6 +785,7 @@ dependencies = [
  "merkle-spine",
  "pds",
  "postcard",
+ "proptest",
  "serde",
  "thiserror",
 ]

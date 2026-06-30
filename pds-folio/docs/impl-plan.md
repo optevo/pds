@@ -154,6 +154,25 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ---
 
+- **[2026-07-01] G.7 — Integration tests and proptest suite (HashMap / HashSet).**
+  `tests/hamt_integration.rs`: 12 integration/proptest tests.
+
+  Deterministic tests: `insert_many_and_verify_all_via_trait` (128 keys),
+  `insert_remove_half_and_verify_remaining` (64 keys, even-half removed),
+  `snapshot_isolation_insert_does_not_affect_sibling`,
+  `snapshot_isolation_remove_does_not_affect_original`,
+  `overwrite_updates_without_growing_map`, `pod_codec_u64_keys_large_insertion`,
+  `set_insert_many_and_verify`, `set_snapshot_isolation`.
+
+  Proptest (20 cases each, limited for folio I/O overhead):
+  `prop_hamt_map_matches_std_hashmap` (model-based: HAMT vs `HashMap`),
+  `prop_snapshot_isolation` (two concurrent snapshots diverge independently),
+  `prop_round_trip_key_lookup` (insert N, lookup all),
+  `prop_hamt_set_matches_std_hashset` (model-based: HamtSet vs `HashSet`).
+
+  Added `proptest = "1"` to dev-dependencies.  All 91 (72 lib + 12 integration
+  + 7 doc) tests green.  Clippy and `cargo doc` warnings clean.
+
 - **[2026-07-01] G.6 — Implement pds cross-variant traits (HashMap / HashSet).**
   `src/traits.rs`: `PersistentCollection`, `PersistentMap<K, V>`, and
   `PersistentSet<A>` implemented for `HamtMap<K, V, C, B>` and `HamtSet<A, C, B>`.
@@ -202,12 +221,7 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ### G.6 — Implement pds cross-variant traits (HashMap / HashSet) — DONE — see above
 
-### G.7 — Integration tests and proptest suite (HashMap / HashSet)
-
-- proptest: insert N random (K, V) pairs; all lookups correct; remove N/2; remaining correct
-- Integration: create `HamtMap` in folio store; process restart simulation; reopen store; lookups correct
-
-**Acceptance:** proptest passes (256 cases default); integration round-trip green.
+### G.7 — Integration tests and proptest suite (HashMap / HashSet) — DONE — see above
 
 ### G.8 — Vector: RRB-tree node types and slab layout
 

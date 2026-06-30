@@ -36,3 +36,6 @@ bytemuck = { version = "1", features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]
+# Property-based testing — random insert/remove sequences, snapshot isolation,
+# round-trip key lookup verification.
+proptest = "1"
