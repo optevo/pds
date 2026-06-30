@@ -34,6 +34,7 @@
 #![deny(missing_docs)]
 #![warn(unreachable_pub)]
 
+pub mod btree;
 pub mod codec;
 pub mod folio_vector;
 pub mod hamt;

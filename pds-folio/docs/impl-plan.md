@@ -19,6 +19,40 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.10 — OrdMap / OrdSet: B+ tree node types and slab layout.**
+  `src/btree.rs`: `BTreeNodePage([u8; 512])` — `#[repr(transparent)]` Pod + Zeroable
+  newtype (manual `Default` via `bytemuck::Zeroable::zeroed()`).  Two discriminant
+  values: `DISCRIMINANT_LEAF = 0x01`, `DISCRIMINANT_INTERNAL = 0x02`.
+  `BTREE_ORDER = 32`.
+
+  Leaf layout (512 bytes):
+  - Bytes 0..2: discriminant + count
+  - Bytes 2..10: `next_leaf: u64` (0 = None)
+  - Bytes 10..76: `entry_offsets [u16; 33]` — offsets[count] = total data bytes
+  - Bytes 76..512: data (436 bytes) — codec-encoded K||V pairs in sorted order
+
+  Internal layout (512 bytes):
+  - Bytes 0..2: discriminant + count (separator key count; children = count+1)
+  - Bytes 2..4: pad
+  - Bytes 4..260: `children [u64; 32]` (256 bytes)
+  - Bytes 260..324: `key_offsets [u16; 32]` (64 bytes)
+  - Bytes 324..512: `key_data` (188 bytes)
+
+  `LeafBuilder` / `LeafReader` — write/read leaf pages with `push_encoded<K,V,C>` /
+  `decode_kv<K,V,C>` / `decode_key<K,C>`.  `LeafReader::next_leaf()` for range scans.
+  `build_internal_node<K,C>(children, separator_keys)` / `InternalReader` — construct
+  and read internal pages.  `InternalReader::find_child<K,C>` routes by key via linear
+  scan of decoded separator keys (O(count), count ≤ 32).
+
+  Note: `decode_separator_key` for the last key uses `postcard::take_from_bytes` since
+  there is no sentinel offset for the last key's end.
+
+  14 unit tests: size assertions, Pod check, discriminant uniqueness, data-section
+  arithmetic, leaf empty/single/multiple/full/overflow/string/next_leaf/decode_key
+  round-trips, internal single/three/routing/max-order round-trips and `find_child`
+  correctness.  All 125 lib + 12 integration + 7 doc tests green.  Full workspace
+  `test.sh` passes.
+
 - **[2026-07-01] G.9 — `FolioVector` CRUD and `PersistentVector` trait impl.**
   `src/folio_vector.rs`: `FolioVector<A, C, B>` backed by a `VectorNodeStore<B>` (thin
   wrapper over `FolioStore<B>` with `refcounts: HashMap<u64, u32>`).
@@ -286,13 +320,7 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ### G.9 — `FolioVector` CRUD and `PersistentVector` trait impl (DONE — see above)
 
-### G.10 — OrdMap / OrdSet: B+ tree node types and slab layout
-
-- `BTreeLeaf` (chained via `next_leaf`) and `BTreeInternal` page layouts
-- `FolioSlab<BTreeNodePage>` wrapper
-- Unit tests: node size checks; leaf insert/read round-trip in sorted order
-
-**Acceptance:** `cargo test` green; size assertions pass.
+### G.10 — OrdMap / OrdSet: B+ tree node types and slab layout (DONE — see above)
 
 ### G.11 — `OrdMap` + `OrdSet` CRUD and trait impls
 
