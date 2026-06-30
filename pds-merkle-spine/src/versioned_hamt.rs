@@ -1349,4 +1349,79 @@ mod tests {
         }
         mpm(empty_map());
     }
+
+    // -----------------------------------------------------------------------
+    // Edge cases: version monotonicity, checkout correctness, error formats
+    // -----------------------------------------------------------------------
+
+    /// Version sequence numbers are strictly monotone across many mutations.
+    #[test]
+    fn version_seq_is_strictly_monotone() {
+        let mut m = empty_map();
+        for i in 0u64..20 {
+            let prev_seq = m.version().seq;
+            m = m.insert(format!("k{i}"), i).unwrap();
+            assert_eq!(m.version().seq, prev_seq + 1, "non-monotone at step {i}");
+        }
+    }
+
+    /// checkout(old_version) returns the correct data after many mutations.
+    #[test]
+    fn checkout_correct_after_many_mutations() {
+        let m0 = empty_map();
+        let v0 = m0.version();
+        let mut m = m0;
+        // Build 10 versions.
+        for i in 0u64..10 {
+            m = m.insert(format!("k{i}"), i * 7).unwrap();
+        }
+        // Checkout v0 — must be empty.
+        let checked = m.checkout(v0).unwrap().unwrap();
+        assert!(checked.is_empty());
+
+        // Check out an intermediate version and verify the exact content.
+        let v5 = {
+            let hist = m.history.lock().unwrap();
+            hist.entries[5].id
+        };
+        let snap5 = m.checkout(v5).unwrap().unwrap();
+        // v5 was produced by inserting k0..k4 (indices 0..5).
+        assert_eq!(snap5.len(), 5);
+        for i in 0u64..5 {
+            assert_eq!(
+                snap5.get(&format!("k{i}")).unwrap(),
+                Some(i * 7),
+                "wrong value at k{i} in v5 snapshot"
+            );
+        }
+        // k5 was not yet inserted at v5.
+        assert_eq!(snap5.get(&"k5".to_string()).unwrap(), None);
+    }
+
+    /// Two independent clones mutate without corrupting each other.
+    #[test]
+    fn two_clones_mutate_independently() {
+        let base = empty_map().insert("shared".to_string(), 0u64).unwrap();
+        let a = base.clone().insert("a".to_string(), 1u64).unwrap();
+        let b = base.clone().insert("b".to_string(), 2u64).unwrap();
+        // a sees "shared" and "a", not "b".
+        assert_eq!(a.get(&"shared".to_string()).unwrap(), Some(0));
+        assert_eq!(a.get(&"a".to_string()).unwrap(), Some(1));
+        assert_eq!(a.get(&"b".to_string()).unwrap(), None);
+        // b sees "shared" and "b", not "a".
+        assert_eq!(b.get(&"shared".to_string()).unwrap(), Some(0));
+        assert_eq!(b.get(&"b".to_string()).unwrap(), Some(2));
+        assert_eq!(b.get(&"a".to_string()).unwrap(), None);
+    }
+
+    /// VersionedHamtError variants have sensible Display strings.
+    #[test]
+    fn versioned_hamt_error_formats() {
+        let err = VersionedHamtError::Poisoned;
+        let s = format!("{err}");
+        assert!(
+            s.contains("poison") || s.contains("Poison") || s.contains("mutex"),
+            "unexpected format: {s}"
+        );
+    }
 }

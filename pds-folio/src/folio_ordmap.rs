@@ -1243,4 +1243,126 @@ mod tests {
         assert_eq!(m0.get(&2).unwrap(), None);
         assert_eq!(m1.len(), 2);
     }
+
+    // -----------------------------------------------------------------------
+    // Edge cases: range with exclusive bounds, two chains, error Display
+    // -----------------------------------------------------------------------
+
+    /// range() with an exclusive upper bound excludes the boundary element.
+    #[test]
+    fn range_exclusive_upper_bound() {
+        let m = empty_map()
+            .insert(1u32, 10u32)
+            .unwrap()
+            .insert(3u32, 30u32)
+            .unwrap()
+            .insert(5u32, 50u32)
+            .unwrap();
+        // Exclusive upper bound excludes 5.
+        let pairs = m.range(1u32..5u32).unwrap();
+        assert_eq!(pairs, vec![(1, 10), (3, 30)]);
+    }
+
+    /// range() from an exclusive lower bound excludes the start element.
+    #[test]
+    fn range_exclusive_lower_bound() {
+        let m = empty_map()
+            .insert(1u32, 10u32)
+            .unwrap()
+            .insert(3u32, 30u32)
+            .unwrap()
+            .insert(5u32, 50u32)
+            .unwrap();
+        use std::ops::Bound;
+        let pairs = m
+            .range((Bound::Excluded(1u32), Bound::Included(5u32)))
+            .unwrap();
+        assert_eq!(pairs, vec![(3, 30), (5, 50)]);
+    }
+
+    /// Two independent chains from the same base remain independent.
+    #[test]
+    fn two_chains_from_same_base_are_independent() {
+        let base = empty_map().insert(1u32, 10u32).unwrap();
+
+        let a = base
+            .insert(2u32, 20u32)
+            .unwrap()
+            .insert(3u32, 30u32)
+            .unwrap();
+        let b = base.insert(100u32, 1000u32).unwrap();
+
+        // Chain A sees only its own keys.
+        assert_eq!(a.get(&2).unwrap(), Some(20u32));
+        assert_eq!(a.get(&100).unwrap(), None);
+
+        // Chain B sees only its own keys.
+        assert_eq!(b.get(&100).unwrap(), Some(1000u32));
+        assert_eq!(b.get(&2).unwrap(), None);
+
+        // Both see the shared base key.
+        assert_eq!(a.get(&1).unwrap(), Some(10u32));
+        assert_eq!(b.get(&1).unwrap(), Some(10u32));
+    }
+
+    /// In-order scan of a large map returns keys in sorted order.
+    #[test]
+    fn iter_returns_keys_in_sorted_order() {
+        let n = BTREE_ORDER * 2; // forces internal-node splits
+        let mut m = empty_map();
+        // Insert in reverse order to exercise split paths thoroughly.
+        for i in (0..n).rev() {
+            m = m.insert(i as u32, (i as u32) * 3).unwrap();
+        }
+        let pairs = m.iter().unwrap();
+        assert_eq!(pairs.len(), n);
+        for (idx, (k, v)) in pairs.iter().enumerate() {
+            assert_eq!(*k, idx as u32, "key ordering wrong at position {idx}");
+            assert_eq!(*v, idx as u32 * 3);
+        }
+    }
+
+    /// OrdMapError::BadDiscriminant Display format.
+    #[test]
+    fn bad_discriminant_error_formats() {
+        let err = OrdMapError::BadDiscriminant(0xCC);
+        let s = format!("{err}");
+        assert!(
+            s.contains("0xcc") || s.contains("204") || s.contains("CC"),
+            "unexpected format: {s}"
+        );
+    }
+
+    /// Cloning a map snapshot and then dropping the original leaves the clone intact.
+    #[test]
+    fn clone_and_drop_original_leaves_clone_intact() {
+        let mut m = empty_map();
+        for i in 0..20u32 {
+            m = m.insert(i, i * 2).unwrap();
+        }
+        let snap = m.clone();
+        drop(m);
+        assert_eq!(snap.len(), 20);
+        for i in 0..20u32 {
+            assert_eq!(snap.get(&i).unwrap(), Some(i * 2));
+        }
+    }
+
+    /// Remove all entries one by one from a large map ends with empty.
+    #[test]
+    fn remove_all_entries_produces_empty_map() {
+        let n = BTREE_ORDER + 5;
+        let mut m = empty_map();
+        for i in 0..n {
+            m = m.insert(i as u32, (i as u32) * 2).unwrap();
+        }
+        for i in 0..n {
+            let (new_m, v) = m.remove(&(i as u32)).unwrap();
+            assert_eq!(v, Some((i as u32) * 2), "wrong evicted value for key {i}");
+            m = new_m;
+        }
+        assert!(m.is_empty());
+        assert_eq!(m.first().unwrap(), None);
+        assert_eq!(m.last().unwrap(), None);
+    }
 }

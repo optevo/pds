@@ -1318,4 +1318,100 @@ mod tests {
         // The root page ID must be the same — no new page was allocated.
         assert_eq!(m2.root, root_before);
     }
+
+    // -----------------------------------------------------------------------
+    // Edge cases: snapshot isolation, iterator, leaf-capacity boundaries
+    // -----------------------------------------------------------------------
+
+    /// Two independent mutation chains from the same base must remain independent.
+    #[test]
+    fn two_chains_from_same_base_are_independent() {
+        let base: HamtMap<String, u32> = HamtMap::new(make_store());
+        let base = base.insert("shared".to_string(), 0u32).unwrap();
+
+        // Chain A.
+        let a1 = base.insert("a".to_string(), 1u32).unwrap();
+        let a2 = a1.insert("a2".to_string(), 2u32).unwrap();
+
+        // Chain B.
+        let b1 = base.insert("b".to_string(), 10u32).unwrap();
+        let b2 = b1.insert("b2".to_string(), 20u32).unwrap();
+
+        // Chain A sees "a" keys, not "b" keys.
+        assert_eq!(a2.get(&"a".to_string()).unwrap(), Some(1u32));
+        assert_eq!(a2.get(&"a2".to_string()).unwrap(), Some(2u32));
+        assert_eq!(a2.get(&"b".to_string()).unwrap(), None);
+
+        // Chain B sees "b" keys, not "a" keys.
+        assert_eq!(b2.get(&"b".to_string()).unwrap(), Some(10u32));
+        assert_eq!(b2.get(&"b2".to_string()).unwrap(), Some(20u32));
+        assert_eq!(b2.get(&"a".to_string()).unwrap(), None);
+
+        // Both see the shared key.
+        assert_eq!(a2.get(&"shared".to_string()).unwrap(), Some(0u32));
+        assert_eq!(b2.get(&"shared".to_string()).unwrap(), Some(0u32));
+    }
+
+    /// Iterator over a large map returns exactly the right entries.
+    #[test]
+    fn iter_over_large_map_is_complete() {
+        let mut map: HamtMap<u64, u64, PodCodec> = HamtMap::new(make_store());
+        let n = 100u64;
+        for i in 0..n {
+            map = map.insert(i, i * 7).unwrap();
+        }
+        let mut pairs: Vec<(u64, u64)> = map.iter().unwrap().map(|r| r.unwrap()).collect();
+        pairs.sort_unstable_by_key(|(k, _)| *k);
+        assert_eq!(pairs.len(), n as usize);
+        for (k, v) in pairs {
+            assert_eq!(v, k * 7, "wrong value for key {k}");
+        }
+    }
+
+    /// Insert exactly LEAF_CAP entries into a single leaf, then one more to
+    /// trigger a split.  All entries must still be retrievable after the split.
+    #[test]
+    fn leaf_cap_boundary_and_split() {
+        use crate::node::LEAF_CAP;
+        let mut map: HamtMap<u64, u64, PodCodec> = HamtMap::new(make_store());
+        // Insert LEAF_CAP entries; these should all fit in one leaf.
+        for i in 0..LEAF_CAP as u64 {
+            map = map.insert(i, i).unwrap();
+        }
+        assert_eq!(map.len(), LEAF_CAP);
+        // Insert one more — triggers leaf split into an internal node.
+        map = map.insert(LEAF_CAP as u64, LEAF_CAP as u64).unwrap();
+        assert_eq!(map.len(), LEAF_CAP + 1);
+        for i in 0..=(LEAF_CAP as u64) {
+            assert_eq!(map.get(&i).unwrap(), Some(i), "missing key {i} after split");
+        }
+    }
+
+    /// Snapshot isolation: cloning a map and then mutating does not affect the
+    /// clone.
+    #[test]
+    fn mutation_does_not_affect_clone() {
+        let map: HamtMap<String, u32> = HamtMap::new(make_store());
+        let m1 = map.insert("k".to_string(), 1u32).unwrap();
+        // Clone, then mutate the original clone.
+        let snap = m1.clone();
+        let m2 = m1.insert("k".to_string(), 99u32).unwrap();
+
+        // snap sees the pre-mutation value.
+        assert_eq!(snap.get(&"k".to_string()).unwrap(), Some(1u32));
+        // m2 sees the updated value.
+        assert_eq!(m2.get(&"k".to_string()).unwrap(), Some(99u32));
+    }
+
+    /// HamtError::BadDiscriminant is reachable only via internal corruption.
+    /// We test the Display / Debug format to ensure the variant compiles correctly.
+    #[test]
+    fn bad_discriminant_error_formats() {
+        let err = HamtError::BadDiscriminant(0xAB);
+        let s = format!("{err}");
+        assert!(
+            s.contains("0xab") || s.contains("0xAB") || s.contains("171"),
+            "unexpected format: {s}"
+        );
+    }
 }

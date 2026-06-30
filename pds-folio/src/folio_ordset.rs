@@ -344,4 +344,75 @@ mod tests {
         pos_first_last(FolioOrdSet::<u32>::new(make_store()));
         pos_range(FolioOrdSet::<u32>::new(make_store()));
     }
+
+    // -----------------------------------------------------------------------
+    // Edge cases
+    // -----------------------------------------------------------------------
+
+    /// Clone then drop the original — the clone must still be readable.
+    #[test]
+    fn clone_and_drop_original_leaves_clone_intact() {
+        let s = empty_set()
+            .insert(1u32)
+            .unwrap()
+            .insert(2u32)
+            .unwrap()
+            .insert(3u32)
+            .unwrap();
+        let snap = s.clone();
+        drop(s);
+        assert_eq!(snap.len(), 3);
+        assert!(snap.contains(&1).unwrap());
+        assert!(snap.contains(&2).unwrap());
+        assert!(snap.contains(&3).unwrap());
+    }
+
+    /// first() and last() on a single-element set both return that element.
+    #[test]
+    fn first_last_single_element() {
+        let s = empty_set().insert(42u32).unwrap();
+        assert_eq!(s.first().unwrap(), Some(42));
+        assert_eq!(s.last().unwrap(), Some(42));
+    }
+
+    /// Inserting a duplicate does not change the set.
+    #[test]
+    fn insert_duplicate_is_noop() {
+        let s = empty_set().insert(7u32).unwrap();
+        let s2 = s.insert(7u32).unwrap();
+        assert_eq!(s2.len(), 1);
+        assert!(s2.contains(&7).unwrap());
+    }
+
+    /// Two independent chains from the same base remain independent.
+    #[test]
+    fn two_chains_from_same_base_are_independent() {
+        let base = empty_set().insert(1u32).unwrap();
+        let a = base.insert(2u32).unwrap();
+        let b = base.insert(100u32).unwrap();
+        assert!(a.contains(&2).unwrap());
+        assert!(!a.contains(&100).unwrap());
+        assert!(b.contains(&100).unwrap());
+        assert!(!b.contains(&2).unwrap());
+        assert!(a.contains(&1).unwrap());
+        assert!(b.contains(&1).unwrap());
+    }
+
+    /// Removing all elements one by one ends with an empty set.
+    #[test]
+    fn remove_all_elements_produces_empty() {
+        let s = empty_set()
+            .insert(1u32)
+            .unwrap()
+            .insert(2u32)
+            .unwrap()
+            .insert(3u32)
+            .unwrap();
+        let s = s.remove(&2).unwrap();
+        let s = s.remove(&1).unwrap();
+        let s = s.remove(&3).unwrap();
+        assert!(s.is_empty());
+        assert_eq!(s.first().unwrap(), None);
+        assert_eq!(s.last().unwrap(), None);
+    }
 }

@@ -1260,4 +1260,95 @@ mod tests {
         }
         assert!(v.is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // Edge cases: snapshot isolation, error paths, push across tail boundary
+    // -----------------------------------------------------------------------
+
+    /// Two independent chains from the same base remain independent.
+    #[test]
+    fn two_chains_from_same_base_are_independent() {
+        let base: FolioVector<u64, PodCodec, MemBackend> = FolioVector::new(make_store());
+        let base = base.push_back(0u64).unwrap();
+
+        let chain_a = base.push_back(1u64).unwrap().push_back(2u64).unwrap();
+        let chain_b = base.push_back(100u64).unwrap().push_back(200u64).unwrap();
+
+        assert_eq!(chain_a.len(), 3);
+        assert_eq!(chain_b.len(), 3);
+        assert_eq!(chain_a.get(1).unwrap(), Some(1u64));
+        assert_eq!(chain_a.get(2).unwrap(), Some(2u64));
+        assert_eq!(chain_b.get(1).unwrap(), Some(100u64));
+        assert_eq!(chain_b.get(2).unwrap(), Some(200u64));
+        // Both share element 0.
+        assert_eq!(chain_a.get(0).unwrap(), Some(0u64));
+        assert_eq!(chain_b.get(0).unwrap(), Some(0u64));
+    }
+
+    /// pop_front on an empty vector returns None.
+    #[test]
+    fn pop_front_empty_vector() {
+        let v: FolioVector<u64, PodCodec, MemBackend> = FolioVector::new(make_store());
+        let (v2, elem) = v.pop_front().unwrap();
+        assert_eq!(elem, None);
+        assert!(v2.is_empty());
+    }
+
+    /// VectorError::OutOfBounds is produced when get_at_node is called
+    /// with an out-of-range position; we exercise the Display format.
+    #[test]
+    fn out_of_bounds_error_formats() {
+        let err = VectorError::OutOfBounds(5, 3);
+        let s = format!("{err}");
+        assert!(
+            s.contains("5") && (s.contains("3") || s.contains("out")),
+            "unexpected format: {s}"
+        );
+    }
+
+    /// VectorError::BadDiscriminant is a valid variant — check Display.
+    #[test]
+    fn bad_discriminant_error_formats() {
+        let err = VectorError::BadDiscriminant(0xFF);
+        let s = format!("{err}");
+        assert!(
+            s.contains("0xff") || s.contains("255") || s.contains("FF"),
+            "unexpected format: {s}"
+        );
+    }
+
+    /// Push exactly BRANCHING_FACTOR elements (fill a single leaf), then one
+    /// more to trigger tree growth.
+    #[test]
+    fn push_back_exactly_at_branching_factor_then_split() {
+        let mut v: FolioVector<u32, PostcardCodec, MemBackend> = FolioVector::new(make_store());
+        for i in 0..BRANCHING_FACTOR {
+            v = v.push_back(i as u32).unwrap();
+        }
+        assert_eq!(v.len(), BRANCHING_FACTOR);
+        assert_eq!(v.depth, 1); // single leaf
+                                // One more triggers tree growth.
+        v = v.push_back(BRANCHING_FACTOR as u32).unwrap();
+        assert_eq!(v.len(), BRANCHING_FACTOR + 1);
+        assert!(v.depth >= 2); // now has an internal node
+        for i in 0..=BRANCHING_FACTOR {
+            assert_eq!(v.get(i).unwrap(), Some(i as u32), "mismatch at {i}");
+        }
+    }
+
+    /// Cloning and dropping do not corrupt the clone.
+    #[test]
+    fn clone_then_drop_original_leaves_clone_intact() {
+        let mut v: FolioVector<u64, PodCodec, MemBackend> = FolioVector::new(make_store());
+        for i in 0..10u64 {
+            v = v.push_back(i).unwrap();
+        }
+        let snap = v.clone();
+        drop(v);
+        // snap must still be readable.
+        assert_eq!(snap.len(), 10);
+        for i in 0..10u64 {
+            assert_eq!(snap.get(i as usize).unwrap(), Some(i));
+        }
+    }
 }
