@@ -23,6 +23,7 @@ Two durability modes: `Strict` (zero data loss, fsync per mutation) and `Relaxed
   - [D.7 — Additional collection types](#d7--additional-collection-types)
   - [D.8 — Benchmarks](#d8--benchmarks)
   - [D.9 — `TieredMap`: heap cache + folio backing store](#d9--tieredmap-heap-cache--folio-backing-store)
+  - [D.10 — `TierPolicy` trait + `Pipelined` 3-tier preset](#d10--tierpolicy-trait--pipelined-3-tier-preset)
 
 ---
 
@@ -34,7 +35,12 @@ Two durability modes: `Strict` (zero data loss, fsync per mutation) and `Relaxed
   updated with `pds-merkle-spine` + `folio-core` optional deps under `tiered` feature;
   `lib.rs` exports `TieredMap`, `TieredConfig`, `VersionId`; 22 unit tests (Strict + Relaxed),
   all passing; criterion benchmarks added (6 tiered scenarios, gated on `tiered` feature);
-  `cargo fmt` clean; `cargo clippy -D warnings` clean.
+  `cargo fmt` clean; `cargo clippy -D warnings` clean; benchmark results recorded in
+  `docs/baselines.md` (2026-07-01 baseline).
+  - Benchmark highlights (N=1 000, macOS tmpfs, M5 Max): `tiered_strict_insert` 9.94 ms;
+    `tiered_relaxed_insert` 7.73 ms; `tiered_relaxed_flush` (100 entries) 8.09 ms;
+    `tiered_get_warm` (500 reads) 25.27 µs; `tiered_get_cold` (10 reads) 505 ns;
+    `tiered_eviction` (max_front=100, N=1 000) 8.79 ms.
   - Key design note: `VersionedHamt::insert/remove` are immutable (return new `Self`) so
     `back` is reassigned on each mutation; `get` returns `Option<&V>` from front only —
     cold lookups via `get_or_fetch(&mut self)` which re-warms front.
@@ -454,6 +460,8 @@ Benchmark on `MemBackend` first; add real-disk numbers in a separate run.
 
 ### D.9 — `TieredMap`: heap cache + merkle-spine backing store
 
+**DONE** — see Done section above.
+
 Replaces the flat WAL with `pds-merkle-spine` (which wraps `pds-folio`) as the
 durable backing store. The heap collection becomes an L1 write-back cache;
 merkle-spine is the crash-safe, versioned L2 store. Each `flush()` produces a
@@ -604,6 +612,190 @@ support `insert`, `remove`, `get`, and expose `VersionId` (all present as of H.9
 - Eviction test: `front.len()` never exceeds `max_front_entries + 1`
 - Cold-get test: evicted key recovered correctly from `back`
 - Results recorded in `docs/baselines.md`
+
+---
+
+### D.10 — `TierPolicy` trait + `Pipelined` 3-tier preset
+
+Introduces a sealed `TierPolicy` marker trait so the storage tier of `TieredMap`
+is a swappable type parameter with no runtime overhead (statically dispatched).
+Adds two new presets — `MemOnly` and `Pipelined` — alongside the existing
+`Relaxed`/`Strict` presets (renamed to `WriteBack`/`Durable` for clarity).
+The `Pipelined` preset is the 3-tier pipeline: transient → heap → merkle-spine.
+
+**Prerequisite:** D.9 complete.
+
+#### Sealed `TierPolicy` trait (`src/policy.rs`)
+
+```rust
+mod sealed { pub trait Sealed {} }
+
+/// Marker trait for `TieredMap` storage presets.
+/// Implemented only by the four preset types in this module.
+pub trait TierPolicy: sealed::Sealed {}
+
+/// Tier 0 only — `pds` transient in-place HashMap, no disk backing.
+/// Fastest possible mutations; no durability.
+pub struct MemOnly;
+
+/// Tier 1 + Tier 2 — heap `pds::HashMap` with merkle-spine write-behind.
+/// Same as D.9 `Relaxed`. Mutations are heap-speed; `flush()` persists.
+pub struct WriteBack;
+
+/// Tier 0 + Tier 1 + Tier 2 — transient buffer → heap snapshot → merkle-spine.
+/// `commit()` freezes the transient into the heap (O(1)).
+/// `flush()` pushes dirty heap entries to merkle-spine (write-behind).
+pub struct Pipelined;
+
+/// Write-through — every mutation goes directly to merkle-spine.
+/// Same as D.9 `Strict`. Zero data loss; slower mutation.
+pub struct Durable;
+
+impl sealed::Sealed for MemOnly {}
+impl sealed::Sealed for WriteBack {}
+impl sealed::Sealed for Pipelined {}
+impl sealed::Sealed for Durable {}
+
+impl TierPolicy for MemOnly {}
+impl TierPolicy for WriteBack {}
+impl TierPolicy for Pipelined {}
+impl TierPolicy for Durable {}
+```
+
+Rename existing `TieredMap<K,V,Strict>` → `TieredMap<K,V,Durable>` and
+`TieredMap<K,V,Relaxed>` → `TieredMap<K,V,WriteBack>` for consistency.
+`Strict` and `Relaxed` remain as type aliases pointing to `Durable` and
+`WriteBack` for backward compatibility within the crate (no public release yet).
+
+#### `TieredMap<K, V, MemOnly>`
+
+Struct holds only a `pds::TransientHashMap<K, V>`. No `back` field.
+
+```rust
+impl<K, V> TieredMap<K, V, MemOnly> {
+    pub fn new() -> Self
+    pub fn insert(&mut self, k: K, v: V) -> Option<V>   // O(log N) in-place
+    pub fn remove(&mut self, k: &K) -> Option<V>
+    pub fn get(&self, k: &K) -> Option<&V>
+    pub fn contains_key(&self, k: &K) -> bool
+    pub fn len(&self) -> usize
+    pub fn is_empty(&self) -> bool
+    /// Freezes the transient into a persistent `pds::HashMap`. O(1).
+    pub fn into_persistent(self) -> pds::HashMap<K, V>
+}
+```
+
+No `path` argument — `MemOnly` has no disk backing. The fastest storage preset.
+
+#### `TieredMap<K, V, Pipelined>` — 3-tier pipeline
+
+```rust
+struct TieredMap<K, V, Pipelined> {
+    t0: pds::TransientHashMap<K, V>,   // mutable write buffer
+    t1: pds::HashMap<K, V>,            // last committed snapshot
+    t2: VersionedHamt<K, V>,           // durable replica (merkle-spine)
+    dirty: HashSet<K>,                 // keys mutated since last flush()
+    config: TieredConfig,
+}
+```
+
+**Mutations** go to `t0` only (in-place, O(log N), zero structural sharing overhead).
+
+**`commit()`** — freezes t0 into t1:
+1. `self.t1 = mem::replace(&mut self.t0, TransientHashMap::new()).into_persistent()`
+   — O(1); produces a new persistent snapshot; t0 becomes a fresh empty transient.
+2. All keys that were in the old t0 are now dirty w.r.t. t2 — they are already in
+   `self.dirty` (tracked on every `insert`/`remove`).
+
+**`flush()`** — pushes dirty entries from t1 to t2:
+1. For each key in `dirty`: look up in `t1`; if present → `t2 = t2.insert(k, v)`;
+   if absent → `t2 = t2.remove(k)`.
+2. Clear `dirty`. Return the new `VersionId`.
+
+**`get`** — waterfall: t0 → t1 → t2 (fallthrough). Keys written to t0 but not
+yet committed are visible in t0. Keys committed to t1 but not yet flushed are
+visible in t1. Evicted or pre-open keys are in t2.
+
+**Auto-commit / auto-flush** via `TieredConfig`:
+
+```rust
+pub struct TieredConfig {
+    pub max_front_entries: usize,   // evict from t0 via commit() when exceeded (0 = unlimited)
+    pub commit_every: usize,        // auto-commit every N mutations (0 = manual)
+    pub flush_every: usize,         // auto-flush every N commits (0 = manual)
+    pub max_versions: usize,        // retain N historical versions in t2 (0 = all)
+}
+```
+
+**Data loss windows:**
+- Mutations in t0 not yet committed → lost on crash
+- Committed entries in t1 not yet flushed → lost on crash
+- t2 (VersionedHamt) is always crash-safe
+
+**Recovery on `open()`:**
+- Open t2 (VersionedHamt) from disk at its latest version
+- t1 = empty persistent HashMap (warm lazily from t2 on access)
+- t0 = fresh empty transient
+
+```rust
+impl<K, V> TieredMap<K, V, Pipelined>
+where K: Clone + Hash + Eq + Serialize + DeserializeOwned,
+      V: Clone + Hash + Serialize + DeserializeOwned,
+{
+    pub fn open(path: &Path, config: TieredConfig) -> Result<Self, DurableError>
+    pub fn insert(&mut self, k: K, v: V) -> Option<V>
+    pub fn remove(&mut self, k: &K) -> Option<V>
+    pub fn get(&self, k: &K) -> Option<&V>
+    pub fn contains_key(&self, k: &K) -> bool
+    pub fn len(&self) -> usize
+    pub fn is_empty(&self) -> bool
+    /// Freezes t0 into t1. O(1). Does NOT flush to disk.
+    pub fn commit(&mut self)
+    /// Pushes dirty t1 entries to t2 (new version). Returns the VersionId.
+    pub fn flush(&mut self) -> Result<VersionId, DurableError>
+    /// commit() + flush() in one call.
+    pub fn commit_and_flush(&mut self) -> Result<VersionId, DurableError>
+    pub fn pending_commit(&self) -> usize   // mutations in t0 since last commit
+    pub fn pending_flush(&self) -> usize    // dirty.len()
+    pub fn latest_version(&self) -> Option<VersionId>
+    pub fn t0(&self) -> &pds::TransientHashMap<K, V>
+    pub fn t1(&self) -> &pds::HashMap<K, V>
+}
+```
+
+#### Tests (`tests/pipelined.rs`, feature-gated on `tiered`)
+
+- `MemOnly`: insert N, `into_persistent()` contains all keys
+- `Pipelined`: insert N → crash → re-open: empty (t0 never committed)
+- `Pipelined`: insert N → `commit()` → crash → re-open: empty (t1 never flushed)
+- `Pipelined`: insert N → `commit()` → `flush()` → crash → re-open: N keys in t2
+- `Pipelined`: `commit_and_flush()` round-trip proptest (N random ops)
+- `Pipelined`: `get` waterfall — key in t0 / t1 / t2 only, correct value returned
+- `Pipelined`: auto-commit (`commit_every = 10`) fires at 10, 20, 30 mutations
+- `Pipelined`: `latest_version()` advances on each `flush()`
+- `WriteBack` renamed to `WriteBack` (was `Relaxed`) — existing tests renamed, behaviour unchanged
+- `Durable` renamed (was `Strict`) — existing tests renamed, behaviour unchanged
+
+#### Benchmarks (add to `benches/bench.rs`, `tiered` feature)
+
+| Name | What it measures |
+|------|-----------------|
+| `pipelined_insert` | t0 in-place insert — should be fastest of all presets |
+| `pipelined_commit` | `commit()` — O(1) transient → persistent |
+| `pipelined_flush` | 100 commits + `flush()` — dirty entries → t2 |
+| `mem_only_insert` | `MemOnly` insert — baseline for t0 speed |
+| `policy_comparison` | Insert N=1000 across all 4 presets side by side |
+
+Expected: `MemOnly` ≈ `Pipelined` insert (both hit only t0/transient). Both should
+outperform `WriteBack` insert (which hits persistent heap pds::HashMap).
+
+**Acceptance:**
+- `cargo test -p pds-durable --features tiered` green (all presets)
+- `pipelined_insert` faster than `tiered_relaxed_insert` from D.9 baseline
+- `pipelined_commit` < 1 µs (O(1) operation)
+- All 4 presets produce correct values on re-open after crash simulation
+- Results appended to `docs/baselines.md`
+- `TierPolicy` is sealed (compile error if user tries to implement it externally)
 
 ---
 
