@@ -37,3 +37,4 @@
 pub mod codec;
 pub mod hamt;
 pub mod node;
+pub mod set;

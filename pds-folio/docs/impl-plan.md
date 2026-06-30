@@ -19,6 +19,21 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-06-30] G.4 — `HamtSet` wrapper.**
+  `src/set.rs`: `HamtSet<A, C, B>` as a thin newtype over `HamtMap<A, (), C, B>`.
+
+  Public API: `new`, `len`, `is_empty`, `contains`, `insert`, `remove`, `iter`,
+  `union`, `intersection`, `difference`, `symmetric_difference`.
+
+  `HamtMapIter<'a, K, V, C, B>` added to `src/hamt.rs`: iterative DFS tree traversal
+  with explicit work-stack and per-leaf entry buffer; acquires the store lock once per
+  leaf page.  `HamtMap::iter()` returns a `HamtMapIter`.
+
+  `Clone`/`Drop` semantics for `HamtSet` inherited from the inner `HamtMap`.
+
+  14 unit tests + 1 doc-test, all green.  Full workspace `test.sh` passes (51 lib +
+  7 doc tests).
+
 - **[2026-06-30] G.3 — Reference counting and `Drop`.**
   `NodeStore<B>` gains a `refcounts: HashMap<u64, u32>` field tracking structural
   sharing across `HamtMap` snapshots.  Absent from the table = implicit refcount 1

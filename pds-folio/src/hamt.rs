@@ -812,6 +812,40 @@ where
     }
 
     // -----------------------------------------------------------------------
+    // Iteration (G.4+)
+    // -----------------------------------------------------------------------
+
+    /// Returns an iterator over all `(K, V)` pairs in arbitrary order.
+    ///
+    /// The iterator reads pages lazily from the folio store.  Individual
+    /// elements are returned as `Result<(K, V), HamtError>` to propagate
+    /// any I/O or codec errors encountered during traversal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HamtError`] if the initial root page read fails.
+    ///
+    /// Time: O(N) total to iterate all entries.
+    pub fn iter(&self) -> Result<HamtMapIter<'_, K, V, C, B>, HamtError> {
+        let store = self.node_store.lock().expect("mutex not poisoned");
+        // Pre-load the initial work stack: start with the root if present.
+        let work_stack: Vec<u64> = match self.root {
+            None => Vec::new(),
+            Some(root_id) => vec![root_id],
+        };
+        // Release the lock — the iterator will re-acquire it per page.
+        drop(store);
+        Ok(HamtMapIter {
+            node_store: Arc::clone(&self.node_store),
+            // work_stack holds page IDs of internal nodes yet to be expanded.
+            work_stack,
+            // pending_entries holds decoded entries from the current leaf.
+            pending_entries: Vec::new(),
+            _marker: std::marker::PhantomData,
+        })
+    }
+
+    // -----------------------------------------------------------------------
     // Reference counting helpers (G.3)
     // -----------------------------------------------------------------------
 
@@ -914,6 +948,104 @@ where
 
         if !to_free.is_empty() {
             let _ = store.free_nodes(&to_free);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HamtMapIter — lazy tree traversal
+// ---------------------------------------------------------------------------
+
+/// An iterator over `(K, V)` pairs in a [`HamtMap`].
+///
+/// Traverses the HAMT in an iterative depth-first order using an explicit
+/// work-stack.  Leaf entries are buffered in `pending_entries` so that the
+/// folio lock is acquired only once per leaf page.
+pub struct HamtMapIter<'a, K, V, C, B>
+where
+    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
+    V: Serialize + for<'de> Deserialize<'de> + Clone,
+    C: Codec,
+    B: Backend<Error = BackendError>,
+{
+    /// Shared reference to the node store.
+    node_store: Arc<Mutex<NodeStore<B>>>,
+    /// Page IDs yet to be processed (DFS stack — internal nodes pushed last).
+    work_stack: Vec<u64>,
+    /// Decoded entries from the most recently visited leaf, in reverse order
+    /// (so `pop` gives the next entry).
+    pending_entries: Vec<(K, V)>,
+    /// Phantom lifetime and type markers.
+    _marker: std::marker::PhantomData<(&'a (), C)>,
+}
+
+impl<K, V, C, B> std::fmt::Debug for HamtMapIter<'_, K, V, C, B>
+where
+    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone + std::fmt::Debug,
+    V: Serialize + for<'de> Deserialize<'de> + Clone + std::fmt::Debug,
+    C: Codec,
+    B: Backend<Error = BackendError>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HamtMapIter")
+            .field("work_stack_len", &self.work_stack.len())
+            .field("pending_entries_len", &self.pending_entries.len())
+            .finish()
+    }
+}
+
+impl<K, V, C, B> Iterator for HamtMapIter<'_, K, V, C, B>
+where
+    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
+    V: Serialize + for<'de> Deserialize<'de> + Clone,
+    C: Codec,
+    B: Backend<Error = BackendError>,
+{
+    type Item = Result<(K, V), HamtError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // Return a buffered entry if one is available.
+            if let Some(entry) = self.pending_entries.pop() {
+                return Some(Ok(entry));
+            }
+
+            // Pop the next page from the work stack.
+            let page_id = self.work_stack.pop()?;
+
+            let store = self.node_store.lock().expect("mutex not poisoned");
+            let page = match store.read_node(page_id) {
+                Ok(p) => p,
+                Err(e) => return Some(Err(e)),
+            };
+            drop(store); // Release the lock before decoding entries.
+
+            match page.0[0] {
+                DISCRIMINANT_LEAF => {
+                    let reader = LeafReader::new(&page);
+                    let count = reader.count();
+                    // Decode all entries into `pending_entries` (reversed so pop gives index 0).
+                    for i in (0..count).rev() {
+                        match reader.get_entry::<K, V, C>(i) {
+                            Ok(kv) => self.pending_entries.push(kv),
+                            Err(e) => return Some(Err(HamtError::Codec(e))),
+                        }
+                    }
+                    // Loop back to return the first buffered entry.
+                }
+                DISCRIMINANT_INTERNAL => {
+                    let reader = InternalReader::new(&page);
+                    let child_count = reader.child_count();
+                    // Push children onto the work stack (left-to-right, so first child
+                    // is processed first via LIFO).
+                    for i in (0..child_count).rev() {
+                        self.work_stack.push(reader.child_page_id(i));
+                    }
+                }
+                d => {
+                    return Some(Err(HamtError::BadDiscriminant(d)));
+                }
+            }
         }
     }
 }
