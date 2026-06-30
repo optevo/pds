@@ -440,30 +440,39 @@ Benchmark on `MemBackend` first; add real-disk numbers in a separate run.
 
 ---
 
-### D.9 — `TieredMap`: heap cache + folio backing store
+### D.9 — `TieredMap`: heap cache + merkle-spine backing store
 
-Replaces the flat WAL with `pds-folio` as the durable backing store. The heap
-collection becomes an L1 write-back cache; folio is the crash-safe L2 store.
-Unlocks bigger-than-RAM datasets and eliminates the WAL compaction step.
+Replaces the flat WAL with `pds-merkle-spine` (which wraps `pds-folio`) as the
+durable backing store. The heap collection becomes an L1 write-back cache;
+merkle-spine is the crash-safe, versioned L2 store. Each `flush()` produces a
+new version with a Merkle root — a complete audit trail of heap state over time.
+
+Using merkle-spine as the default (rather than bare folio) adds versioning for
+free: folio is already the storage layer underneath, and the HAMT structural
+sharing means versioned snapshots cost nothing extra.
 
 #### Architecture
 
 ```
-TieredMap<K, V, Mode>
-  ├── front: pds::HashMap<K, V>             — hot tier; RAM-bounded cache
-  ├── dirty: HashSet<K>                     — tracks front entries not yet in back
-  └── back:  pds_folio::FolioHashMap<K, V> — cold tier; mmap-paged, crash-safe, unbounded
+TieredMap<K, V, Mode>   (default backend: VersionedHamt from pds-merkle-spine)
+  ├── front: pds::HashMap<K, V>                     — hot tier; RAM-bounded cache
+  ├── dirty: HashSet<K>                             — entries not yet flushed to back
+  ├── eviction_queue: VecDeque<K>                   — approximate LRU order
+  └── back:  pds_merkle_spine::VersionedHamt<K, V>  — cold tier; versioned, crash-safe, unbounded
 ```
 
-pds-folio already has its own internal WAL + CoW backend. Recovery is O(1): just
-open the folio file and warm the front cache lazily. No replay step.
+Recovery is O(1): open the VersionedHamt at the latest version; front starts
+empty and warms lazily on access. No replay step needed.
+
+Each `flush()` in Relaxed mode (or each mutation in Strict mode) creates a new
+`VersionId` in the backing VersionedHamt. Historical versions remain queryable.
 
 #### Mode semantics
 
-| Mode | Write sequence | Recovery |
-|------|---------------|----------|
-| `Strict` | Write to `back` (folio, crash-safe) then `front` | Open folio; front empty, warm on demand |
-| `Relaxed` | Write to `front` only; `flush()` pushes dirty entries to `back` | Open folio; state = last flush |
+| Mode | Write sequence | Recovery | Versioning |
+|------|---------------|----------|------------|
+| `Strict` | Write to `back` (new version per mutation) then `front` | Latest version → open; front warms on demand | One version per mutation |
+| `Relaxed` | Write to `front` only; `flush()` pushes dirty entries to `back` as one new version | Latest version → open; state = last flush | One version per flush |
 
 #### `TieredConfig`
 
@@ -473,6 +482,14 @@ pub struct TieredConfig {
     pub max_front_entries: usize,
     /// Auto-flush in Relaxed mode every N mutations (0 = manual only).
     pub flush_every: usize,
+    /// Retain this many historical versions in the backing store (0 = all).
+    pub max_versions: usize,
+}
+
+impl Default for TieredConfig {
+    fn default() -> Self {
+        Self { max_front_entries: 0, flush_every: 0, max_versions: 0 }
+    }
 }
 ```
 
@@ -480,81 +497,93 @@ pub struct TieredConfig {
 
 ```rust
 impl<K, V> TieredMap<K, V, Strict> {
+    /// Opens or creates the TieredMap at `path`. Front starts empty; back opens
+    /// the VersionedHamt at its latest version.
     pub fn open(path: &Path, config: TieredConfig) -> Result<Self, DurableError>
+    /// Writes to back (new version) then front. Durable on return.
     pub fn insert(&mut self, k: K, v: V) -> Result<Option<V>, DurableError>
     pub fn remove(&mut self, k: &K) -> Result<Option<V>, DurableError>
-    pub fn get(&self, k: &K) -> Option<&V>          // front first, then back
-    pub fn contains_key(&self, k: &K) -> bool
-    pub fn len(&self) -> usize                       // front.len() + back entries not in front
-    pub fn is_empty(&self) -> bool
-    pub fn front(&self) -> &pds::HashMap<K, V>
-}
-
-impl<K, V> TieredMap<K, V, Relaxed> {
-    pub fn open(path: &Path, config: TieredConfig) -> Result<Self, DurableError>
-    pub fn insert(&mut self, k: K, v: V) -> Option<V>
-    pub fn remove(&mut self, k: &K) -> Option<V>
-    pub fn flush(&mut self) -> Result<(), DurableError>  // push dirty → back
-    pub fn pending_count(&self) -> usize                 // dirty.len()
+    /// Front first; falls through to back on miss.
     pub fn get(&self, k: &K) -> Option<&V>
     pub fn contains_key(&self, k: &K) -> bool
     pub fn len(&self) -> usize
     pub fn is_empty(&self) -> bool
     pub fn front(&self) -> &pds::HashMap<K, V>
+    /// Returns the VersionId of the latest committed version in the back store.
+    pub fn latest_version(&self) -> Option<VersionId>
+}
+
+impl<K, V> TieredMap<K, V, Relaxed> {
+    pub fn open(path: &Path, config: TieredConfig) -> Result<Self, DurableError>
+    /// Writes to front only. Not yet durable; call flush() to persist.
+    pub fn insert(&mut self, k: K, v: V) -> Option<V>
+    pub fn remove(&mut self, k: &K) -> Option<V>
+    /// Pushes all dirty entries to back as a single new version. Returns the
+    /// new VersionId.
+    pub fn flush(&mut self) -> Result<VersionId, DurableError>
+    pub fn pending_count(&self) -> usize   // dirty.len()
+    pub fn get(&self, k: &K) -> Option<&V>
+    pub fn contains_key(&self, k: &K) -> bool
+    pub fn len(&self) -> usize
+    pub fn is_empty(&self) -> bool
+    pub fn front(&self) -> &pds::HashMap<K, V>
+    pub fn latest_version(&self) -> Option<VersionId>
 }
 ```
+
+#### Flush produces a version
+
+In Relaxed mode, `flush()` batches all dirty entries into the VersionedHamt as a
+single version. The returned `VersionId` contains the Merkle root over the full
+collection state at that point — usable for auditing, inclusion proofs, or
+point-in-time reads via `back.root_hash_at(version_id)`.
+
+In Strict mode, each mutation creates its own version. Version history is an
+append-only log of every individual change.
 
 #### LRU eviction (when `max_front_entries > 0`)
 
-Track a generation counter per entry in `front` (or use an approximate LRU via
-insertion order). When `front.len() > max_front_entries` after an insert:
-1. Select the oldest / coldest entry.
-2. If dirty, write it to `back`.
+When `front.len() > max_front_entries` after an insert:
+1. Pop the head of `eviction_queue` (oldest key).
+2. If the key is in `dirty`, write it to `back` immediately (a single-entry version).
 3. Remove from `front` and `dirty`.
-Future reads that miss `front` fall through to `back` and re-warm lazily.
 
-Approximate LRU is acceptable: use a `VecDeque<K>` as an eviction queue; push
-newly inserted keys to the back; pop from the front when over capacity.
+Future reads that miss `front` fall through to `back` at its latest version.
+Not automatically re-warmed (avoids cache thrashing on sequential scans).
 
-#### `get` fallthrough
-
-```rust
-pub fn get(&self, k: &K) -> Option<&V> {
-    self.front.get(k).or_else(|| self.back.get(k))
-}
-```
-
-Entries returned from `back` are NOT automatically re-warmed into `front` (avoid
-cache thrashing on sequential scans). Callers that need warm access can call
-`warm(k)` explicitly if added later.
+Approximate LRU via `VecDeque<K>` is sufficient — push inserted keys to the back,
+pop from the front when over capacity.
 
 #### Cargo.toml addition
 
 ```toml
 [dependencies]
-pds-folio = { path = "../pds-folio", optional = true }
+pds-merkle-spine = { path = "../pds-merkle-spine", optional = true }
 
 [features]
-tiered = ["dep:pds-folio"]
+tiered = ["dep:pds-merkle-spine"]
 ```
 
-`TieredMap` is only compiled when the `tiered` feature is enabled.
+`TieredMap` is only compiled when the `tiered` feature is enabled. pds-merkle-spine
+already depends on pds-folio; no need to list pds-folio separately.
 
 #### Benchmarks (add to `benches/bench.rs`)
 
 | Name | What it measures |
 |------|-----------------|
-| `tiered_strict_insert` | Strict insert: folio write + front write |
-| `tiered_relaxed_insert` | Relaxed insert: front write only (no folio touch) |
-| `tiered_relaxed_flush` | 100 inserts + flush to folio |
+| `tiered_strict_insert` | Strict insert: back version per mutation + front write |
+| `tiered_relaxed_insert` | Relaxed insert: front write only — zero back involvement |
+| `tiered_relaxed_flush` | 100 inserts + one flush (one new version) |
 | `tiered_get_warm` | Get for a front-cached key |
-| `tiered_get_cold` | Get for an evicted key (folio read) |
-| `tiered_eviction` | Insert beyond `max_front_entries`; eviction path |
+| `tiered_get_cold` | Get for an evicted key (back read at latest version) |
+| `tiered_eviction` | Insert beyond `max_front_entries`; eviction + dirty-flush path |
 
-Compare all against `durable_map_relaxed_insert` and `heap_reference` from D.8.
+Compare `tiered_relaxed_insert` against `heap_reference` — the difference should
+be near zero (both write only to the in-memory HAMT). Compare `tiered_relaxed_flush`
+against `durable_map_relaxed_insert_flush` from D.8.
 
-**Prerequisite:** D.1–D.8 complete. pds-folio must expose `FolioHashMap<K,V>`
-with `Serialize + Deserialize` bounds (already planned in pds-folio's impl-plan).
+**Prerequisite:** D.1–D.8 complete. pds-merkle-spine `VersionedHamt<K,V>` must
+support `insert`, `remove`, `get`, and expose `VersionId` (all present as of H.9).
 
 **Acceptance:**
 - `cargo test -p pds-durable --features tiered` green
@@ -614,19 +643,32 @@ Per-mutation overhead in Relaxed mode is identical to a bare `pds::HashMap` — 
 fsync, no page writes. The durability cost is paid at flush boundaries and amortised
 across all mutations since the last flush. Data loss window = mutations since last flush.
 
-### Why folio as the backing store, not a second WAL?
+### Why merkle-spine as the default backing store (not bare folio)?
 
-pds-folio already provides: crash-safe WAL + CoW page writes, mmap-backed page
-cache (OS-managed eviction), O(log N) inserts and lookups, and structural sharing.
-Writing a second flat WAL would duplicate that work while losing the bigger-than-RAM
-property. The folio backing store is the durable layer; the heap front is a cache.
+merkle-spine wraps folio and adds versioning + Merkle roots at essentially zero
+marginal cost — HAMT structural sharing means each new version shares almost all
+nodes with the previous one. Using merkle-spine as the default means every
+`flush()` or Strict mutation produces a `VersionId` with a Merkle root,
+giving a full audit trail and enabling inclusion proofs with no extra work.
 
-### Why keep `DurableMap` (WAL) alongside `TieredMap` (folio)?
+A bare-folio variant (`TieredMap<K,V,Mode,FolioBackend>`) could be added later
+if the VersionedHamt overhead is measurable — but benchmark first.
 
-For datasets that always fit in RAM, `DurableMap` with a flat WAL has lower
-per-mutation overhead (sequential append vs. folio page write). `TieredMap` is the
-right choice when data may exceed RAM or when built-in versioning (via merkle-spine
-in a future variant) is needed. Both are useful; neither supersedes the other.
+### Why `TieredMap` is not a WAL at all
+
+The flat WAL in `DurableMap` is a log of deltas: Insert(k,v), Remove(k), etc.
+`TieredMap`'s backing store is a full persistent replica of the heap collection,
+updated in write-behind fashion. Each flush writes the current dirty state as a
+new HAMT version. Recovery opens the latest version directly — no replay needed.
+This is cleaner, faster to recover, and adds history for free.
+
+### Why keep `DurableMap` (WAL) alongside `TieredMap` (merkle-spine)?
+
+For small datasets that always fit in RAM, `DurableMap` with a flat WAL has lower
+per-mutation overhead in Strict mode (sequential append + fsync vs. HAMT page
+writes). `TieredMap` is the right choice when data may exceed RAM, when versioned
+history is useful, or when the write-behind Relaxed mode is the primary path.
+Both are useful; neither supersedes the other.
 
 ### Approximate vs exact LRU
 
@@ -641,8 +683,9 @@ enough to LRU for the expected access patterns.
 ## Dependency map
 
 ```
-pds (heap collections) ←── pds-durable (WAL wrapper, D.1–D.8)
-pds-folio             ←──┘ (tiered backend, D.9, feature-gated)
+pds (heap collections)  ←── pds-durable (WAL wrapper, D.1–D.8)
+pds-folio               ←┐
+pds-merkle-spine        ←─┴─ pds-durable (tiered backend, D.9, feature = "tiered")
      ↑
-  neither may depend on pds-durable
+  none of the above may depend on pds-durable
 ```
