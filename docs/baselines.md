@@ -21,6 +21,10 @@ regressions or improvements. Compare against these numbers.
 - [Trie set operations — ptr_eq fast-path overhead](#trie-set-ops)
 - [Memory profiling (dhat)](#memory-profiling-dhat)
 - [How to re-run](#how-to-re-run)
+- [pds-folio — Folio-backed persistent collections](#pds-folio--folio-backed-persistent-collections)
+- [pds-folio — post-optimisation results](#pds-folio--post-optimisation-results)
+- [pds-merkle-spine — VersionedHamt benchmarks](#pds-merkle-spine--versioned-hamt-benchmarks)
+- [pds-folio — Collection comparison](#pds-folio--collection-comparison)
 
 ---
 
@@ -709,3 +713,122 @@ collapse from O(k)+O(k') to O(log n)+O(log n').
 deferred but not eliminated). All other patterns are dramatically faster. If `len()` is
 never called (common for iteration-only or contains-only workloads), the O(k) scan is
 never paid at all.
+
+---
+
+## pds-merkle-spine — VersionedHamt benchmarks {#sec:versioned-hamt}
+
+**Date:** 2026-07-01
+**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
+**Backend:** MemBackend (in-memory, no disk I/O)
+**Codec:** PostcardCodec
+**Keys/values:** u64 → u64, sequential
+**Bench command:** `direnv exec . cargo bench -p pds-merkle-spine 2>&1 | tee /private/tmp/bench_versioned_hamt_<ts>.txt`
+**Notes:** All median times from criterion. `insert` builds the map from scratch inside
+the timing loop, including Merkle root recomputation (full O(N) BLAKE3 hash pass) on
+every mutation. `get_current` and `get_at_version` build once outside the loop. `checkout`
+and `clone` are both O(1) refcount operations. `prove_inclusion` acquires the Mutex,
+clones the snapshot (O(1)), and hashes the key and value bytes.
+
+### Benchmark results
+
+| Benchmark | n=10 | n=100 | n=1 000 |
+|-----------|-----:|------:|--------:|
+| `versioned_hamt_insert` (build from empty) | 52.5 µs | 1.57 ms | 119.4 ms |
+| `versioned_hamt_get_current` (get, current version) | 239 ns | 465 ns | 692 ns |
+| `versioned_hamt_get_at_version` (get, mid-history) | 250 ns | 488 ns | 825 ns |
+| `versioned_hamt_checkout` (restore snapshot, O(1)) | 50.0 ns | 57.8 ns | 175.1 ns |
+| `versioned_hamt_prove` (Merkle inclusion proof) | 402 ns | 653 ns | 1.10 µs |
+| `versioned_hamt_clone` (O(1) structural share) | 40.6 ns | 40.6 ns | 40.7 ns |
+
+### Key observations
+
+- **Insert is dominated by Merkle root recomputation.** Each `insert` iterates all
+  N entries to compute the BLAKE3 root hash — O(N) per mutation, giving O(N²) total
+  for an N-insert build. At n=1 000 this costs 119 ms vs 7.4 ms for a plain `HamtMap`
+  insert benchmark (pds-folio post-optimisation baseline), a ~16× overhead from the
+  Merkle pass.
+- **Get is slightly slower than plain HamtMap** due to the additional Mutex acquire
+  for `get_at_version`. At n=1 000: `get_current` costs 692 ns vs 749 ns for HamtMap
+  (within noise); `get_at_version` costs 825 ns (the extra ~133 ns is Mutex + history
+  lookup).
+- **Checkout is O(1) regardless of history depth.** The 50–175 ns range is dominated
+  by Mutex acquisition and Arc clone, not by any data traversal.
+- **Clone is O(1) at 40 ns for all sizes** — pure refcount increment, no data copied.
+- **Prove is O(log N)** for the key lookup, plus two BLAKE3 hash calls. The growth from
+  402 ns to 1.10 µs across 10×–1000× entries matches the expected HAMT depth increase.
+
+### Overhead vs pds-folio HamtMap (n=1 000)
+
+| Operation | pds-folio HamtMap | VersionedHamt | Overhead |
+|-----------|------------------:|--------------:|---------:|
+| insert (build from empty) | 7.4 ms | 119.4 ms | **~16×** (Merkle O(N²) build cost) |
+| get (current) | 749 ns | 692 ns | ≈0% (within noise) |
+| clone (O(1) snapshot) | 42 ns | 40.7 ns | ≈0% (within noise) |
+
+The insert overhead is structural: the current Merkle implementation performs a full
+O(N) iteration on every mutation to recompute the root hash. A future incremental
+Merkle tree would reduce this to O(log N) per insert. See `docs/impl-plan.md` for
+the planned sparse-sync-quality proof improvement.
+
+---
+
+## pds-folio — Collection comparison {#sec:folio-compare}
+
+**Date:** 2026-07-01
+**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
+**Backend:** MemBackend (in-memory, no disk I/O)
+**Keys/values:** u64 → u64 (sequential) for maps; u64 for vector (push_back)
+**Bench command:** `direnv exec . cargo bench -p pds-folio --bench compare 2>&1 | tee /private/tmp/bench_folio_compare_<ts>.txt`
+**Notes:** All median times from criterion. Insert benchmarks build each collection
+from scratch inside the timing loop. Get and clone benchmarks build once outside
+the loop. Store creation overhead is included in insert timings.
+
+### Insert (build from empty)
+
+| n | HamtMap | FolioOrdMap | FolioVector |
+|--:|--------:|------------:|------------:|
+| 10 | 24.1 µs | 48.5 µs | 20.1 µs |
+| 100 | 437 µs | 600 µs | 337 µs |
+| 1 000 | 6.95 ms | 9.84 ms | 4.47 ms |
+| 10 000 | 85.7 ms | 123.6 ms | 66.9 ms |
+
+### Get (single element read at key/index n/2)
+
+| n | HamtMap | FolioOrdMap | FolioVector |
+|--:|--------:|------------:|------------:|
+| 10 | 251 ns | 262 ns | 247 ns |
+| 100 | 487 ns | 512 ns | 493 ns |
+| 1 000 | 720 ns | 805 ns | 496 ns |
+| 10 000 | 722 ns | 1.04 µs | 745 ns |
+
+### Clone/snapshot (O(1) structural sharing)
+
+| n | HamtMap | FolioOrdMap | FolioVector |
+|--:|--------:|------------:|------------:|
+| 10 | 40 ns | 40 ns | 41 ns |
+| 100 | 40 ns | 40 ns | 41 ns |
+| 1 000 | 40 ns | 40 ns | 41 ns |
+| 10 000 | 40 ns | 40 ns | 41 ns |
+
+### Notes
+
+**Insert order:** FolioVector < HamtMap < FolioOrdMap at all sizes.
+- `FolioVector` (trie append): O(log N) new pages per push_back, cheapest per-element
+  cost because no key encoding or comparison is needed.
+- `HamtMap` (HAMT): O(log N) new pages, requires key hashing and postcard codec.
+- `FolioOrdMap` (B+ tree path-copy): O(log N) new pages, but each insert may trigger a
+  node split that writes multiple internal pages; 16× page headroom used vs 4× for HAMT.
+
+**Get order:** FolioVector ≤ HamtMap < FolioOrdMap at large sizes.
+- `FolioVector.get(idx)` decodes via index arithmetic (O(log N) trie descent), no
+  comparison needed — fastest at n=1 000+ where HAMT depth and B+ tree binary-search
+  cost become significant.
+- `HamtMap.get(key)` hashes the key (O(1)) then walks the HAMT trie; plateau near
+  720 ns at n ≥ 1 000 as trie depth saturates.
+- `FolioOrdMap.get(key)` descends the B+ tree with binary search per node; cost grows
+  logarithmically and exceeds HamtMap at n=1 000 (805 ns vs 720 ns).
+
+**Clone:** all three types deliver O(1) structural-sharing clones at ≈40 ns
+regardless of collection size. This is a pure refcount increment on the folio root
+node — no data is copied.

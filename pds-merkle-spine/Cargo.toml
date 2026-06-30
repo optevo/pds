@@ -34,3 +34,9 @@ thiserror = "2"
 [dev-dependencies]
 # Property-based testing.
 proptest = "1"
+# Criterion benchmarks for VersionedHamt operations.
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "bench"
+harness = false

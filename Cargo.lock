@@ -857,6 +857,7 @@ dependencies = [
 name = "pds-merkle-spine"
 version = "0.1.0"
 dependencies = [
+ "criterion 0.5.1",
  "folio-core",
  "merkle-spine",
  "pds",
