@@ -19,6 +19,30 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.2 — `HamtMap` CRUD.**
+  `src/hamt.rs` implements `HamtMap<K, V, C, B>` with full path-copy CRUD.
+
+  `NodeStore<B>` — thin wrapper over `FolioStore<B>` providing `alloc_node`,
+  `read_node`, `free_node` (typed `HamtNodePage` read/write as folio page payloads).
+  Multiple `HamtMap` snapshots share one `Arc<Mutex<NodeStore<B>>>`.
+
+  `HamtMap` public API: `new(store)`, `len()`, `is_empty()`, `contains_key()`,
+  `get()`, `insert()`, `remove()`. All mutations return a new snapshot; original
+  is unchanged (path-copy semantics). O(log N) page writes per insert/remove.
+
+  Leaf split strategy: when a leaf is full (`LEAF_CAP = 16` entries or data
+  section full), `split_leaf_and_insert` collects all entries + the new entry
+  and calls `build_trie_from_entries`, which recursively partitions by 5-bit
+  hash slices and builds a subtrie of leaves and internal nodes.
+
+  10 unit tests: empty map, single insert, multiple inserts (32 keys), overwrite,
+  remove present/absent, remove all, contains_key; plus PodCodec (u64 keys)
+  insert/get and overwrite/remove. 6 doc-tests. All 38 green. `test.sh` passes.
+
+  Design note: absent-key removes allocate a new copy of unchanged pages (no
+  path sharing). This is correct but wasteful; G.3 ref-counting will eliminate
+  the unnecessary copies by tracking which subtrees are shared.
+
 - **[2026-07-01] G.1 — Core node types and slab layout.**
   `src/node.rs` implements the 512-byte slab slot type and both HAMT node variants.
 
@@ -79,16 +103,7 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 **Acceptance:** `cargo test` green; size assertions pass.
 
-### G.2 — `HamtMap` CRUD
-
-- `HamtMap<K, V, C = PostcardCodec, B = DefaultBackend>` with `K: Serialize + Hash + Eq + Clone, V: Serialize + DeserializeOwned + Clone, C: Codec`
-- `new(store)`, `get(key) -> Option<V>`, `insert(key, value) -> Self`, `remove(key) -> (Self, Option<V>)`
-- `len()`, `is_empty()`, `contains_key(key)`
-- Path-copy on insert/remove: O(log N) new slab slots; leaf split when data overflows slot
-- No reference counting yet (G.3)
-- Tests: empty map, single insert, multiple inserts, overwrite, remove present/absent; test with both `PodCodec` (u64 keys) and `PostcardCodec` (String keys)
-
-**Acceptance:** `cargo test` green; all operations correct on both codecs.
+### G.2 — `HamtMap` CRUD (DONE — see above)
 
 ### G.3 — Reference counting and `Drop`
 

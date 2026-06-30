@@ -35,4 +35,5 @@
 #![warn(unreachable_pub)]
 
 pub mod codec;
+pub mod hamt;
 pub mod node;
