@@ -135,21 +135,33 @@ See merkle-spine `docs/impl-plan.md` § MS-F0.
 
 The pds-folio HAMT uses two node types, each sized to fit within a single slab slot:
 
-**`LeafNode<K, V>`** — stores up to `LEAF_CAP` key-value pairs at the same hash
-prefix. Dense array layout; no child pointers.
+**`LeafNode`** — stores up to `LEAF_CAP` key-value pairs at the same hash prefix.
+Variable-length entries with a fixed-size header for O(1) slot lookup.
 
 ```
-┌─────────────────────────────────────────────────┐
-│ discriminant: u8 = LEAF                          │
-│ count: u8                                        │
-│ hashes: [u64; LEAF_CAP]   (full key hashes)     │
-│ keys:   [K; LEAF_CAP]     (K: Pod)              │
-│ values: [V; LEAF_CAP]     (V: Pod)              │
-└─────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────┐
+│ discriminant: u8 = LEAF                             │
+│ count: u8                                           │
+│ key_hashes: [u64; count]   (pre-computed at insert) │
+│ entry_offsets: [u16; count] (byte offset into data) │
+│ data: [u8; ...]             (encoded K||V pairs)    │
+└────────────────────────────────────────────────────┘
 ```
 
-`LEAF_CAP` is chosen so the struct fits in a slab slot (512 bytes target). For
-`K = u64, V = u64`: `LEAF_CAP = (512 - 2) / (8 + 8 + 8) = 21`.
+`key_hashes` are full 64-bit hashes of each key, stored upfront for O(1) HAMT
+routing and fast collision detection without deserialising keys. On hash match,
+the key at `entry_offsets[i]` is deserialised to confirm equality (rare: only
+on collision).
+
+`entry_offsets[i]` points to the start of the i-th entry's encoded bytes within
+`data`. Each entry is codec-encoded as `encode(key) || encode(value)`. The length
+of each entry is `entry_offsets[i+1] - entry_offsets[i]` (last entry ends at
+the total data length, stored implicitly as `slot_size - header_size`).
+
+`LEAF_CAP` (max entries per leaf) is chosen so the worst-case leaf fits in a slab
+slot (512 bytes target). For `PodCodec` with `K = u64, V = u64`: each entry is 16
+bytes, giving `LEAF_CAP ≈ 20`. For variable-length types, the leaf splits when
+adding an entry would overflow the slot.
 
 **`InternalNode`** — bitmap-indexed array of child `SlabPageId` values.
 
@@ -223,23 +235,50 @@ for unshared nodes, which is the common case after mutations settle).
 Store only refcounts > 1 explicitly; treat "absent from table" as refcount 1. On free:
 check the table — if absent, free immediately; if present (refcount > 1), decrement.
 
-### K and V constraints
+### Codec and key/value types
 
-`K: bytemuck::Pod + Eq + Hash`
-`V: bytemuck::Pod`
+pds-folio uses a **`Codec` type parameter** to abstract over how keys and values are
+encoded into leaf page bytes. This makes `HamtMap` general: it accepts any
+`K: Serialize + Hash + Eq` and `V: Serialize + DeserializeOwned` — not just Pod types.
 
-`Pod` (Plain Old Data) is required for zero-copy storage in pages: values are
-written directly into the `LeafNode` buffer without serialisation overhead.
+```rust
+/// Encodes keys and values into leaf page byte regions and decodes them back.
+pub trait Codec: 'static {
+    fn encode<T: Serialize>(value: &T, buf: &mut Vec<u8>) -> Result<(), CodecError>;
+    fn decode<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, CodecError>;
+}
 
-This is intentionally restrictive. For non-Pod types (strings, `Vec`, nested structs):
+/// Zero-copy codec for types that are `bytemuck::Pod` (fixed-size, no padding).
+/// Encodes as raw bytes; no serialisation overhead. Use for `u64`, `[u8; 32]`, etc.
+pub struct PodCodec;
 
-1. Store a serialised blob in a separate folio region and use `V = FolioOffset`
-   (a `u64` page+offset reference) as the map's value type.
-2. Or use `pds::HashMap<K, V>` in-memory (no Pod constraint).
+/// Compact variable-length codec using `postcard`. Supports `no_std` and all
+/// `#[derive(Serialize, Deserialize)]` types: strings, enums, structs, vecs.
+pub struct PostcardCodec;
 
-The primary use cases for pds-folio are index structures over numeric/fixed-size
-data: `HamtMap<u64, u64>` (page_id → content_hash for HamtIndex), `HamtMap<u64, u32>`
-(page_id → refcount), etc. These are all Pod.
+/// Zero-copy deserialisation codec using `rkyv`. Encoded form is the archived
+/// representation; `decode` returns a value constructed from the mmap'd bytes
+/// without heap allocation (when `V: Archive + Deserialize<Archived = V>`).
+pub struct RkyvCodec;
+```
+
+**Key type support:**
+
+| K type | Works with | Notes |
+|--------|-----------|-------|
+| `u32`, `u64`, `i64`, `[u8; 32]` | `PodCodec`, `PostcardCodec`, `RkyvCodec` | Preferred: `PodCodec` for zero overhead |
+| `String` | `PostcardCodec`, `RkyvCodec` | Hash pre-computed at insert; stored as length-prefixed UTF-8 |
+| `#[derive(Serialize, Deserialize, Hash, Eq)]` enums | `PostcardCodec`, `RkyvCodec` | Covers virtually all enums regardless of discriminant layout |
+| Serialisable structs | `PostcardCodec`, `RkyvCodec` | Any `Serialize + Hash + Eq` struct works |
+
+**`HamtIndex`** (G.5) uses `HamtMap<u64, [u8; 32], PodCodec>` — both key and value
+are Pod, so `PodCodec` is always correct for the Merkle index regardless of what
+codec the outer `HamtMap` uses.
+
+**Leaf layout:** because keys and values are variable-length with `PostcardCodec`/
+`RkyvCodec`, the leaf node uses an offset-table layout (see Node types below) rather
+than a fixed-size array. `PodCodec` types could use a fixed-size layout, but the
+offset-table layout is used uniformly to keep node-handling code simple.
 
 ---
 
@@ -250,37 +289,42 @@ data: `HamtMap<u64, u64>` (page_id → content_hash for HamtIndex), `HamtMap<u64
 ```rust
 /// A folio-backed persistent hash map with structural sharing.
 ///
-/// `K` and `V` must be `bytemuck::Pod` — they are stored zero-copy in
-/// folio slab pages. For non-Pod types, store a folio reference as V.
+/// `K` and `V` are encoded into leaf pages via the `C: Codec` type parameter.
+/// Use `PodCodec` for zero-copy fixed-size types (`u64`, `[u8; 32]`, etc.),
+/// `PostcardCodec` for general serialisable types (strings, enums, structs),
+/// or `RkyvCodec` for zero-copy deserialisation from mmap'd pages.
 ///
 /// `B: FolioBackend` defaults to `folio::DefaultBackend` (CoW + WAL).
 ///
 /// Clone is O(1): increments the root node's reference count.
 /// Drop is O(path-to-leaf × changed_nodes): decrements refcounts recursively.
-pub struct HamtMap<K, V, B = DefaultBackend>
+pub struct HamtMap<K, V, C = PostcardCodec, B = DefaultBackend>
 where
-    K: Pod + Eq + Hash,
-    V: Pod,
+    K: Serialize + Hash + Eq + Clone,
+    V: Serialize + DeserializeOwned + Clone,
+    C: Codec,
     B: FolioBackend,
 {
-    slab: FolioSlab<HamtNode, B>,
+    slab: FolioSlab<HamtNodePage, B>,
     refcounts: FolioBTree<SlabPageId, u32, B>,
     root: Option<SlabPageId>,
     len: usize,
+    _phantom: PhantomData<(K, V, C)>,
 }
 
-impl<K, V, B> HamtMap<K, V, B>
+impl<K, V, C, B> HamtMap<K, V, C, B>
 where
-    K: Pod + Eq + Hash,
-    V: Pod,
+    K: Serialize + Hash + Eq + Clone,
+    V: Serialize + DeserializeOwned + Clone,
+    C: Codec,
     B: FolioBackend,
 {
     /// Creates a new empty map backed by `store`.
     pub fn new(store: FolioStore<B>) -> Self;
 
-    /// Returns a clone of the value for `key`, or `None`.
+    /// Returns the decoded value for `key`, or `None` if absent.
     ///
-    /// Time: O(log N).
+    /// Deserialises from the mmap'd leaf page. O(log N).
     pub fn get(&self, key: &K) -> Option<V>;
 
     /// Returns a new map with `key` → `value` inserted.
@@ -309,14 +353,20 @@ where
     /// Returns an iterator over all `(K, V)` pairs in arbitrary order.
     ///
     /// Time: O(N) total. Each element access reads one or more slab pages.
-    pub fn iter(&self) -> HamtMapIter<'_, K, V, B>;
+    pub fn iter(&self) -> HamtMapIter<'_, K, V, C, B>;
 }
 ```
 
 **`Clone` implementation:**
 
 ```rust
-impl<K: Pod + Eq + Hash, V: Pod, B: FolioBackend> Clone for HamtMap<K, V, B> {
+impl<K, V, C, B> Clone for HamtMap<K, V, C, B>
+where
+    K: Serialize + Hash + Eq + Clone,
+    V: Serialize + DeserializeOwned + Clone,
+    C: Codec,
+    B: FolioBackend,
+{
     fn clone(&self) -> Self {
         if let Some(root) = self.root {
             increment_refcount(&self.refcounts, root);
@@ -326,6 +376,7 @@ impl<K: Pod + Eq + Hash, V: Pod, B: FolioBackend> Clone for HamtMap<K, V, B> {
             refcounts: self.refcounts.clone(),
             root: self.root,
             len: self.len,
+            _phantom: PhantomData,
         }
     }
 }
@@ -334,7 +385,13 @@ impl<K: Pod + Eq + Hash, V: Pod, B: FolioBackend> Clone for HamtMap<K, V, B> {
 **`Drop` implementation:**
 
 ```rust
-impl<K: Pod + Eq + Hash, V: Pod, B: FolioBackend> Drop for HamtMap<K, V, B> {
+impl<K, V, C, B> Drop for HamtMap<K, V, C, B>
+where
+    K: Serialize + Hash + Eq + Clone,
+    V: Serialize + DeserializeOwned + Clone,
+    C: Codec,
+    B: FolioBackend,
+{
     fn drop(&mut self) {
         if let Some(root) = self.root {
             let freed = collect_freed_nodes(&self.slab, &mut self.refcounts, root);
@@ -352,12 +409,18 @@ Thin wrapper over `HamtMap<A, (), B>`.
 
 ```rust
 /// A folio-backed persistent hash set with structural sharing.
-pub struct HamtSet<A, B = DefaultBackend>(HamtMap<A, (), B>)
+pub struct HamtSet<A, C = PostcardCodec, B = DefaultBackend>(HamtMap<A, (), C, B>)
 where
-    A: Pod + Eq + Hash,
+    A: Serialize + Hash + Eq + Clone,
+    C: Codec,
     B: FolioBackend;
 
-impl<A: Pod + Eq + Hash, B: FolioBackend> HamtSet<A, B> {
+impl<A, C, B> HamtSet<A, C, B>
+where
+    A: Serialize + Hash + Eq + Clone,
+    C: Codec,
+    B: FolioBackend,
+{
     pub fn new(store: FolioStore<B>) -> Self;
     pub fn contains(&self, value: &A) -> bool;
     pub fn insert(&self, value: A) -> Self;
@@ -507,8 +570,12 @@ to historical roots must be retained explicitly.
 ## Integration with pds common traits
 
 ```rust
-impl<K: Pod + Eq + Hash, V: Pod + Clone, B: FolioBackend> PersistentMap<K, V>
-    for HamtMap<K, V, B>
+impl<K, V, C, B> PersistentMap<K, V> for HamtMap<K, V, C, B>
+where
+    K: Serialize + Hash + Eq + Clone,
+    V: Serialize + DeserializeOwned + Clone,
+    C: Codec,
+    B: FolioBackend,
 {
     fn get_cloned(&self, key: &K) -> Option<V> { self.get(key) }
     fn insert(&self, key: K, value: V) -> Self { HamtMap::insert(self, key, value) }
@@ -518,8 +585,11 @@ impl<K: Pod + Eq + Hash, V: Pod + Clone, B: FolioBackend> PersistentMap<K, V>
 }
 ```
 
-`V: Pod` implies `V: Copy` (via bytemuck), which implies `V: Clone`. So the
-`V: Clone` bound from `PersistentMap` is satisfied automatically.
+The `V: Clone` bound required by `PersistentMap` is satisfied by the `V: Clone`
+bound on `HamtMap` itself. `get_cloned` returns the value produced by
+deserialisation — an owned allocation — so no copy of a stored value is needed.
+`Clone` on `V` is needed only for the trait's own API surface (callers that
+clone a returned value).
 
 ---
 

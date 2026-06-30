@@ -906,25 +906,27 @@ full HAMT page index work.
 ### G.0 — Create `pds-folio` crate
 
 - `mkrust pds-folio` from project root
-- Add deps: `folio-core`, `bytemuck`, `pds` (for traits)
+- Add deps: `folio-core`, `pds` (for traits), `serde`, `postcard`, `bytemuck` (for PodCodec)
+- Define `Codec` trait + `PodCodec`/`PostcardCodec` impls in `src/codec.rs`
 - Blank `src/lib.rs` with `#![deny(unsafe_code)]`
 
 ### G.1 — Core node types and slab layout
 
-- `LeafNode<K, V>: bytemuck::Pod` — dense array of (hash, K, V) triples
-- `InternalNode` — bitmap + array of `SlabPageId` (u64)
-- `LEAF_CAP` constant computed from target page size (512 bytes)
+- `LeafNode` — variable-length layout: `count: u8 | key_hashes: [u64; count] | entry_offsets: [u16; count] | data: [u8; …]`
+- `InternalNode` — bitmap + array of `SlabPageId` (u64); unchanged regardless of codec
+- `LEAF_CAP` constant = max entries before a leaf splits (target: 512-byte slab slot)
+- `HamtNodePage` — union of leaf and internal byte representations; slab slot type
 - `FolioSlab<HamtNodePage>` wrapper type
-- Unit tests: size_of checks; Pod alignment
+- Unit tests: header size checks; leaf insert/read round-trip for `PostcardCodec`; `PodCodec` u64 round-trip
 
 ### G.2 — `HamtMap` CRUD
 
-- `HamtMap<K: Pod + Eq + Hash, V: Pod, B: FolioBackend>`
+- `HamtMap<K, V, C = PostcardCodec, B = DefaultBackend>` with `K: Serialize + Hash + Eq + Clone, V: Serialize + DeserializeOwned + Clone, C: Codec`
 - `new(store)`, `get(key) -> Option<V>`, `insert(key, value) -> Self`, `remove(key) -> (Self, Option<V>)`
 - `len()`, `is_empty()`, `contains_key(key)`
-- Path-copy on insert/remove: O(log N) new slab slots
+- Path-copy on insert/remove: O(log N) new slab slots; leaf split when data overflows slot
 - No reference counting yet (G.3)
-- Tests: empty map, single insert, multiple inserts, overwrite, remove present/absent
+- Tests: empty map, single insert, multiple inserts, overwrite, remove present/absent; test with both `PodCodec` (u64 keys) and `PostcardCodec` (String keys)
 
 ### G.3 — Reference counting and `Drop`
 
@@ -952,9 +954,9 @@ full HAMT page index work.
 
 ### G.6 — Implement pds cross-variant traits
 
-- `impl PersistentMap<K, V> for HamtMap<K, V, B>`
-- `impl PersistentSet<A> for HamtSet<A, B>`
-- Tests: generic functions from Phase F tests work with `HamtMap`/`HamtSet`
+- `impl<K, V, C, B> PersistentMap<K, V> for HamtMap<K, V, C, B>` where K/V: Serialize+DeserializeOwned+Clone+Hash+Eq
+- `impl<A, C, B> PersistentSet<A> for HamtSet<A, C, B>`
+- Tests: generic functions from Phase F tests work with `HamtMap`/`HamtSet` using both `PodCodec` and `PostcardCodec`
 
 ### G.7 — Integration tests and proptest suite
 

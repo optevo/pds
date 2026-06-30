@@ -334,9 +334,13 @@ where
 |------|----------------------|-----------------|-----------------|--------------------------|----------------------|
 | `pds::HashMap<K, V>` | Y | Y | — | — | — |
 | `pds::HashSet<A>` | Y | — | Y | — | — |
-| `pds_folio::HamtMap<K, V>` | Y | Y | — | — | — |
-| `pds_folio::HamtSet<A>` | Y | — | Y | — | — |
-| `pds_merkle_spine::VersionedHamt<K, V>` | Y | Y | — | Y | Y |
+| `pds_folio::HamtMap<K, V, C>` | Y | Y | — | — | — |
+| `pds_folio::HamtSet<A, C>` | Y | — | Y | — | — |
+| `pds_merkle_spine::VersionedHamt<K, V, C>` | Y | Y | — | Y | Y |
+
+`C: Codec` defaults to `PostcardCodec` for general-purpose use. Pass `PodCodec`
+for fixed-size numeric keys/values where zero-copy storage matters, or `RkyvCodec`
+for zero-copy deserialisation from mmap'd pages.
 
 `OrdMap`, `OrdSet`, `Vector` and the 15 derived types may gain `PersistentMap`
 / `PersistentSet` impls in a later pass.
@@ -376,6 +380,18 @@ The original map is unchanged. Both old and new map share all unmodified nodes.
 A `mut self`-based API (where `insert` modifies in place and returns `Self`) would
 work but loses the "keep both versions" property, which is the distinguishing
 feature of persistent data structures. The trait reflects the intended usage.
+
+### pds-folio impl bounds vs trait bounds
+
+`PersistentMap<K, V>` requires `K: Clone + Eq + Hash, V: Clone`. These are the
+minimum bounds for the trait contract itself. `pds_folio::HamtMap` additionally
+requires `K: Serialize` and `V: Serialize + DeserializeOwned` (for page encoding).
+These extra bounds appear on the `impl` block, not on the trait — callers using
+the concrete type need them; callers using the trait abstraction only see
+`Clone + Eq + Hash`.
+
+`pds::HashMap` uses `K: Clone + Eq + Hash, V: Clone` internally (heap nodes). No
+Serialize bound is needed for the in-memory backend.
 
 ### Trait location
 
