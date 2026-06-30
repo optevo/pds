@@ -838,6 +838,200 @@ All residual items including R.17 and the range-view API refactor are now comple
 
 ---
 
+## Phase F — Cross-variant trait layer {#phase-f}
+
+**Status:** Not started. No external blockers — can begin any time.
+
+**Goal:** Define the `PersistentMap<K, V>`, `PersistentSet<A>`, `VersionedPersistentMap<K, V>`,
+and `MerklePersistentMap<K, V>` traits in `pds` itself (behind a `traits` feature flag),
+and implement them for the existing in-memory collection types.
+
+These traits form the common interface that future pds-folio and pds-merkle-spine crates will
+implement, enabling generic code that works across all three storage backends.
+
+**Full spec:** `docs/cross-variant-traits.md`
+
+**Dependency direction:**
+
+```
+pds (defines traits, impls for in-memory types)
+  └── pds-folio (impls PersistentMap + PersistentSet)
+        └── pds-merkle-spine (impls VersionedPersistentMap + MerklePersistentMap)
+```
+
+### F.0 — Define base traits in `src/traits.rs`
+
+- New `src/traits.rs` with `PersistentCollection`, `PersistentMap<K, V>`, `PersistentSet<A>`
+- Behind `features = ["traits"]` to avoid forcing the dependency on users who don't need it
+- Implement `PersistentMap<K, V>` for `HashMap<K, V>` (delegates `get_cloned` to `get().cloned()`)
+- Implement `PersistentSet<A>` for `HashSet<A>`
+- Re-export both traits at crate root under `traits` feature gate
+- Tests: generic function parameterised over `PersistentMap<K, V>` runs with `HashMap<K, V>`
+
+**Acceptance:** `cargo test --features traits` green; trait impls compile; `get_cloned` on
+`HashMap` returns `None` for absent key, `Some(v.clone())` for present.
+
+### F.1 — Define versioning + Merkle traits
+
+- `VersionedPersistentMap<K, V>` and `MerklePersistentMap<K, V>` in `src/traits.rs`
+- No implementations yet (those come with pds-merkle-spine)
+- Define associated types: `VersionId`, `Proof`, `DiffEntry<K, V>`
+- Export `DiffEntry` as a concrete type (not just as an associated type bound)
+
+**Acceptance:** `cargo build --features traits` with no implementations still compiles;
+the trait objects are well-formed; `DiffEntry<K, V>` is public and usable.
+
+---
+
+## Phase G — pds-folio {#phase-g}
+
+**Status:** Not started.
+
+**Blocked by:**
+- folio **S64** (`FolioSlab<T>`) — required for HAMT node slab allocation
+- folio **S37** (`write_page_in_place`) — required for zero-copy node initialisation
+- folio **S66** (`free_pages`) — required for efficient batch deallocation
+- pds **Phase F.0** (cross-variant traits)
+- merkle-spine **Stage 1** (must ship before G.5 so the `PageIndexBackend` trait is defined)
+
+**Unblocks:** merkle-spine **MS-F0** (HamtIndex integration).
+
+**Full spec:** `docs/pds-folio-spec.md`
+
+**Build order note:** merkle-spine v1 (Stages 1–10, DeltaLogIndex backend) should ship before
+pds-folio is started. This validates the merkle-spine API surface — in particular the
+`PageIndexBackend` trait that `HamtIndex` (G.5) must implement — without committing to the
+full HAMT page index work.
+
+### G.0 — Create `pds-folio` crate
+
+- `mkrust pds-folio` from project root
+- Add deps: `folio-core`, `bytemuck`, `pds` (for traits)
+- Blank `src/lib.rs` with `#![deny(unsafe_code)]`
+
+### G.1 — Core node types and slab layout
+
+- `LeafNode<K, V>: bytemuck::Pod` — dense array of (hash, K, V) triples
+- `InternalNode` — bitmap + array of `SlabPageId` (u64)
+- `LEAF_CAP` constant computed from target page size (512 bytes)
+- `FolioSlab<HamtNodePage>` wrapper type
+- Unit tests: size_of checks; Pod alignment
+
+### G.2 — `HamtMap` CRUD
+
+- `HamtMap<K: Pod + Eq + Hash, V: Pod, B: FolioBackend>`
+- `new(store)`, `get(key) -> Option<V>`, `insert(key, value) -> Self`, `remove(key) -> (Self, Option<V>)`
+- `len()`, `is_empty()`, `contains_key(key)`
+- Path-copy on insert/remove: O(log N) new slab slots
+- No reference counting yet (G.3)
+- Tests: empty map, single insert, multiple inserts, overwrite, remove present/absent
+
+### G.3 — Reference counting and `Drop`
+
+- `FolioBTree<SlabPageId, u32>` refcount table (stored in same folio store)
+- `Clone` impl: increment root refcount
+- `Drop` impl: decrement refcount, recursively free nodes at zero, batch via S66
+- Optimisation: absent from table = refcount 1 (store only refcounts > 1)
+- Tests: clone + drop frees nothing while shared; all copies dropped → store empty
+
+### G.4 — `HamtSet` wrapper
+
+- Newtype `HamtSet<A, B>(HamtMap<A, (), B>)`
+- Full API: `contains`, `insert`, `remove`, `union`, `intersection`, `difference`, `symmetric_difference`
+- Tests: all set operations
+
+### G.5 — `HamtIndex`: PageIndexBackend
+
+- Depends on: merkle-spine Stage 1 (for the `PageIndexBackend` trait definition)
+- `HamtIndex<B>(HamtMap<u64, [u8; 32], B>)`
+- Node-level BLAKE3 Merkle hashing: each node hash covers its child hashes recursively
+- `root_hash()`: hash of root node (O(1) cached)
+- `prove_inclusion(page_id) -> Option<MerkleProof>`
+- `impl merkle_spine::PageIndexBackend for HamtIndex<B>`
+- Tests: root hash changes when any entry changes; proof verifies; empty index has known hash
+
+### G.6 — Implement pds cross-variant traits
+
+- `impl PersistentMap<K, V> for HamtMap<K, V, B>`
+- `impl PersistentSet<A> for HamtSet<A, B>`
+- Tests: generic functions from Phase F tests work with `HamtMap`/`HamtSet`
+
+### G.7 — Integration tests and proptest suite
+
+- proptest: insert N random (K, V) pairs; all lookups correct; remove N/2; remaining correct
+- Miri run on all unsafe paths (if any remain after removing `#![deny(unsafe_code)]` only in
+  module that needs it)
+- Integration: create `HamtMap` in folio store; process restart; reopen store; lookups correct
+
+---
+
+## Phase H — pds-merkle-spine {#phase-h}
+
+**Status:** Not started.
+
+**Blocked by:**
+- pds-folio **G.5** (`HamtIndex: PageIndexBackend`)
+- merkle-spine **MS-F0** (HamtIndex integration wired into merkle-spine's `VersionStore`)
+- pds **Phase F.1** (VersionedPersistentMap + MerklePersistentMap traits)
+
+**Full spec:** `docs/pds-merkle-spine-spec.md`
+
+### H.0 — Create `pds-merkle-spine` crate
+
+- `mkrust pds-merkle-spine`
+- Deps: `pds-folio`, `merkle-spine`, `pds` (traits)
+
+### H.1 — `VersionedHamt` core struct
+
+- `VersionedHamt<K, V, B>` wrapping `HamtMap<K, V, B>` + `VersionStore<HamtIndex<B>>`
+- `new(store)` creates v0 (empty map, records initial root hash)
+- `version() -> VersionId`, `root_hash() -> [u8; 32]`
+
+### H.2 — Current-version CRUD
+
+- `get`, `insert`, `remove`, `len`, `is_empty`, `contains_key`, `iter`
+- `insert`/`remove` create a new version: path-copy HamtMap + record new root in VersionStore
+- Tests: basic CRUD; version counter increments; root hash changes on mutation; unchanged on no-op
+
+### H.3 — Historical access
+
+- `get_at(version, key)` — look up historical HAMT root from VersionStore, traverse
+- `checkout(version)` — O(1), returns VersionedHamt frozen at historical root
+- `root_hash_at(version)` — O(1), from VersionStore record
+- Tests: historical values preserved after mutations; checkout + insert branches independently
+
+### H.4 — Structural diff
+
+- `diff(from, to) -> impl Iterator<Item = DiffEntry<K, V>>`
+- Walk two HAMT roots in parallel; skip subtrees where root hashes match
+- Tests: identical versions → empty diff; single mutation → one entry; full diff correctness
+
+### H.5 — Merkle proofs
+
+- `prove_inclusion(key)`, `prove_inclusion_at(version, key)` → `Option<MerkleProof>`
+- `verify_proof(root_hash, key, value, proof) -> bool` — pure function
+- Tests: valid proof verifies; tampered proof fails; absent key returns None
+
+### H.6 — Sparse sync (deferred)
+
+Design of the sparse sync protocol (exchange of differing HAMT subtrees between two peers).
+Deferred: requires a wire format decision and network layer design.
+Add as a Future item when pds-merkle-spine is otherwise complete.
+
+### H.7 — Implement pds common traits
+
+- `impl PersistentMap<K, V> for VersionedHamt<K, V, B>`
+- `impl VersionedPersistentMap<K, V> for VersionedHamt<K, V, B>`
+- `impl MerklePersistentMap<K, V> for VersionedHamt<K, V, B>`
+- Tests: generic functions parameterised over all three trait levels work with `VersionedHamt`
+
+### H.8 — Integration tests and proptest
+
+- proptest: mutation sequences; historical values correct at every version
+- Cross-crate integration: `VersionedHamt` used via `PersistentMap` and `VersionedPersistentMap` traits
+
+---
+
 ## Phase 0 — Foundations {#phase-0}
 
 Everything in this phase must land before any structural work begins. The
