@@ -3827,9 +3827,7 @@ where
                 // Backward walk is cheaper.
                 return match self.iter().nth_back(k - n) {
                     None => self.clone(),
-                    Some((key, _)) => {
-                        self.submap((Bound::Unbounded, Bound::Included(key.clone())))
-                    }
+                    Some((key, _)) => self.submap((Bound::Unbounded, Bound::Included(key.clone()))),
                 };
             }
         }
@@ -3869,9 +3867,7 @@ where
                 // Backward walk is cheaper.
                 return match self.iter().nth_back(k - 1 - n) {
                     None => self.empty_view(),
-                    Some((key, _)) => {
-                        self.submap((Bound::Included(key.clone()), Bound::Unbounded))
-                    }
+                    Some((key, _)) => self.submap((Bound::Included(key.clone()), Bound::Unbounded)),
                 };
             }
         }

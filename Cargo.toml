@@ -46,6 +46,11 @@ persist = ["std", "dep:serde_core", "hash-intern"]
 # unmeasurable at str-key sizes and ≤~5% at small i64 workloads, asymptoting
 # to zero as map size grows. See DEC-036.
 ord-hash = ["std"]
+# Cross-variant trait layer: PersistentCollection, PersistentMap, PersistentSet,
+# PersistentVector, PersistentOrdMap, PersistentOrdSet, VersionedPersistentMap,
+# MerklePersistentMap. In-memory impls included; folio/merkle-spine impls planned
+# (pds-folio, pds-merkle-spine workspace members). Requires std.
+traits = ["std"]
 
 [dependencies]
 bitmaps = { version = "3", default-features = false }

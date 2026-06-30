@@ -780,6 +780,9 @@ pub use crate::unique_vector::UniqueVector;
 #[doc(inline)]
 pub use crate::vector::{GenericVector, Vector};
 
+#[cfg(feature = "traits")]
+pub mod traits;
+
 #[cfg(test)]
 mod test;
 

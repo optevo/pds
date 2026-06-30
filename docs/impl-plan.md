@@ -59,6 +59,43 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-06-30] Phase F.0 + F.1 — Cross-variant trait layer (`src/traits.rs`).**
+  Defined the portable trait hierarchy covering all five in-memory pds collection
+  types. New `traits` Cargo feature (requires `std`) gates the module.
+
+  Traits defined:
+  - `PersistentCollection` — marker; O(1)-clone guarantee
+  - `PersistentMap<K, V>` — hash-keyed map; `get_cloned`, `insert`, `remove`, `len`, `contains_key`
+  - `PersistentSet<A>` — hash set; `contains`, `insert`, `remove`, `len`
+  - `PersistentVector<A>` — RRB sequence; `get`, `push_back`, `push_front`, `update`,
+    `pop_back`, `pop_front`, `concat`, `split_at`, `len`
+  - `PersistentOrdMap<K, V>` — sorted map; adds `first`, `last`, `range`
+  - `PersistentOrdSet<A>` — sorted set; adds `first`, `last`, `range`
+  - `DiffEntry<K, V>` — diff enum (`Inserted`, `Removed`, `Updated`)
+  - `VersionedPersistentMap<K, V>` — versioned map with `version`, `get_at`, `checkout`, `diff`
+  - `MerklePersistentMap<K, V>` — BLAKE3 Merkle identity with `root_hash`, proofs
+
+  Impls provided for:
+  - `GenericHashMap<K, V, S, P, H>` — PersistentCollection + PersistentMap (needs `V: Hash`)
+  - `GenericHashSet<A, S, P, H>` — PersistentCollection + PersistentSet
+  - `GenericVector<A, P>` — PersistentCollection + PersistentVector
+  - `GenericOrdMap<K, V, P>` — PersistentCollection + PersistentOrdMap
+  - `GenericOrdSet<A, P>` — PersistentCollection + PersistentOrdSet
+
+  Design note: `PersistentMap` impls on HashMap require `V: Hash` (not just `V: Clone`) because
+  the HAMT implementation hashes values for Merkle node hashes. This is an inherent
+  constraint of the HAMT structure, not a limitation of the trait design.
+
+  Tests: 9 tests in `src/traits.rs` covering all five trait families plus DiffEntry and
+  the PersistentCollection marker. All 1709 library tests + doc tests green.
+  Edge case review: boundary conditions (empty, single-element, absent keys) covered
+  by generic helper functions. Recursive method call ambiguity avoided by calling
+  `crate::vector::GenericVector::pop_back` / `pop_front` explicitly.
+
+  Phase F.1 (VersionedPersistentMap + MerklePersistentMap trait definitions) is included
+  in this same file; the traits compile without concrete implementations. F.1 is
+  accepted as part of this commit — folio-backed and merkle-spine impls are Phase G/H.
+
 - **[2026-04-27] Range view API — OrdMap/OrdSet split and materialisation refactor.**
   Completed three related improvements across `OrdMap`, `OrdSet`, and `Vector`:
 
@@ -838,6 +875,34 @@ All residual items including R.17 and the range-view API refactor are now comple
 
 ---
 
+## Cross-project execution sequence {#cross-project-sequence}
+
+This work spans three projects. The table below shows the complete serial order
+with explicit handoffs. Work within a project follows the per-phase plans below;
+this table is the entry point for orienting yourself at the start of any session.
+
+| Step | Project | Work | Gate / handoff |
+|------|---------|------|----------------|
+| 1 | **merkle-spine** | Stages 1–3 (foundations, encoding tactics, DeltaLogIndex + `PageIndexBackend` trait) | MS-10 defines `PageIndexBackend` — **handoff signal to pds** |
+| 2 | **pds** | Phase F (cross-variant traits) — no external blockers | F.0 + F.1 done |
+| 3 | **pds** | Phase W (workspace consolidation) — add `[workspace]` to Cargo.toml | W.0 + W.1 done — **handoff signal to pds-folio** |
+| 4 | **merkle-spine** | Stages 4–10 (version DAG, commits, provenance, lifecycle, compaction, graft, diff) | Stages 1–10 complete → DeltaLogIndex v1 ships; PageIndexBackend API is stable |
+| 5 | **pds-folio** | Phase G, G.0–G.4 (create crate, HAMT node types, CRUD, refcount, HashSet) | Can start as soon as Step 3 is done — does not need Step 4 |
+| 6 | **pds-folio** | Phase G, G.5 (HamtIndex: PageIndexBackend) | Needs Step 4 (Stages 1–10 complete) for API stability before implementing |
+| 7 | **merkle-spine** | MS-F0 — wire HamtIndex into VersionStore | Needs pds-folio G.5 — **handoff signal back to merkle-spine** |
+| 8 | **pds-folio** | Phase G, G.6–G.12 (HashMap/HashSet traits, Vector, OrdMap/OrdSet) | Can run in parallel with Step 7 — no MS-F0 dependency |
+| 9 | **pds-merkle-spine** | Phase H (VersionedHamt, H.0–H.8) | Needs merkle-spine MS-F0 (Step 7) + pds-folio G.5 (Step 6) |
+| 10 | **pds** | Phase P (cross-collection benchmarks) | Needs pds-folio G.12 + pds-merkle-spine H.8 |
+
+**Parallel opportunities:** Steps 7 and 8 can run in parallel (different projects, no dependency between them). Step 5 can start while Step 4 (merkle-spine Stages 4–10) is in progress.
+
+**Project home for each phase:**
+- Phases F, W, P → this plan (pds repo)
+- Phase G → `pds-folio/docs/impl-plan.md` (once that crate is created at G.0)
+- Phase H → `pds-merkle-spine/docs/impl-plan.md` (once that crate is created at H.0)
+
+---
+
 ## Phase F — Cross-variant trait layer {#phase-f}
 
 **Status:** Not started. No external blockers — can begin any time.
@@ -883,32 +948,71 @@ the trait objects are well-formed; `DiffEntry<K, V>` is public and usable.
 
 ---
 
+## Phase W — Workspace consolidation {#phase-w}
+
+**Status:** Not started. No external blockers — can begin any time after F.0.
+
+**Goal:** Convert the `pds` repo root into a Cargo workspace so that `pds-folio`
+(Phase G) and `pds-merkle-spine` (Phase H) are created as member crates within the
+same repo rather than as separate repositories. The existing `pds` crate stays at the
+root — no file moves required; the workspace manifest coexists with `[package]` in the
+root `Cargo.toml`.
+
+**Outcome:** one GitHub repo, three member crates with clear roles, a single CI
+workflow, and shared `docs/` covering all three backends.
+
+### W.0 — Add `[workspace]` to root `Cargo.toml`
+
+- Add `[workspace]` table to root `Cargo.toml` with `members = []` (empty until G.0 / H.0)
+- Add `[workspace.dependencies]` for shared deps (`serde`, `postcard`, `bytemuck`, `folio-core`, etc.) so member crates inherit consistent versions
+- `resolver = "2"` if not already set
+- Run `test.sh` to confirm root crate is unaffected
+
+**Acceptance:** `cargo test` and `cargo test --all-features` at repo root still pass; `cargo metadata` reports the workspace.
+
+### W.1 — Update CI and scripts for workspace layout
+
+- `build.sh`: add `--workspace` flag so all member crates build together
+- `test.sh`: add workspace-aware steps (member crates use their own `test.sh` but CI runs `cargo test --workspace` as a smoke check)
+- GitHub Actions: update to run `cargo clippy --workspace` and `cargo test --workspace` in addition to per-crate steps
+- `docs/architecture.md`: add workspace layout diagram (pds → pds-folio → pds-merkle-spine dependency direction)
+
+**Acceptance:** CI green; `cargo build --workspace` compiles cleanly once at least one member crate exists.
+
+---
+
 ## Phase G — pds-folio {#phase-g}
 
 **Status:** Not started.
 
-**Blocked by:**
-- folio **S64** (`FolioSlab<T>`) — required for HAMT node slab allocation
-- folio **S37** (`write_page_in_place`) — required for zero-copy node initialisation
-- folio **S66** (`free_pages`) — required for efficient batch deallocation
+**Blocked by (all items):**
+- folio **S37, S64, S66** ✓ DONE — zero-copy write, slab allocator, batch free all complete
 - pds **Phase F.0** (cross-variant traits)
-- merkle-spine **Stage 1** (must ship before G.5 so the `PageIndexBackend` trait is defined)
+- pds **Phase W.0** (workspace manifest — G.0 creates pds-folio as a member crate)
 
-**Unblocks:** merkle-spine **MS-F0** (HamtIndex integration).
+**Additionally blocked for G.5 only:**
+- merkle-spine **Stages 1–10** — wait for DeltaLogIndex v1 to ship before implementing
+  `HamtIndex: PageIndexBackend`. Strict code dependency is only on **Stage 3 (MS-10)**
+  which defines the `PageIndexBackend` trait, but waiting for Stages 1–10 ensures the
+  trait surface is stable and validated by a real implementation before pds-folio commits to it.
+
+**G.0–G.4 can start as soon as F.0 + W.0 are done** — no merkle-spine dependency.
+
+**Unblocks:** merkle-spine **MS-F0** (HamtIndex integration) once G.5 is done.
 
 **Full spec:** `docs/pds-folio-spec.md`
 
-**Build order note:** merkle-spine v1 (Stages 1–10, DeltaLogIndex backend) should ship before
-pds-folio is started. This validates the merkle-spine API surface — in particular the
-`PageIndexBackend` trait that `HamtIndex` (G.5) must implement — without committing to the
-full HAMT page index work.
+### G.0 — Create `pds-folio` workspace member
 
-### G.0 — Create `pds-folio` crate
-
-- `mkrust pds-folio` from project root
-- Add deps: `folio-core`, `pds` (for traits), `serde`, `postcard`, `bytemuck` (for PodCodec)
+- Create `pds-folio/` subdirectory in the pds repo root
+- Scaffold with `cargo new --lib pds-folio` and adapt from rust-template (copy `build.sh`,
+  `test.sh`, `flake.nix` devShell entry, `directives.md` shim, `docs/` skeleton)
+- Add `pds-folio` to `[workspace.members]` in root `Cargo.toml`
+- Add deps in `pds-folio/Cargo.toml` inheriting from `[workspace.dependencies]`:
+  `folio-core`, `pds` (for traits), `serde`, `postcard`, `bytemuck` (for PodCodec)
 - Define `Codec` trait + `PodCodec`/`PostcardCodec` impls in `src/codec.rs`
 - Blank `src/lib.rs` with `#![deny(unsafe_code)]`
+- Own impl-plan at `pds-folio/docs/impl-plan.md` (copy G.1–G.12 items there)
 
 ### G.1 — Core node types and slab layout
 
@@ -998,6 +1102,91 @@ full HAMT page index work.
 - proptest: Vector concat/split round-trips; OrdMap range query correctness
 - Integration: create OrdMap in folio store; restart; range query still correct
 
+### G.13 — Consensus backend note and feature flag
+
+pds-folio requires no new code to support consensus — the `B: FolioBackend` type
+parameter already accommodates a consensus-enabled folio backend. When folio's
+consensus backend is available, the following ergonomic aliases are exposed:
+
+```rust
+#[cfg(feature = "consensus")]
+pub type ConsensusHashMap<K, V, C = PostcardCodec> =
+    HashMap<K, V, C, folio::ConsensusBackend>;
+#[cfg(feature = "consensus")]
+pub type ConsensusOrdMap<K, V, C = PostcardCodec> =
+    OrdMap<K, V, C, folio::ConsensusBackend>;
+// ... and so on for HashSet, OrdSet, Vector
+```
+
+The `consensus` feature flag in `pds-folio/Cargo.toml` enables these aliases and pulls
+in folio's consensus backend. No structural sharing, codec, or path-copy logic changes.
+
+**What folio consensus gives at the collection level:** write coordination across peers
+(who can commit pages). **What it does not give:** agreement on a canonical collection
+version — that is the role of the Merkle root hash in pds-merkle-spine.
+
+- Add `consensus` feature flag to `pds-folio/Cargo.toml`
+- Re-export type aliases under `pds_folio::consensus::*`
+- Acceptance: `cargo test --features consensus` compiles; `ConsensusHashMap<String, u64>`
+  type-checks with folio's consensus backend
+
+### G.14 — `ShardStrategy` trait and built-in strategies
+
+Horizontal sharding: a `ShardedMap<K,V,C,B,S>` routes operations to one of N independent
+`HashMap<K,V,C,B>` instances via a user-supplied strategy. Each shard is a separate
+folio store — shard boundaries are a folio/filesystem concern, not a pds-folio concern.
+
+**`ShardStrategy` trait:**
+
+```rust
+pub trait ShardStrategy<K> {
+    /// Returns the shard index for a given key. Must be stable across calls.
+    fn shard_for(&self, key: &K) -> usize;
+    /// Returns the set of shard indices that may contain keys in [lo, hi].
+    fn shards_for_range(&self, lo: Bound<&K>, hi: Bound<&K>) -> Vec<usize>;
+    fn shard_count(&self) -> usize;
+}
+```
+
+**Built-in strategies:**
+
+| Type | Logic | Best for |
+|------|-------|----------|
+| `HashShard { n: usize }` | `hash(key) % n` | HashMap / HashSet; even distribution |
+| `RangeShard<K: Ord>` | sorted split points, binary search | OrdMap / OrdSet; range queries hit one shard |
+| `DirectoryShard<K>` | user-supplied `HashMap<KeyPrefix, usize>` | non-uniform or custom partitioning |
+
+All three implement `ShardStrategy<K>`. Users may implement their own.
+
+- `src/shard.rs`: `ShardStrategy` trait + `HashShard`, `RangeShard`, `DirectoryShard`
+- Behind `features = ["sharding"]`
+- Tests: each strategy routes consistently; `shards_for_range` covers all relevant shards
+
+### G.15 — `ShardedMap` and `ShardedSet`
+
+```rust
+pub struct ShardedMap<K, V, C, B, S: ShardStrategy<K>> {
+    shards: Vec<HashMap<K, V, C, B>>,
+    strategy: S,
+}
+```
+
+- `get`, `insert`, `remove`, `contains_key`, `len`, `iter` — route via strategy
+- `range` (OrdMap variant only): iterate across `shards_for_range()` result in merge order
+- `impl<…> PersistentMap<K, V> for ShardedMap<…>` where strategy is `HashShard`
+- `impl<…> PersistentOrdMap<K, V> for ShardedOrdMap<…>` where strategy is `RangeShard<K>`
+- `ShardedSet` and `ShardedOrdSet` as analogous wrappers
+- **Resharding note:** because insert returns a new version (path-copy), old and new shard
+  configurations can coexist during migration. Move keys shard-by-shard; old versions
+  remain readable via their original shard roots throughout the transition.
+- Tests: insert N keys; verify each routes to expected shard; full iter covers all keys;
+  shard-by-shard iteration; resharding migration sequence produces correct merged state
+- **Merkle integration note:** when backed by pds-merkle-spine, each shard has an
+  independent Merkle root. A super-root (`hash_of_shard_roots([r0, r1, …, rN])`) covers
+  all shards in a single hash — enables per-shard proof and partial sync (exchange only
+  shards whose root hashes differ from peer). This is not implemented here; noted for
+  Phase H extension.
+
 ---
 
 ## Phase H — pds-merkle-spine {#phase-h}
@@ -1008,13 +1197,17 @@ full HAMT page index work.
 - pds-folio **G.5** (`HamtIndex: PageIndexBackend`)
 - merkle-spine **MS-F0** (HamtIndex integration wired into merkle-spine's `VersionStore`)
 - pds **Phase F.1** (VersionedPersistentMap + MerklePersistentMap traits)
+- pds **Phase W.0** (workspace manifest — H.0 creates pds-merkle-spine as a member crate)
 
 **Full spec:** `docs/pds-merkle-spine-spec.md`
 
-### H.0 — Create `pds-merkle-spine` crate
+### H.0 — Create `pds-merkle-spine` workspace member
 
-- `mkrust pds-merkle-spine`
-- Deps: `pds-folio`, `merkle-spine`, `pds` (traits)
+- Create `pds-merkle-spine/` subdirectory in the pds repo root
+- Scaffold as a workspace member (same pattern as G.0 for pds-folio)
+- Add `pds-merkle-spine` to `[workspace.members]` in root `Cargo.toml`
+- Deps in `pds-merkle-spine/Cargo.toml`: `pds-folio`, `merkle-spine`, `pds` (traits)
+- Own impl-plan at `pds-merkle-spine/docs/impl-plan.md` (copy H.1–H.8 items there)
 
 ### H.1 — `VersionedHamt` core struct
 
@@ -1047,11 +1240,32 @@ full HAMT page index work.
 - `verify_proof(root_hash, key, value, proof) -> bool` — pure function
 - Tests: valid proof verifies; tampered proof fails; absent key returns None
 
-### H.6 — Sparse sync (deferred)
+### H.6 — Consensus token and sparse sync (deferred)
 
-Design of the sparse sync protocol (exchange of differing HAMT subtrees between two peers).
-Deferred: requires a wire format decision and network layer design.
-Add as a Future item when pds-merkle-spine is otherwise complete.
+**Consensus token:** the Merkle root hash returned by `root_hash()` is the lightweight
+consensus value for distributed agreement — two nodes that hold the same root hash
+provably hold identical state. No additional consensus protocol is required at the
+collection level; folio's storage-level consensus (see G.13) handles write coordination,
+and the Merkle root handles state verification.
+
+**Sharded super-root:** when `VersionedHamt` is used with `ShardedMap` (G.14–G.15),
+each shard has an independent root hash. A super-root covers all shards:
+```rust
+fn super_root(shard_roots: &[[u8; 32]]) -> [u8; 32] {
+    blake3::hash(bytemuck::cast_slice(shard_roots)).into()
+}
+```
+This enables per-shard verification and partial sync: peers compare super-roots, identify
+which shard roots differ, and exchange only those subtrees.
+
+**Sparse sync protocol** (wire-format design deferred — requires network layer decision):
+- Compare super-roots (or individual root hashes)
+- Walk differing HAMT subtrees top-down; exchange only nodes whose hashes differ
+- Terminate subtree walk when hashes match — structural sharing means unchanged subtrees
+  need zero bytes transferred
+- For sharded maps: sparse sync is per-shard and independent
+
+Add wire-format design and implementation as a Future item when H.0–H.5 are complete.
 
 ### H.7 — Implement pds common traits
 
@@ -1064,6 +1278,82 @@ Add as a Future item when pds-merkle-spine is otherwise complete.
 
 - proptest: mutation sequences; historical values correct at every version
 - Cross-crate integration: `VersionedHamt` used via `PersistentMap` and `VersionedPersistentMap` traits
+
+---
+
+## Phase P — Cross-collection performance {#phase-p}
+
+**Status:** Not started.
+
+**Blocked by:**
+- pds-folio **G.12** (all five pds-folio collection types complete)
+- pds-merkle-spine **H.8** (VersionedHamt complete)
+
+**Goal:** Establish a rigorous, comparable benchmark suite across all four collection
+families, identify performance bottlenecks through profiling, and close the gaps. The
+comparison is inherently asymmetric — persistence, MVCC, and Merkle overhead exist for
+good reasons — but quantifying those overheads is what makes the trade-offs legible.
+
+**Collection families in scope:**
+
+| Family | Types | Backend |
+|--------|-------|---------|
+| `pds` | HashMap, HashSet, OrdMap, OrdSet, Vector | in-memory (Arc nodes) |
+| `pds-folio` | HashMap, HashSet, OrdMap, OrdSet, Vector | folio mmap slab |
+| `folio` | FolioVec, FolioBTree | folio mmap (mutable, for reference) |
+| `pds-merkle-spine` | VersionedHamt | folio + Merkle versioning |
+
+### P.0 — Benchmark suite design
+
+- Add `pds-bench/` as a workspace member crate (criterion, no library code)
+- Define usage patterns to benchmark across all families:
+  - **Bulk construction:** build from N unsorted elements (N = 1K / 10K / 100K / 1M)
+  - **Point lookup:** random key access in a pre-built collection
+  - **Point update:** single insert/remove on an existing collection
+  - **Iteration:** full scan in insertion vs sorted order
+  - **Range scan:** OrdMap/OrdSet only — bounded range over sorted keys
+  - **Persist and reload:** pds-folio only — commit + reopen + first lookup
+  - **Version navigation:** pds-merkle-spine only — checkout historical version + lookup
+- Benchmark mutable folio-collections (`FolioVec`, `FolioBTree`) as reference points for the same bulk-build and lookup patterns; these are not persistent but they show the raw I/O floor
+- **Trait abstraction cost:** because all families implement the same `PersistentMap<K,V>` / `PersistentVector<A>` etc. traits, write the benchmark harness generically and run it both as a concrete call and through the trait bound. Criterion should produce identical numbers if monomorphisation is working — any regression here is a sign of missed inlining or vtable dispatch leaking through
+
+**Acceptance:** `bench.sh` runs P.0 suite end-to-end; results saved to `docs/baselines.md`.
+
+### P.1 — Establish baselines
+
+- Run P.0 suite for all families; record results in `docs/baselines.md`
+- Identify the top-3 regressions vs in-memory pds (by factor overhead)
+- Profile each regression with `samply` to locate the hot path
+
+**Acceptance:** baselines committed; profile results in `docs/decisions.md` for each bottleneck.
+
+### P.2 — pds-folio tuning
+
+- Address the top regressions identified in P.1 for pds-folio types
+- Expected candidates: slab slot serialisation overhead (hot path for PostcardCodec),
+  I/O amplification on path-copy (writing O(depth) pages per mutation),
+  refcount table contention on bulk operations
+- Each optimisation: baseline → profile → implement → measure → record in `docs/decisions.md`
+
+**Acceptance:** re-run P.0 suite; top regressions each improved by ≥20% or documented as unavoidable.
+
+### P.3 — pds-merkle-spine tuning
+
+- Address top regressions specific to VersionedHamt (Merkle hash computation overhead,
+  VersionStore write amplification, proof generation cost)
+- Hash caching: ensure BLAKE3 node hashes are cached per-mutation not recomputed on read
+- `prove_inclusion` profiling: ensure proof path is O(depth) not O(N)
+
+**Acceptance:** re-run H-phase benchmarks; Merkle overhead ≤ 2× pds-folio baseline for same workload.
+
+### P.4 — Cross-family comparison report
+
+- Write `docs/perf-comparison.md`: tables + prose comparing all four families across all P.0 patterns
+- Include absolute numbers and normalised overhead factors (vs in-memory pds)
+- Note which overheads are fundamental (persistence I/O, MVCC, Merkle) vs incidental (fixable)
+- Recommendations: when to use each family
+
+**Acceptance:** `docs/perf-comparison.md` committed; all four families represented for every applicable benchmark pattern.
 
 ---
 
@@ -3502,6 +3792,33 @@ Phase 6 (research)                 │                                      │
   6.7 hybrid SIMD-CHAMP ◄── 0.3, 0.5  ✗ KILLED (DEC-015: PoC failed)     │
   6.8 arena batch construction ◄── (none)  ✗ KILLED (DEC-019: PoC failed)  │
   6.9 persistent trie ◄── 0.3 ✓  ✓ DONE (derived HashMap wrapper)                          │
+                                   ▼
+Phase F (cross-variant traits)
+  F.0 base traits ◄── (none — self-contained)
+  F.1 versioning + Merkle traits ◄── F.0
+                                   │
+Phase W (workspace consolidation)  │
+  W.0 [workspace] in Cargo.toml ◄── F.0 (trait crate stable before adding members)
+  W.1 CI + scripts update ◄── W.0
+                                   │
+Phase G (pds-folio)                │
+  G.0 create crate ◄── W.0, F.0, folio S64/S37/S66
+  G.1–G.5 HAMT + HamtIndex ◄── G.0, merkle-spine Stage 1
+  G.6–G.7 trait impls (HashMap/HashSet) ◄── G.2, F.0
+  G.8–G.12 Vector, OrdMap/OrdSet ◄── G.3 (refcount), F.0
+                                   │
+Phase H (pds-merkle-spine)         │
+  H.0 create crate ◄── W.0, G.5, merkle-spine MS-F0, F.1
+  H.1–H.5 VersionedHamt ◄── H.0
+  H.6 sparse sync ◄── H.5 (deferred)
+  H.7–H.8 trait impls + tests ◄── H.2, F.1
+                                   │
+Phase P (cross-collection perf)    │
+  P.0 benchmark suite design ◄── G.12, H.8
+  P.1 baselines ◄── P.0
+  P.2 pds-folio tuning ◄── P.1
+  P.3 pds-merkle-spine tuning ◄── P.1
+  P.4 comparison report ◄── P.2, P.3
 ```
 
 ### Parallel tracks — status
