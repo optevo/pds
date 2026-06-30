@@ -35,6 +35,7 @@
 #![warn(unreachable_pub)]
 
 pub mod codec;
+pub mod folio_vector;
 pub mod hamt;
 pub mod hamt_index;
 pub mod node;

@@ -19,6 +19,34 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.9 — `FolioVector` CRUD and `PersistentVector` trait impl.**
+  `src/folio_vector.rs`: `FolioVector<A, C, B>` backed by a `VectorNodeStore<B>` (thin
+  wrapper over `FolioStore<B>` with `refcounts: HashMap<u64, u32>`).
+
+  Key operations — all path-copy, O(log_32 N):
+  - `get(pos)` — navigate via discriminant byte and cumulative sizes; decode with `C`.
+  - `update(pos, value)` — path-copy; unchanged siblings have refcounts incremented.
+  - `push_back(value)` — recursive descent to rightmost leaf; on overflow, grows tree
+    depth by wrapping in a new internal.  Refcounts incremented for all reused children.
+  - `pop_back()` — recursive descent; collapses root if single child remains.
+  - `concat(other)` — iterate other, push_back each element.
+  - `split_at(mid)` — rebuild both halves by sequential push_back.
+  - `push_front` / `pop_front` — delegate to `split_at(1)` / `split_at(len-1)` (not
+    O(1) but correct; deferred optimisation).
+
+  Critical refcount invariant: whenever a new internal node is created by path-copy
+  and reuses existing child page IDs from the old internal, those shared children
+  have their refcounts incremented immediately.  Mirrors the HAMT G.3 pattern exactly.
+  Applied in three sites: push non-overflow, push overflow-add-child, pop shrink.
+
+  `PersistentCollection` impl: empty (just the `Clone` bound).
+  `PersistentVector<A>` impl: all methods delegate to inherent with `.expect()`.
+
+  23 unit tests: empty, single push, push across leaf boundary, multi-level tree,
+  update, pop_back to empty, pop_back multi-level, concat, split_at, structural
+  sharing verification, push_front/pop_front, trait surface (generic helpers).
+  All tests green.  Full workspace `test.sh` passes.
+
 - **[2026-07-01] G.8 — Vector: RRB-tree node types and slab layout.**
   `src/vector.rs`: `VectorNodePage([u8; 512])` — `#[repr(transparent)]` Pod + Zeroable
   newtype (manual `Default` via `bytemuck::Zeroable::zeroed()` since `[u8; 512]` lacks
@@ -256,15 +284,7 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ### G.8 — Vector: RRB-tree node types and slab layout (DONE — see above)
 
-### G.9 — `Vector` CRUD and `PersistentVector` trait impl
-
-- `Vector<A, C = PostcardCodec, B = DefaultBackend>` — `A: Serialize + DeserializeOwned + Clone, C: Codec`
-- `new`, `get`, `push_back`, `push_front`, `update`, `pop_back`, `pop_front`, `concat`, `split_at`, `len`, `iter`
-- Path-copy on all mutations; shared refcount table from G.3
-- `impl<A, C, B> PersistentVector<A> for Vector<A, C, B>`
-- Tests: empty, single push, multiple pushes, update, pop, concat, split; proptest round-trip
-
-**Acceptance:** `cargo test` green; all operations correct; `PersistentVector` trait impl passes.
+### G.9 — `FolioVector` CRUD and `PersistentVector` trait impl (DONE — see above)
 
 ### G.10 — OrdMap / OrdSet: B+ tree node types and slab layout
 
