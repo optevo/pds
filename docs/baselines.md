@@ -263,6 +263,58 @@ See `docs/decisions.md` for the full analysis.
 
 ---
 
+## pds-folio — post-optimisation results {#sec:pds-folio-opt}
+
+**Date:** 2026-07-01
+**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
+**Optimisation:** `page_checksum_prezeroed` one-shot fast-path in `folio-core`
+**Method:** When the checksum field in the page header is already zeroed (guaranteed
+by `write_page_with_buf`), use a single `xxh3_64(buf)` call instead of three
+`Xxh3Default::update()` calls in the streaming hasher. The checksum is always
+written with `header.checksum = 0` before computing, so the one-shot and streaming
+paths produce identical results.
+
+**Profiling finding:** approximately 30% of CPU time in write-heavy benchmarks
+(`hamt_insert`, `hamt_remove`, `vector_push_back`, `ordmap_insert`) was spent in
+`xxhash_rust::xxh3::xxh3_stateful_consume_stripes` — the internal hot loop of the
+streaming hasher. Switching to the one-shot path eliminates hasher initialisation
+and reduces the number of internal processing calls.
+
+### HamtMap — write benchmarks after optimisation
+
+| Operation | n=10 | n=100 | n=1 000 | n=10 000 | Change (10K) |
+|-----------|-----:|------:|--------:|--------:|-------------|
+| insert | 26 µs | 470 µs | 7.4 ms | 90.0 ms | **−6.0%** |
+| remove | 45.8 µs | 949 µs | 15.7 ms | 197 ms | **−5.4%** |
+| clone (snapshot) | 42 ns | 42 ns | 42 ns | 42 ns | −6% (noise floor) |
+
+### FolioVector — write benchmarks after optimisation
+
+| Operation | n=10 | n=100 | n=1 000 | n=10 000 | Change (10K) |
+|-----------|-----:|------:|--------:|--------:|-------------|
+| push_back | 21.8 µs | 366 µs | 4.7 ms | 70.1 ms | **−8.2%** |
+
+### FolioOrdMap / FolioOrdSet — write benchmarks after optimisation
+
+| Operation | n=10 | n=100 | n=1 000 | n=10 000 | Change (10K) |
+|-----------|-----:|------:|--------:|--------:|-------------|
+| ordmap insert sequential | 51.8 µs | 647 µs | 10.4 ms | 132 ms | **−3.3%** |
+| ordmap insert random | 53.1 µs | 671 µs | 9.9 ms | 131 ms | **−4.3%** |
+| ordset insert | 51.4 µs | 606 µs | 9.7 ms | 125 ms | **−7.5%** |
+
+### Read benchmarks (no change expected)
+
+| Operation | n=10 | n=10 000 | Change |
+|-----------|-----:|---------:|--------|
+| hamt_get | 258 ns | 755 ns | ≈0% (within noise) |
+| hamtset_contains | 260 ns | 757 ns | ≈0% (within noise) |
+| vector_get | 262 ns | 793 ns | ≈0% (within noise) |
+| ordmap_range_scan | 360 ns | 240 µs | ≈0% (within noise) |
+
+Read operations do not call `write_page_with_buf` — no change expected or observed.
+
+---
+
 ## OrdMap vs HashMap — head-to-head {#sec:ordmap-vs-hashmap}
 
 **Date:** 2026-04-27
