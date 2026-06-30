@@ -32,3 +32,18 @@
 //! # See also
 //!
 //! - `docs/impl-plan.md` — phased implementation plan (D.0–D.8)
+
+pub mod error;
+pub(crate) mod wal;
+pub(crate) mod recovery;
+pub mod durable_map;
+pub mod checkpoint;
+
+#[cfg(feature = "durable-set")]
+pub mod durable_set;
+
+#[cfg(feature = "durable-ordmap")]
+pub mod durable_ordmap;
+
+pub use error::DurableError;
+pub use durable_map::{DurableConfig, DurableMap, Relaxed, Strict};

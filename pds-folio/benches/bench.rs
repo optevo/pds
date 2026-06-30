@@ -6,8 +6,12 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use folio_core::{backend::MemBackend, checksum::ChecksumKind, store::FolioStore};
 use pds_folio::{
-    codec::PostcardCodec, folio_ordmap::FolioOrdMap, folio_ordset::FolioOrdSet,
-    folio_vector::FolioVector, hamt::HamtMap, set::HamtSet,
+    codec::{PodCodec, PostcardCodec},
+    folio_ordmap::FolioOrdMap,
+    folio_ordset::FolioOrdSet,
+    folio_vector::FolioVector,
+    hamt::HamtMap,
+    set::HamtSet,
 };
 
 // ---------------------------------------------------------------------------
@@ -94,6 +98,91 @@ fn bench_hamt_clone_snapshot(c: &mut Criterion) {
                 black_box(snap.len())
             });
         });
+    }
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// PERF-2: PodCodec vs PostcardCodec head-to-head
+// ---------------------------------------------------------------------------
+
+/// PERF-2: Compares `PodCodec<u64, u64>` vs `PostcardCodec` on `hamt_get` at
+/// n=1_000 and n=10_000.  Both maps are pre-built outside the timing loop so
+/// the benchmark measures only the get path (descent + decode).
+fn bench_pod_codec_get(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pod_codec/get");
+    for &n in &[1000usize, 10000] {
+        // PostcardCodec map.
+        let mut pc_map: HamtMap<u64, u64, PostcardCodec> =
+            HamtMap::new(make_store((n as u64) * 4 + 64));
+        for i in 0..n as u64 {
+            pc_map = pc_map.insert(i, i * 7).unwrap();
+        }
+        group.bench_with_input(
+            BenchmarkId::new("PostcardCodec", n),
+            &n,
+            |b, &n| {
+                b.iter(|| {
+                    let key = black_box((n as u64) / 2);
+                    black_box(pc_map.get(&key).unwrap())
+                });
+            },
+        );
+
+        // PodCodec map.
+        let mut pod_map: HamtMap<u64, u64, PodCodec> =
+            HamtMap::new(make_store((n as u64) * 4 + 64));
+        for i in 0..n as u64 {
+            pod_map = pod_map.insert(i, i * 7).unwrap();
+        }
+        group.bench_with_input(
+            BenchmarkId::new("PodCodec", n),
+            &n,
+            |b, &n| {
+                b.iter(|| {
+                    let key = black_box((n as u64) / 2);
+                    black_box(pod_map.get(&key).unwrap())
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+/// PERF-2: Compares `PodCodec<u64, u64>` vs `PostcardCodec` on `hamt_insert` at
+/// n=1_000 and n=10_000.  The map is rebuilt from scratch inside the timing loop.
+fn bench_pod_codec_insert(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pod_codec/insert");
+    for &n in &[1000usize, 10000] {
+        group.bench_with_input(
+            BenchmarkId::new("PostcardCodec", n),
+            &n,
+            |b, &n| {
+                b.iter(|| {
+                    let mut map: HamtMap<u64, u64, PostcardCodec> =
+                        HamtMap::new(make_store((n as u64) * 4 + 64));
+                    for i in 0..n as u64 {
+                        map = map.insert(black_box(i), black_box(i * 7)).unwrap();
+                    }
+                    black_box(map.len())
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("PodCodec", n),
+            &n,
+            |b, &n| {
+                b.iter(|| {
+                    let mut map: HamtMap<u64, u64, PodCodec> =
+                        HamtMap::new(make_store((n as u64) * 4 + 64));
+                    for i in 0..n as u64 {
+                        map = map.insert(black_box(i), black_box(i * 7)).unwrap();
+                    }
+                    black_box(map.len())
+                });
+            },
+        );
     }
     group.finish();
 }

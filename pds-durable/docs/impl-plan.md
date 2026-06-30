@@ -22,6 +22,7 @@ Two durability modes: `Strict` (zero data loss, fsync per mutation) and `Relaxed
   - [D.6 — Tests and proptest suite](#d6--tests-and-proptest-suite)
   - [D.7 — Additional collection types](#d7--additional-collection-types)
   - [D.8 — Benchmarks](#d8--benchmarks)
+  - [D.9 — `TieredMap`: heap cache + folio backing store](#d9--tieredmap-heap-cache--folio-backing-store)
 
 ---
 
@@ -439,6 +440,132 @@ Benchmark on `MemBackend` first; add real-disk numbers in a separate run.
 
 ---
 
+### D.9 — `TieredMap`: heap cache + folio backing store
+
+Replaces the flat WAL with `pds-folio` as the durable backing store. The heap
+collection becomes an L1 write-back cache; folio is the crash-safe L2 store.
+Unlocks bigger-than-RAM datasets and eliminates the WAL compaction step.
+
+#### Architecture
+
+```
+TieredMap<K, V, Mode>
+  ├── front: pds::HashMap<K, V>             — hot tier; RAM-bounded cache
+  ├── dirty: HashSet<K>                     — tracks front entries not yet in back
+  └── back:  pds_folio::FolioHashMap<K, V> — cold tier; mmap-paged, crash-safe, unbounded
+```
+
+pds-folio already has its own internal WAL + CoW backend. Recovery is O(1): just
+open the folio file and warm the front cache lazily. No replay step.
+
+#### Mode semantics
+
+| Mode | Write sequence | Recovery |
+|------|---------------|----------|
+| `Strict` | Write to `back` (folio, crash-safe) then `front` | Open folio; front empty, warm on demand |
+| `Relaxed` | Write to `front` only; `flush()` pushes dirty entries to `back` | Open folio; state = last flush |
+
+#### `TieredConfig`
+
+```rust
+pub struct TieredConfig {
+    /// Evict LRU entries from front when it exceeds this count (0 = unlimited).
+    pub max_front_entries: usize,
+    /// Auto-flush in Relaxed mode every N mutations (0 = manual only).
+    pub flush_every: usize,
+}
+```
+
+#### Public API (`src/tiered_map.rs`)
+
+```rust
+impl<K, V> TieredMap<K, V, Strict> {
+    pub fn open(path: &Path, config: TieredConfig) -> Result<Self, DurableError>
+    pub fn insert(&mut self, k: K, v: V) -> Result<Option<V>, DurableError>
+    pub fn remove(&mut self, k: &K) -> Result<Option<V>, DurableError>
+    pub fn get(&self, k: &K) -> Option<&V>          // front first, then back
+    pub fn contains_key(&self, k: &K) -> bool
+    pub fn len(&self) -> usize                       // front.len() + back entries not in front
+    pub fn is_empty(&self) -> bool
+    pub fn front(&self) -> &pds::HashMap<K, V>
+}
+
+impl<K, V> TieredMap<K, V, Relaxed> {
+    pub fn open(path: &Path, config: TieredConfig) -> Result<Self, DurableError>
+    pub fn insert(&mut self, k: K, v: V) -> Option<V>
+    pub fn remove(&mut self, k: &K) -> Option<V>
+    pub fn flush(&mut self) -> Result<(), DurableError>  // push dirty → back
+    pub fn pending_count(&self) -> usize                 // dirty.len()
+    pub fn get(&self, k: &K) -> Option<&V>
+    pub fn contains_key(&self, k: &K) -> bool
+    pub fn len(&self) -> usize
+    pub fn is_empty(&self) -> bool
+    pub fn front(&self) -> &pds::HashMap<K, V>
+}
+```
+
+#### LRU eviction (when `max_front_entries > 0`)
+
+Track a generation counter per entry in `front` (or use an approximate LRU via
+insertion order). When `front.len() > max_front_entries` after an insert:
+1. Select the oldest / coldest entry.
+2. If dirty, write it to `back`.
+3. Remove from `front` and `dirty`.
+Future reads that miss `front` fall through to `back` and re-warm lazily.
+
+Approximate LRU is acceptable: use a `VecDeque<K>` as an eviction queue; push
+newly inserted keys to the back; pop from the front when over capacity.
+
+#### `get` fallthrough
+
+```rust
+pub fn get(&self, k: &K) -> Option<&V> {
+    self.front.get(k).or_else(|| self.back.get(k))
+}
+```
+
+Entries returned from `back` are NOT automatically re-warmed into `front` (avoid
+cache thrashing on sequential scans). Callers that need warm access can call
+`warm(k)` explicitly if added later.
+
+#### Cargo.toml addition
+
+```toml
+[dependencies]
+pds-folio = { path = "../pds-folio", optional = true }
+
+[features]
+tiered = ["dep:pds-folio"]
+```
+
+`TieredMap` is only compiled when the `tiered` feature is enabled.
+
+#### Benchmarks (add to `benches/bench.rs`)
+
+| Name | What it measures |
+|------|-----------------|
+| `tiered_strict_insert` | Strict insert: folio write + front write |
+| `tiered_relaxed_insert` | Relaxed insert: front write only (no folio touch) |
+| `tiered_relaxed_flush` | 100 inserts + flush to folio |
+| `tiered_get_warm` | Get for a front-cached key |
+| `tiered_get_cold` | Get for an evicted key (folio read) |
+| `tiered_eviction` | Insert beyond `max_front_entries`; eviction path |
+
+Compare all against `durable_map_relaxed_insert` and `heap_reference` from D.8.
+
+**Prerequisite:** D.1–D.8 complete. pds-folio must expose `FolioHashMap<K,V>`
+with `Serialize + Deserialize` bounds (already planned in pds-folio's impl-plan).
+
+**Acceptance:**
+- `cargo test -p pds-durable --features tiered` green
+- Relaxed insert throughput ≥ `durable_map_relaxed_insert` (no folio touch in fast path)
+- Strict insert throughput within 2× of folio's own insert (no double-write overhead)
+- Eviction test: `front.len()` never exceeds `max_front_entries + 1`
+- Cold-get test: evicted key recovered correctly from `back`
+- Results recorded in `docs/baselines.md`
+
+---
+
 ## Design decisions
 
 ### Why postcard for WAL entries?
@@ -471,10 +598,37 @@ all entries before it. A file-level CRC only tells you something is wrong, not w
 
 ---
 
+## Design decisions (continued)
+
+### Why folio as the backing store, not a second WAL?
+
+pds-folio already provides: crash-safe WAL + CoW page writes, mmap-backed page
+cache (OS-managed eviction), O(log N) inserts and lookups, and structural sharing.
+Writing a second flat WAL would duplicate that work while losing the bigger-than-RAM
+property. The folio backing store is the durable layer; the heap front is a cache.
+
+### Why keep `DurableMap` (WAL) alongside `TieredMap` (folio)?
+
+For datasets that always fit in RAM, `DurableMap` with a flat WAL has lower
+per-mutation overhead (sequential append vs. folio page write). `TieredMap` is the
+right choice when data may exceed RAM or when built-in versioning (via merkle-spine
+in a future variant) is needed. Both are useful; neither supersedes the other.
+
+### Approximate vs exact LRU
+
+Exact LRU requires a doubly-linked list threaded through the hash map — complex and
+not justified for a cache whose primary purpose is memory bounding, not optimal
+hit rate. A `VecDeque<K>` eviction queue is O(1) push/pop and sufficient to keep
+`front.len()` bounded. Entries are evicted FIFO within each "generation"; close
+enough to LRU for the expected access patterns.
+
+---
+
 ## Dependency map
 
 ```
-pds (heap collections) ←── pds-durable (WAL wrapper)
+pds (heap collections) ←── pds-durable (WAL wrapper, D.1–D.8)
+pds-folio             ←──┘ (tiered backend, D.9, feature-gated)
      ↑
-  required; must never depend on pds-durable
+  neither may depend on pds-durable
 ```
