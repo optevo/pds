@@ -544,7 +544,10 @@ where
     /// `pds::HashMap` operations.
     ///
     /// Time: O(N log N).
-    pub fn into_persistent(self) -> HashMap<K, V> {
+    pub fn into_persistent(self) -> HashMap<K, V>
+    where
+        K: Eq + Hash + Clone,
+    {
         let mut out = HashMap::new();
         for (k, v) in self.inner {
             out.insert(k, v);
@@ -556,7 +559,7 @@ where
 impl<K, V> Default for MemOnlyMap<K, V>
 where
     K: Clone + Hash + Eq,
-    V: Clone,
+    V: Clone + Hash,
 {
     fn default() -> Self {
         Self::new()
