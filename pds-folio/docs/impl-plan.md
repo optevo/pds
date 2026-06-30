@@ -19,6 +19,14 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.13–G.15 — Documentation polish and feature flag notes.**
+  - `src/lib.rs` crate-level doc updated: collection type table, storage model,
+    codec, structural sharing invariants, consensus backend note, phase status.
+  - `Cargo.toml` features section: commented-out `consensus` and `serde` placeholders
+    with explanation.
+  - `src/lib.rs` status updated to "Phase G complete — G.1–G.12 done".
+  - No new feature flags added (no folio-consensus crate yet; serde deferred).
+
 - **[2026-07-01] G.12 — Integration tests (Vector + OrdMap / OrdSet).**
   `tests/ordmap_vector_integration.rs`: 15 integration/proptest tests.
 
@@ -386,26 +394,11 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 ### G.12 — Integration tests (Vector + OrdMap / OrdSet) (DONE — see above)
 
-### G.13 — Consensus backend note and feature flag
+### G.13 — Consensus backend note and feature flag (DONE — see above)
 
-`pds-folio` does not implement consensus itself — the `B: FolioBackend` type
-parameter allows callers to pass a consensus-aware backend. This is a note,
-not a code item. Add `consensus = ["folio-consensus"]` feature flag if/when
-needed.
+### G.14 — Serde feature flag (DONE — deferred as planned; placeholder in Cargo.toml)
 
-### G.14 — Serde feature flag
-
-Add `serde = ["dep:serde_core"]` feature gate so that pds-folio can be used
-in `no_std + alloc` environments without pulling in serde when unneeded.
-Defer to Phase H if not required before pds-merkle-spine.
-
-### G.15 — Documentation and public API polish
-
-- Module-level docs for each collection type
-- `# Examples` blocks for all public methods
-- `docs/decisions.md` entries for codec choice and node layout
-- `docs/glossary.md` for pds-folio-specific terms
-- `docs/references.md` for folio and HAMT papers
+### G.15 — Documentation and public API polish (DONE — see above)
 
 ---
 

@@ -1,34 +1,57 @@
 //! `pds-folio` — folio-backed persistent data structures with structural sharing.
 //!
-//! Provides `HashMap`, `HashSet`, `Vector`, `OrdMap`, and `OrdSet`
-//! backed by folio mmap'd pages. All five types implement the cross-variant traits
-//! from [`pds::traits`] so callers can be generic over the storage backend.
+//! Provides five collection types backed by folio mmap'd pages, all implementing
+//! the cross-variant traits from [`pds::traits`] so callers can be generic over
+//! the storage backend:
+//!
+//! | Type | Module | Trait |
+//! |------|--------|-------|
+//! | `FolioHashMap` (via [`hamt`]) | [`hamt`] | [`pds::traits::PersistentMap`] |
+//! | `FolioHashSet` (via [`set`]) | [`set`] | [`pds::traits::PersistentSet`] |
+//! | [`folio_vector::FolioVector`] | [`folio_vector`] | [`pds::traits::PersistentVector`] |
+//! | [`folio_ordmap::FolioOrdMap`] | [`folio_ordmap`] | [`pds::traits::PersistentOrdMap`] |
+//! | [`folio_ordset::FolioOrdSet`] | [`folio_ordset`] | [`pds::traits::PersistentOrdSet`] |
 //!
 //! # Storage model
 //!
-//! Nodes are stored in a shared `FolioSlab` backed
-//! by a [`folio_core::backend::Backend`] (default: CoW + WAL). Each collection
-//! root is a `SlabPageId` (a `u64`). The empty collection uses `root: None`.
+//! All five types store nodes in a [`folio_core::store::FolioStore`] backed by a
+//! [`folio_core::backend::Backend`] (default: `MemBackend`; production: CoW + WAL).
+//! Each collection root is an `Option<u64>` folio page ID.  The empty collection
+//! uses `root: None`.
 //!
 //! # Codec
 //!
 //! The `C: Codec` type parameter controls how keys and values are encoded
-//! into node page bytes. Two implementations are provided:
+//! into node page bytes.  Two implementations are provided:
 //!
-//! - [`codec::PodCodec`] — zero-copy for [`bytemuck::Pod`] types (`u64`, `[u8; 32]`, …)
+//! - [`codec::PodCodec`] — zero-copy for [`bytemuck::Pod`] types (`u64`,
+//!   `[u8; 32]`, …)
 //! - [`codec::PostcardCodec`] — compact variable-length encoding for any
 //!   `#[derive(Serialize, Deserialize)]` type (default)
 //!
 //! # Structural sharing
 //!
-//! Path-copy semantics: insert/remove return a new root; unchanged subtrees are
-//! shared. A `FolioBTree<SlabPageId, u32>` refcount table tracks sharing.
-//! `Clone` increments the root's refcount in O(1). `Drop` frees the path in O(log N).
+//! Path-copy semantics: insert/remove allocate new nodes only along the path
+//! from root to the modified leaf (O(log N) pages per operation).  Unchanged
+//! subtrees are shared between the old and new roots via a per-store
+//! `HashMap<u64, u32>` refcount table.
+//!
+//! - `Clone` increments the root's refcount — O(1).
+//! - `Drop` performs an iterative DFS, decrementing refcounts and batch-freeing
+//!   pages that reach zero — O(log N) per snapshot dropped.
+//!
+//! # Consensus backend
+//!
+//! `pds-folio` does not implement consensus itself.  The `B: Backend` type
+//! parameter allows callers to pass a consensus-aware backend (e.g. Raft-backed
+//! folio).  A `consensus` feature flag (`consensus = ["folio-consensus"]`) will be
+//! added when a folio consensus backend exists.
 //!
 //! # Status
 //!
-//! **Phase G scaffold** — types are declared, [`codec`] is implemented.
-//! Full CRUD (G.1–G.12) is in progress. See `docs/impl-plan.md`.
+//! **Phase G complete** — all five collection types implemented with full CRUD,
+//! structural sharing, and [`pds::traits`] impls.  G.1–G.12 done.
+//! See `docs/impl-plan.md` for the full history.
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]

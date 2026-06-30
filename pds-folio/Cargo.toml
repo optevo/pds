@@ -17,6 +17,9 @@ path = "./src/lib.rs"
 
 [features]
 default = []
+# consensus = ["folio-consensus"]  # Placeholder — add when folio-consensus crate exists.
+#                                   # Allows callers to pass a Raft-backed Backend.
+# serde = ["dep:serde_core"]       # Placeholder — add if no_std + alloc environments needed.
 
 [dependencies]
 # Folio storage substrate — mmap-backed page allocator.
