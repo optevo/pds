@@ -19,6 +19,26 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.18 — `FolioTextMap<K, B>` — `OrdMap`-keyed map with rope values.**
+  - `pds-folio/src/text_map.rs`: complete rewrite.
+    - Internal representation: `pds::OrdMap<K, FolioRope<B>>` — no shared store, no `Arc`
+      wrapper on values, no custom `Drop`.
+    - `FolioRope::clone()` is O(1) (bumps internal `Arc` page-set refcount), so `OrdMap`'s
+      path-copy structural sharing can clone values directly without an extra `Arc` layer.
+    - `FolioRope::Drop` (`Arc::try_unwrap` on `page_set`) handles all page lifecycle —
+      `FolioTextMap` needs no custom `Drop`.
+    - Removed `TextMapError` and `HamtError` imports; error type is now `RopeError` directly.
+    - Removed `C` (codec) type parameter — no HAMT index, no codec needed.
+    - `new()` — parameterless, no `B: Default` required.
+    - `insert(key, store, text)` — caller supplies `FolioStore<B>` so no `B: Default` needed
+      (avoids the `MemBackend` orphan-rule problem; `MemBackend` has no `Default` impl).
+    - `remove(key)` — O(log N) path-copy via `OrdMap::without`.
+    - `get(key)` — returns `Option<FolioRope<B>>` (O(1) clone).
+    - `Clone`, `Default`, `Debug` derived by delegation to `inner`.
+  - `pds-folio/src/lib.rs`: updated `FolioTextMap` row in the collection table to show
+    `FolioTextMap<K, B>` (no C parameter, no shared store, no custom Drop).
+  - 10 unit tests, all green.  pds-folio fmt/clippy/doc clean.
+
 - **[2026-07-01] G.17 — Shared rope store: `FolioRope::new_in` and `FolioRope::store()`.**
   - `folio-rope/src/lib.rs`: added crate-root re-exports for `ChunkStore`, `FolioRope`,
     `RopeSnapshot`, `RopeError`.
@@ -603,60 +623,25 @@ reads correctly.
 
 ---
 
-### G.18 — `FolioTextMap<K, C, B>` — HAMT-keyed map with rope values
+### G.18 — `FolioTextMap<K, B>` — `OrdMap`-keyed map with rope values (DONE — see above)
 
-**Goal:** A persistent, path-copy map whose keys are any `Serialize + Deserialize + Ord`
-type and whose values are `FolioRope<B>` text buffers. Clone is O(1). Mutation is O(log N)
-for the HAMT plus O(n) for the materialise-and-rebuild rope mutation (DEC-003; FR-9 will
-improve the rope part).
+**Implemented design** (differs from original plan):
 
-**Internal representation:**
+Internal representation: `pds::OrdMap<K, FolioRope<B>>` — simpler than the planned
+HAMT + shared store + page_sets design.
 
-```
-FolioTextMap<K, C, B> {
-    index:      HamtMap<K, u64, C, B>,   // K → btree_meta page ID
-    rope_store: Arc<Mutex<ChunkStore<B>>>, // shared by all map snapshots
-    page_sets:  Option<Arc<HashMap<u64, Arc<Vec<u64>>>>>,
-    //          btree_meta → Arc<page_set> for each live entry
-}
-```
+- `FolioRope::clone()` is O(1), so `OrdMap`'s path-copy structural sharing can clone
+  values directly.  No shared store, no `Arc` wrapper on values, no custom `Drop`.
+- `FolioRope::Drop` handles page lifecycle via `Arc::try_unwrap` on its `page_set`.
+- The `C` (codec) type parameter was dropped — no HAMT index, no codec needed.
+- `insert` takes a `FolioStore<B>` from the caller instead of creating one via
+  `B::default()`, because `MemBackend` does not implement `Default` (orphan rule prevents
+  adding the impl in pds-folio).
+- Iterator not yet implemented — deferred to a future item if needed.
 
-- `index` stores the btree_meta page ID for each key (raw `u64`, PodCodec — no serde).
-- `rope_store` is shared across all clones / snapshots via `Arc`.
-- `page_sets` tracks the per-entry page sets (btree_meta + root_node + chunk pages) for
-  lifecycle management, using the same `Arc::try_unwrap` pattern as `FolioRope::Drop`.
-
-**Public API:**
-
-| Method | Signature | Notes |
-|--------|-----------|-------|
-| `new(store)` | `FolioStore<B> → Self` | Creates empty map; allocates rope store |
-| `len()` | `&self → usize` | Delegates to `index.len()` |
-| `is_empty()` | `&self → bool` | |
-| `get(key)` | `&self, &K → Option<FolioRope<B>>` | Reconstructs rope from page ID + shared store |
-| `insert(key, text)` | `&self, K, &str → Result<Self>` | Creates rope, path-copies index, returns new snapshot |
-| `remove(key)` | `&self, &K → Option<Self>` | Path-copies index without the entry; drops page_set for removed key when last holder |
-| `iter()` | `&self → impl Iterator<Item=(K, FolioRope<B>)>` | Iterates all entries |
-
-**Clone:** `Arc::clone` the `rope_store` + HAMT root refcount bump (O(1) total).
-
-**Drop:** for each entry in `page_sets` whose `Arc` has strong count → 1, free the
-pages from `rope_store`. Uses `Arc::try_unwrap` exactly as `FolioRope::Drop` does.
-
-**Tests:**
-- Empty map: `len() == 0`, `get` returns `None`.
-- Single insert: `get` returns rope with correct content.
-- Multiple inserts: all keys present, correct values.
-- Snapshot isolation: insert on a clone does not appear in original.
-- Remove: entry gone from new snapshot, present in old snapshot.
-- Page lifecycle: after old snapshot dropped, its rope pages are freed; new snapshot
-  still reads correctly.
-- Large map (256 entries): verify no page leaks after all snapshots dropped.
-- Proptest: model-based against `HashMap<String, String>` (20 cases).
-
-**Acceptance:** `test.sh` green; `FolioTextMap` accessible as `pds_folio::text_map::FolioTextMap`.
-
-**Dependencies:** G.17. No dependency on FR-9 — the map is correct with materialise-and-rebuild rope mutations; FR-9 makes rope mutations O(log n) transparently.
+**Future work (if required):**
+- `iter()` returning `impl Iterator<Item = (K, FolioRope<B>)>`.
+- Proptest model-based tests against `HashMap<String, String>`.
 
 ---
 

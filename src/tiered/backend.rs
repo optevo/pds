@@ -88,3 +88,44 @@ where
         self.clone()
     }
 }
+
+/// An ordered key-value backend that extends [`CollectionBackend`] with
+/// range queries and ordered iteration.
+///
+/// Implement this trait on backends that wrap ordered collections (`BTreeMap`,
+/// `pds::OrdMap`) to enable [`TieredCollectionOrdExt`][super::TieredCollectionOrdExt]
+/// methods on a `TieredCollection` whose both tiers implement it.
+///
+/// # Implementor notes
+///
+/// - All returned `Vec`s are in **ascending key order**.
+/// - `K` must additionally implement [`Ord`] because ordered iteration and
+///   range queries require a total order on keys.
+pub trait OrderedCollectionBackend<K, V>: CollectionBackend<K, V>
+where
+    K: Clone + Eq + std::hash::Hash + Ord,
+    V: Clone,
+{
+    /// Returns all key-value pairs whose keys lie within `range`, in ascending
+    /// key order.
+    ///
+    /// Time: O(k) where k is the number of entries in the range.
+    fn range(&self, range: impl std::ops::RangeBounds<K>) -> Vec<(K, V)>;
+
+    /// Returns all key-value pairs in ascending key order.
+    ///
+    /// Time: O(n).
+    fn iter_ordered(&self) -> Vec<(K, V)>;
+
+    /// Returns the smallest key present, or `None` if the backend is empty.
+    ///
+    /// Time: O(log N) for tree-backed backends; O(1) for backends that cache
+    /// min/max.
+    fn first_key(&self) -> Option<K>;
+
+    /// Returns the largest key present, or `None` if the backend is empty.
+    ///
+    /// Time: O(log N) for tree-backed backends; O(1) for backends that cache
+    /// min/max.
+    fn last_key(&self) -> Option<K>;
+}

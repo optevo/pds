@@ -1,16 +1,18 @@
-//! Concrete [`CollectionBackend`] implementations.
+//! Concrete [`CollectionBackend`] and [`OrderedCollectionBackend`] implementations.
 //!
-//! Three backends are provided:
+//! The following backends are provided:
 //!
 //! | Backend | Underlying store | Feature gate |
 //! |---------|-----------------|--------------|
 //! | [`StdHashMapBackend`] | `std::collections::HashMap` | `tiered` (always) |
 //! | [`PdsHashMapBackend`] | `pds::HashMap` (HAMT, structural sharing) | `tiered` (always) |
+//! | [`StdBTreeMapBackend`] | `std::collections::BTreeMap` | `tiered` (always) |
+//! | [`PdsOrdMapBackend`] | `pds::OrdMap` (B+ tree, structural sharing) | `tiered` (always) |
 //! | [`MerkleWrapperBackend`] | `MerkleWrapper<pds::HashMap<K, V>>` | `tiered` + `traits` |
 //!
-//! All three implement [`Clone`] and [`Default`].
+//! All backends implement [`Clone`] and [`Default`].
 
-use super::backend::CollectionBackend;
+use super::backend::{CollectionBackend, OrderedCollectionBackend};
 
 // --- StdHashMapBackend ---
 
@@ -325,5 +327,267 @@ where
             .collect();
         self.inner = crate::MerkleWrapper::new(crate::HashMap::new());
         pairs
+    }
+}
+
+// --- StdBTreeMapBackend ---
+
+/// A [`CollectionBackend`] and [`OrderedCollectionBackend`] backed by
+/// [`std::collections::BTreeMap`].
+///
+/// All keyed operations are O(log n). `Clone` is O(n) — a full deep copy.
+/// Iteration is always in ascending key order.
+///
+/// Use this backend as a hot tier when ordered queries (`range`, `iter_ordered`)
+/// are needed and structural sharing is not required.
+#[derive(Clone, Default)]
+pub struct StdBTreeMapBackend<K, V> {
+    /// Inner standard-library B-tree map.
+    inner: std::collections::BTreeMap<K, V>,
+}
+
+impl<K, V> StdBTreeMapBackend<K, V> {
+    /// Creates an empty backend.
+    ///
+    /// Time: O(1).
+    pub fn new() -> Self {
+        Self {
+            inner: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+impl<K, V> CollectionBackend<K, V> for StdBTreeMapBackend<K, V>
+where
+    K: Clone + Eq + std::hash::Hash + Ord + Send + 'static,
+    V: Clone + Send + 'static,
+{
+    fn get(&self, key: &K) -> Option<V> {
+        self.inner.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.inner.insert(key, value)
+    }
+
+    fn remove(&mut self, key: &K) -> Option<V> {
+        self.inner.remove(key)
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Clears the backend and loads the supplied entries.
+    ///
+    /// Time: O(n) where n is the length of `iter`.
+    fn load_from(&mut self, iter: impl Iterator<Item = (K, V)>) {
+        self.inner.clear();
+        self.inner.extend(iter);
+    }
+
+    /// Drains all entries, leaving the backend empty.
+    ///
+    /// The standard `BTreeMap::into_iter` is used after replacing the inner map
+    /// with an empty one.
+    ///
+    /// Time: O(n).
+    fn drain(&mut self) -> Vec<(K, V)> {
+        let old = std::mem::replace(&mut self.inner, std::collections::BTreeMap::new());
+        old.into_iter().collect()
+    }
+}
+
+impl<K, V> OrderedCollectionBackend<K, V> for StdBTreeMapBackend<K, V>
+where
+    K: Clone + Eq + std::hash::Hash + Ord + Send + 'static,
+    V: Clone + Send + 'static,
+{
+    /// Returns entries whose keys lie within `range`, in ascending order.
+    ///
+    /// Time: O(log n + k) where k is the number of entries in the range.
+    fn range(&self, range: impl std::ops::RangeBounds<K>) -> Vec<(K, V)> {
+        self.inner
+            .range(range)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Returns all entries in ascending key order.
+    ///
+    /// Time: O(n).
+    fn iter_ordered(&self) -> Vec<(K, V)> {
+        self.inner
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Returns the smallest key, or `None` if empty.
+    ///
+    /// Time: O(log n).
+    fn first_key(&self) -> Option<K> {
+        self.inner.keys().next().cloned()
+    }
+
+    /// Returns the largest key, or `None` if empty.
+    ///
+    /// Time: O(log n).
+    fn last_key(&self) -> Option<K> {
+        self.inner.keys().next_back().cloned()
+    }
+}
+
+// --- PdsOrdMapBackend ---
+
+/// A [`CollectionBackend`] and [`OrderedCollectionBackend`] backed by
+/// `pds::OrdMap` (a persistent B+ tree with structural sharing).
+///
+/// All mutations use the functional API — each call produces a new map stored in
+/// place. `Clone` is O(1) via reference-count increment.
+///
+/// Use this backend as a cold tier when O(1) snapshots, structural sharing, and
+/// ordered queries are all required.
+#[derive(Clone, Default)]
+pub struct PdsOrdMapBackend<K, V>
+where
+    K: Clone + Ord + 'static,
+    V: Clone + 'static,
+{
+    /// Inner pds B+ tree map.
+    inner: crate::OrdMap<K, V>,
+}
+
+impl<K, V> PdsOrdMapBackend<K, V>
+where
+    K: Clone + Ord + 'static,
+    V: Clone + 'static,
+{
+    /// Creates an empty backend.
+    ///
+    /// Time: O(1).
+    pub fn new() -> Self {
+        Self {
+            inner: crate::OrdMap::new(),
+        }
+    }
+
+    /// Returns a reference to the inner `pds::OrdMap`.
+    ///
+    /// Time: O(1).
+    pub fn inner(&self) -> &crate::OrdMap<K, V> {
+        &self.inner
+    }
+}
+
+impl<K, V> CollectionBackend<K, V> for PdsOrdMapBackend<K, V>
+where
+    K: Clone + Eq + std::hash::Hash + Ord + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    fn get(&self, key: &K) -> Option<V> {
+        self.inner.get(key).cloned()
+    }
+
+    /// Inserts using the pds functional API.
+    ///
+    /// Each call creates a new map with the entry added (path-copy).
+    ///
+    /// Time: O(log N).
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        let prev = self.inner.get(&key).cloned();
+        self.inner = self.inner.update(key, value);
+        prev
+    }
+
+    /// Removes using the pds functional API.
+    ///
+    /// Each call creates a new map with the entry removed.
+    ///
+    /// Time: O(log N).
+    fn remove(&mut self, key: &K) -> Option<V> {
+        let prev = self.inner.get(key).cloned();
+        if prev.is_some() {
+            self.inner = self.inner.without(key);
+        }
+        prev
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Replaces the backend with the supplied entries via the functional API.
+    ///
+    /// Starts from an empty map and inserts each entry in turn.
+    ///
+    /// Time: O(n log n).
+    fn load_from(&mut self, iter: impl Iterator<Item = (K, V)>) {
+        let mut map = crate::OrdMap::new();
+        for (k, v) in iter {
+            map = map.update(k, v);
+        }
+        self.inner = map;
+    }
+
+    /// Drains all entries, resetting the backend to an empty map.
+    ///
+    /// Time: O(n).
+    fn drain(&mut self) -> Vec<(K, V)> {
+        let pairs: Vec<(K, V)> = self
+            .inner
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        self.inner = crate::OrdMap::new();
+        pairs
+    }
+}
+
+impl<K, V> OrderedCollectionBackend<K, V> for PdsOrdMapBackend<K, V>
+where
+    K: Clone + Eq + std::hash::Hash + Ord + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    /// Returns entries whose keys lie within `range`, in ascending order.
+    ///
+    /// Time: O(log n + k) where k is the number of entries in the range.
+    fn range(&self, range: impl std::ops::RangeBounds<K>) -> Vec<(K, V)> {
+        self.inner
+            .range(range)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Returns all entries in ascending key order.
+    ///
+    /// Time: O(n).
+    fn iter_ordered(&self) -> Vec<(K, V)> {
+        self.inner
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Returns the smallest key, or `None` if empty.
+    ///
+    /// Time: O(log N).
+    fn first_key(&self) -> Option<K> {
+        self.inner.get_min().map(|(k, _)| k.clone())
+    }
+
+    /// Returns the largest key, or `None` if empty.
+    ///
+    /// Time: O(log N).
+    fn last_key(&self) -> Option<K> {
+        self.inner.get_max().map(|(k, _)| k.clone())
     }
 }

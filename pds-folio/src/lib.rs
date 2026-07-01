@@ -12,7 +12,7 @@
 //! | [`folio_ordmap::FolioOrdMap`] | [`folio_ordmap`] | [`pds::traits::PersistentOrdMap`] |
 //! | [`folio_ordset::FolioOrdSet`] | [`folio_ordset`] | [`pds::traits::PersistentOrdSet`] |
 //! | [`rope::FolioRope`] | [`rope`] | — (persistent UTF-8 text buffer — serde-free, O(1) clone) |
-//! | [`text_map::FolioTextMap`] | [`text_map`] | — (OrdMap-keyed map with FolioRope values; O(1) clone, no shared store) |
+//! | [`text_map::FolioTextMap`] | [`text_map`] | — (`FolioTextMap<K, B>`; OrdMap-keyed map with FolioRope values; O(1) clone, no shared store, no custom Drop) |
 //!
 //! # Storage model
 //!

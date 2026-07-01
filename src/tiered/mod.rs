@@ -51,12 +51,23 @@
 pub mod backend;
 pub mod backends;
 pub mod policy;
+pub mod sequence_backend;
+pub mod sequence_backends;
+pub mod sequence;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_ord;
+#[cfg(test)]
+mod tests_seq;
+#[cfg(test)]
+mod tests_compose;
 
-pub use backend::CollectionBackend;
+pub use backend::{CollectionBackend, OrderedCollectionBackend};
 pub use policy::PropagationPolicy;
+pub use sequence::TieredSequence;
+pub use sequence::TieredVector;
 
 use std::collections::HashSet;
 use std::marker::PhantomData;
@@ -422,6 +433,116 @@ where
             thread: Some(thread),
         }
     }
+}
+
+// --- Type alias: TieredOrdMap ---
+
+/// A [`TieredCollection`] constrained to ordered backends.
+///
+/// `TieredOrdMap<K, V, Hot, Cold>` is a type alias for
+/// `TieredCollection<K, V, Hot, Cold>` with the constraint that both `Hot` and
+/// `Cold` implement [`OrderedCollectionBackend`][backend::OrderedCollectionBackend].
+/// This enables the extension methods on [`TieredCollectionOrdExt`].
+///
+/// # Example
+///
+/// ```
+/// # use pds::tiered::{TieredOrdMap, PropagationPolicy};
+/// # use pds::tiered::backends::{StdBTreeMapBackend, PdsOrdMapBackend};
+/// let tc: TieredOrdMap<i32, &str, StdBTreeMapBackend<i32, &str>, PdsOrdMapBackend<i32, &str>> =
+///     TieredOrdMap::new(StdBTreeMapBackend::new(), PdsOrdMapBackend::new(), PropagationPolicy::Manual);
+/// ```
+pub type TieredOrdMap<K, V, Hot, Cold> = TieredCollection<K, V, Hot, Cold>;
+
+// --- Extension trait: TieredCollectionOrdExt ---
+
+/// Extension methods for [`TieredCollection`] when both tiers implement
+/// [`OrderedCollectionBackend`][backend::OrderedCollectionBackend].
+///
+/// These methods merge hot and cold tier results in key order, with hot entries
+/// winning on duplicate keys. Pending deletes are excluded from the results.
+pub trait TieredCollectionOrdExt<K, V> {
+    /// Returns all key-value pairs whose keys lie within `range`, in ascending
+    /// key order.
+    ///
+    /// Hot and cold tiers are merged: hot wins on key conflicts. Pending deletes
+    /// are excluded.
+    ///
+    /// Time: O(n) where n is the total number of entries in both tiers.
+    fn range(&self, range: impl std::ops::RangeBounds<K>) -> Vec<(K, V)>;
+
+    /// Returns all key-value pairs in ascending key order.
+    ///
+    /// Hot and cold tiers are merged: hot wins on key conflicts. Pending deletes
+    /// are excluded.
+    ///
+    /// Time: O(n) where n is the total number of entries in both tiers.
+    fn iter_ordered(&self) -> Vec<(K, V)>;
+}
+
+impl<K, V, Hot, Cold> TieredCollectionOrdExt<K, V> for TieredCollection<K, V, Hot, Cold>
+where
+    K: Clone + Eq + std::hash::Hash + Ord + Send + 'static,
+    V: Clone + Send + 'static,
+    Hot: backend::OrderedCollectionBackend<K, V> + Clone,
+    Cold: backend::OrderedCollectionBackend<K, V> + Clone,
+{
+    fn range(&self, range: impl std::ops::RangeBounds<K>) -> Vec<(K, V)> {
+        use std::ops::Bound;
+        // Materialise bounds so we can query both tiers without consuming `range`.
+        let start = match range.start_bound() {
+            Bound::Included(k) => Bound::Included(k.clone()),
+            Bound::Excluded(k) => Bound::Excluded(k.clone()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(k) => Bound::Included(k.clone()),
+            Bound::Excluded(k) => Bound::Excluded(k.clone()),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let guard = self.state.lock().expect("TieredCollection mutex poisoned");
+        let hot_results = guard.hot.range((start.clone(), end.clone()));
+        let cold_results = guard.cold.range((start, end));
+        merge_ordered_results(hot_results, cold_results, &guard.pending_deletes)
+    }
+
+    fn iter_ordered(&self) -> Vec<(K, V)> {
+        let guard = self.state.lock().expect("TieredCollection mutex poisoned");
+        merge_ordered_results(
+            guard.hot.iter_ordered(),
+            guard.cold.iter_ordered(),
+            &guard.pending_deletes,
+        )
+    }
+}
+
+/// Merges hot and cold ordered results, with hot winning on duplicates and
+/// pending deletes excluded from the output.
+///
+/// Both `hot` and `cold` slices must be in ascending key order (invariant of
+/// `OrderedCollectionBackend`). The output is in ascending key order.
+fn merge_ordered_results<K, V>(
+    hot: Vec<(K, V)>,
+    cold: Vec<(K, V)>,
+    pending_deletes: &HashSet<K>,
+) -> Vec<(K, V)>
+where
+    K: Clone + Ord + Eq + std::hash::Hash,
+    V: Clone,
+{
+    // Collect hot keys for O(1) duplicate detection.
+    // Clone the keys into the set so we can still move `hot` later.
+    let hot_keys: HashSet<K> = hot.iter().map(|(k, _)| k.clone()).collect();
+
+    // Merge: cold entries not in hot, followed by all hot entries, then sort.
+    let mut result: Vec<(K, V)> = cold
+        .into_iter()
+        .filter(|(k, _)| !hot_keys.contains(k) && !pending_deletes.contains(k))
+        .chain(hot.into_iter().filter(|(k, _)| !pending_deletes.contains(k)))
+        .collect();
+
+    result.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    result
 }
 
 // --- CollectionBackend impl for TieredCollection ---
