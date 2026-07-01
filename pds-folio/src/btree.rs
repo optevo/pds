@@ -41,9 +41,7 @@
 //! [`FolioOrdMap`]: crate::folio_ordmap::FolioOrdMap
 //! [`FolioOrdSet`]: crate::folio_ordset::FolioOrdSet
 
-use serde::{Deserialize, Serialize};
-
-use crate::codec::{Codec, CodecError};
+use crate::codec::{CodecError, ValueCodec};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -155,16 +153,14 @@ impl LeafBuilder {
     /// Returns [`CodecError`] if encoding fails or if the page has no room.
     pub fn push_encoded<K, V, C>(&mut self, key: &K, value: &V) -> Result<(), CodecError>
     where
-        K: Serialize,
-        V: Serialize,
-        C: Codec,
+        C: ValueCodec<K> + ValueCodec<V>,
     {
         if self.is_full() {
             return Err(CodecError::EncodeTooLarge);
         }
         let mut buf = Vec::new();
-        C::encode(key, &mut buf)?;
-        C::encode(value, &mut buf)?;
+        <C as ValueCodec<K>>::encode(key, &mut buf)?;
+        <C as ValueCodec<V>>::encode(value, &mut buf)?;
         let needed = buf.len();
         if self.data_cursor + needed > DATA_SECTION_LEAF {
             return Err(CodecError::EncodeTooLarge);
@@ -263,13 +259,13 @@ impl<'a> LeafReader<'a> {
     /// Returns [`CodecError`] if decoding fails.
     pub fn decode_key<K, C>(&self, i: usize) -> Result<(K, &[u8]), CodecError>
     where
-        K: for<'de> Deserialize<'de>,
-        C: Codec,
+        C: ValueCodec<K>,
     {
-        // We need to decode only the key and return remaining bytes for value.
-        // Use postcard's `take_from_bytes` to split key from value.
+        // Decode only the key and return remaining bytes for the value.
+        // Delegates to C::take so PodCodec uses size_of::<K>() and
+        // PostcardCodec uses postcard::take_from_bytes.
         let bytes = self.entry_bytes(i);
-        postcard::take_from_bytes::<K>(bytes).map_err(|e| CodecError::Decode(e.to_string()))
+        <C as ValueCodec<K>>::take(bytes)
     }
 
     /// Decodes both key and value of entry `i` using codec `C`.
@@ -279,14 +275,11 @@ impl<'a> LeafReader<'a> {
     /// Returns [`CodecError`] if decoding fails.
     pub fn decode_kv<K, V, C>(&self, i: usize) -> Result<(K, V), CodecError>
     where
-        K: for<'de> Deserialize<'de>,
-        V: for<'de> Deserialize<'de>,
-        C: Codec,
+        C: ValueCodec<K> + ValueCodec<V>,
     {
         let bytes = self.entry_bytes(i);
-        let (key, rest) =
-            postcard::take_from_bytes::<K>(bytes).map_err(|e| CodecError::Decode(e.to_string()))?;
-        let value = C::decode::<V>(rest)?;
+        let (key, rest) = <C as ValueCodec<K>>::take(bytes)?;
+        let value = <C as ValueCodec<V>>::decode(rest)?;
         Ok((key, value))
     }
 
@@ -340,8 +333,7 @@ pub const DATA_SECTION_INTERNAL: usize = INTERNAL_KEY_DATA_END - INTERNAL_KEY_DA
 /// or if `children.len() != separator_keys.len() + 1`.
 pub fn build_internal_node<K, C>(children: &[u64], separator_keys: &[K]) -> BTreeNodePage
 where
-    K: Serialize,
-    C: Codec,
+    C: ValueCodec<K>,
 {
     assert_eq!(
         children.len(),
@@ -369,7 +361,7 @@ where
     let mut data_cursor: usize = 0;
     for (i, key) in separator_keys.iter().enumerate() {
         let mut buf = Vec::new();
-        C::encode(key, &mut buf).expect("separator key encoding failed");
+        <C as ValueCodec<K>>::encode(key, &mut buf).expect("separator key encoding failed");
         let needed = buf.len();
         assert!(
             data_cursor + needed <= DATA_SECTION_INTERNAL,
@@ -443,8 +435,7 @@ impl<'a> InternalReader<'a> {
     /// Panics if `i >= count()`.
     pub fn decode_separator_key<K, C>(&self, i: usize) -> Result<K, CodecError>
     where
-        K: for<'de> Deserialize<'de>,
-        C: Codec,
+        C: ValueCodec<K>,
     {
         let count = self.count();
         assert!(
@@ -455,15 +446,15 @@ impl<'a> InternalReader<'a> {
         let end = if i + 1 < count {
             self.key_offset_at(i + 1) as usize
         } else {
-            // Last key: ends where the data section ends relative to data written.
-            // We need the end of the last key's bytes.  Walk via decode.
-            // Use postcard take to get the end.
+            // Last key: the stored key_offsets table has no sentinel entry for
+            // the end of the last key, so we use C::take to consume the key
+            // from the start of its byte region — the remaining bytes are discarded.
             let key_bytes = &self.page.0[INTERNAL_KEY_DATA_START + start..INTERNAL_KEY_DATA_END];
-            return postcard::take_from_bytes::<K>(key_bytes)
-                .map(|(k, _)| k)
-                .map_err(|e| CodecError::Decode(e.to_string()));
+            return <C as ValueCodec<K>>::take(key_bytes).map(|(k, _)| k);
         };
-        C::decode::<K>(&self.page.0[INTERNAL_KEY_DATA_START + start..INTERNAL_KEY_DATA_START + end])
+        <C as ValueCodec<K>>::decode(
+            &self.page.0[INTERNAL_KEY_DATA_START + start..INTERNAL_KEY_DATA_START + end],
+        )
     }
 
     /// Returns the data-section key offset for separator `i`.
@@ -487,8 +478,8 @@ impl<'a> InternalReader<'a> {
     /// Returns [`CodecError`] if any separator key decoding fails.
     pub fn find_child<K, C>(&self, key: &K) -> Result<usize, CodecError>
     where
-        K: for<'de> Deserialize<'de> + Ord,
-        C: Codec,
+        K: Ord,
+        C: ValueCodec<K>,
     {
         let count = self.count();
         // Linear scan: find first separator >= key, use the child to the left.
@@ -509,6 +500,8 @@ impl<'a> InternalReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::PodCodec;
+    #[cfg(feature = "serde")]
     use crate::codec::PostcardCodec;
 
     // --- Size and layout ---
@@ -557,6 +550,82 @@ mod tests {
         assert_eq!(reader.next_leaf(), 0);
     }
 
+    // --- Leaf builder / reader (PodCodec — no serde feature required) ---
+
+    #[test]
+    fn leaf_single_entry_pod() {
+        let mut b = LeafBuilder::new();
+        b.push_encoded::<u32, u64, PodCodec>(&42u32, &100u64)
+            .unwrap();
+        let page = b.finish();
+        let reader = LeafReader::new(&page);
+        assert_eq!(reader.count(), 1);
+        let (k, v) = reader.decode_kv::<u32, u64, PodCodec>(0).unwrap();
+        assert_eq!(k, 42u32);
+        assert_eq!(v, 100u64);
+    }
+
+    #[test]
+    fn leaf_multiple_entries_in_order() {
+        let mut b = LeafBuilder::new();
+        for i in 0u32..10 {
+            b.push_encoded::<u32, u32, PodCodec>(&i, &(i * 2))
+                .unwrap();
+        }
+        let page = b.finish();
+        let reader = LeafReader::new(&page);
+        assert_eq!(reader.count(), 10);
+        for i in 0u32..10 {
+            let (k, v) = reader.decode_kv::<u32, u32, PodCodec>(i as usize).unwrap();
+            assert_eq!(k, i);
+            assert_eq!(v, i * 2);
+        }
+    }
+
+    #[test]
+    fn leaf_full_at_btree_order() {
+        let mut b = LeafBuilder::new();
+        let mut last_ok = 0usize;
+        for i in 0..BTREE_ORDER {
+            // Use short keys and values to avoid data overflow.
+            let result = b.push_encoded::<u8, u8, PodCodec>(&(i as u8), &(i as u8));
+            assert!(result.is_ok(), "push {i} failed unexpectedly");
+            last_ok = i;
+        }
+        assert_eq!(last_ok, BTREE_ORDER - 1);
+        assert!(b.is_full());
+        // One more push should fail.
+        let result = b.push_encoded::<u8, u8, PodCodec>(&0u8, &0u8);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn leaf_next_leaf_pointer() {
+        let mut b = LeafBuilder::new();
+        b.push_encoded::<u32, u32, PodCodec>(&1u32, &1u32).unwrap();
+        b.set_next_leaf(12345u64);
+        let page = b.finish();
+        let reader = LeafReader::new(&page);
+        assert_eq!(reader.next_leaf(), 12345u64);
+    }
+
+    #[test]
+    fn leaf_decode_key_only_pod() {
+        let mut b = LeafBuilder::new();
+        b.push_encoded::<u64, u64, PodCodec>(&999u64, &888u64)
+            .unwrap();
+        let page = b.finish();
+        let reader = LeafReader::new(&page);
+        let (k, rest) = reader.decode_key::<u64, PodCodec>(0).unwrap();
+        assert_eq!(k, 999u64);
+        // rest should decode as the value.
+        let v: u64 = PodCodec::decode(rest).unwrap();
+        assert_eq!(v, 888u64);
+    }
+
+    // --- Leaf builder / reader (PostcardCodec — requires serde feature) ---
+
+    #[cfg(feature = "serde")]
     #[test]
     fn leaf_single_entry_postcard() {
         let mut b = LeafBuilder::new();
@@ -570,42 +639,7 @@ mod tests {
         assert_eq!(v, 100u64);
     }
 
-    #[test]
-    fn leaf_multiple_entries_in_order() {
-        let mut b = LeafBuilder::new();
-        for i in 0u32..10 {
-            b.push_encoded::<u32, u32, PostcardCodec>(&i, &(i * 2))
-                .unwrap();
-        }
-        let page = b.finish();
-        let reader = LeafReader::new(&page);
-        assert_eq!(reader.count(), 10);
-        for i in 0u32..10 {
-            let (k, v) = reader
-                .decode_kv::<u32, u32, PostcardCodec>(i as usize)
-                .unwrap();
-            assert_eq!(k, i);
-            assert_eq!(v, i * 2);
-        }
-    }
-
-    #[test]
-    fn leaf_full_at_btree_order() {
-        let mut b = LeafBuilder::new();
-        let mut last_ok = 0usize;
-        for i in 0..BTREE_ORDER {
-            // Use short keys and values to avoid data overflow.
-            let result = b.push_encoded::<u8, u8, PostcardCodec>(&(i as u8), &(i as u8));
-            assert!(result.is_ok(), "push {i} failed unexpectedly");
-            last_ok = i;
-        }
-        assert_eq!(last_ok, BTREE_ORDER - 1);
-        assert!(b.is_full());
-        // One more push should fail.
-        let result = b.push_encoded::<u8, u8, PostcardCodec>(&0u8, &0u8);
-        assert!(result.is_err());
-    }
-
+    #[cfg(feature = "serde")]
     #[test]
     fn leaf_string_kv_round_trip() {
         let mut b = LeafBuilder::new();
@@ -631,47 +665,19 @@ mod tests {
         assert_eq!(v1, "value2");
     }
 
-    #[test]
-    fn leaf_next_leaf_pointer() {
-        let mut b = LeafBuilder::new();
-        b.push_encoded::<u32, u32, PostcardCodec>(&1u32, &1u32)
-            .unwrap();
-        b.set_next_leaf(12345u64);
-        let page = b.finish();
-        let reader = LeafReader::new(&page);
-        assert_eq!(reader.next_leaf(), 12345u64);
-    }
-
-    #[test]
-    fn leaf_decode_key_only() {
-        let mut b = LeafBuilder::new();
-        b.push_encoded::<u64, u64, PostcardCodec>(&999u64, &888u64)
-            .unwrap();
-        let page = b.finish();
-        let reader = LeafReader::new(&page);
-        let (k, rest) = reader.decode_key::<u64, PostcardCodec>(0).unwrap();
-        assert_eq!(k, 999u64);
-        // rest should decode as the value.
-        let v: u64 = PostcardCodec::decode(rest).unwrap();
-        assert_eq!(v, 888u64);
-    }
-
-    // --- Internal node builder / reader ---
+    // --- Internal node builder / reader (PodCodec) ---
 
     #[test]
     fn internal_single_separator() {
-        // 2 children, 1 separator key.
         let children = [10u64, 20u64];
         let separators = [5u32];
-        let page = build_internal_node::<u32, PostcardCodec>(&children, &separators);
+        let page = build_internal_node::<u32, PodCodec>(&children, &separators);
         let reader = InternalReader::new(&page);
         assert_eq!(reader.count(), 1);
         assert_eq!(reader.child_count(), 2);
         assert_eq!(reader.child_page_id(0), 10u64);
         assert_eq!(reader.child_page_id(1), 20u64);
-        let sep: u32 = reader
-            .decode_separator_key::<u32, PostcardCodec>(0)
-            .unwrap();
+        let sep: u32 = reader.decode_separator_key::<u32, PodCodec>(0).unwrap();
         assert_eq!(sep, 5u32);
     }
 
@@ -679,7 +685,7 @@ mod tests {
     fn internal_three_separators() {
         let children = [1u64, 2, 3, 4];
         let separators = [10u32, 20, 30];
-        let page = build_internal_node::<u32, PostcardCodec>(&children, &separators);
+        let page = build_internal_node::<u32, PodCodec>(&children, &separators);
         let reader = InternalReader::new(&page);
         assert_eq!(reader.count(), 3);
         assert_eq!(reader.child_count(), 4);
@@ -687,47 +693,55 @@ mod tests {
             assert_eq!(reader.child_page_id(i), expected);
         }
         for (i, &expected) in [10u32, 20, 30].iter().enumerate() {
-            let sep: u32 = reader
-                .decode_separator_key::<u32, PostcardCodec>(i)
-                .unwrap();
+            let sep: u32 = reader.decode_separator_key::<u32, PodCodec>(i).unwrap();
             assert_eq!(sep, expected, "separator {i} mismatch");
         }
     }
 
     #[test]
     fn internal_find_child_routing() {
-        // 4 children, separators [10, 20, 30].
-        // key < 10  → child 0
-        // 10 ≤ key < 20 → child 1
-        // 20 ≤ key < 30 → child 2
-        // key ≥ 30 → child 3
         let children = [1u64, 2, 3, 4];
         let separators = [10u32, 20, 30];
-        let page = build_internal_node::<u32, PostcardCodec>(&children, &separators);
+        let page = build_internal_node::<u32, PodCodec>(&children, &separators);
         let reader = InternalReader::new(&page);
 
-        assert_eq!(reader.find_child::<u32, PostcardCodec>(&5).unwrap(), 0);
-        assert_eq!(reader.find_child::<u32, PostcardCodec>(&10).unwrap(), 1);
-        assert_eq!(reader.find_child::<u32, PostcardCodec>(&15).unwrap(), 1);
-        assert_eq!(reader.find_child::<u32, PostcardCodec>(&20).unwrap(), 2);
-        assert_eq!(reader.find_child::<u32, PostcardCodec>(&25).unwrap(), 2);
-        assert_eq!(reader.find_child::<u32, PostcardCodec>(&30).unwrap(), 3);
-        assert_eq!(reader.find_child::<u32, PostcardCodec>(&99).unwrap(), 3);
+        assert_eq!(reader.find_child::<u32, PodCodec>(&5).unwrap(), 0);
+        assert_eq!(reader.find_child::<u32, PodCodec>(&10).unwrap(), 1);
+        assert_eq!(reader.find_child::<u32, PodCodec>(&15).unwrap(), 1);
+        assert_eq!(reader.find_child::<u32, PodCodec>(&20).unwrap(), 2);
+        assert_eq!(reader.find_child::<u32, PodCodec>(&25).unwrap(), 2);
+        assert_eq!(reader.find_child::<u32, PodCodec>(&30).unwrap(), 3);
+        assert_eq!(reader.find_child::<u32, PodCodec>(&99).unwrap(), 3);
     }
 
     #[test]
     fn internal_max_order() {
-        // BTREE_ORDER separator keys, BTREE_ORDER+1 children.
         let children: Vec<u64> = (0..=(BTREE_ORDER as u64)).collect();
         // Use u8 keys to keep data section small.
         let separators: Vec<u8> = (1u8..=(BTREE_ORDER as u8)).collect();
-        let page = build_internal_node::<u8, PostcardCodec>(&children, &separators);
+        let page = build_internal_node::<u8, PodCodec>(&children, &separators);
         let reader = InternalReader::new(&page);
         assert_eq!(reader.count(), BTREE_ORDER);
         assert_eq!(reader.child_count(), BTREE_ORDER + 1);
         for i in 0..BTREE_ORDER {
-            let sep: u8 = reader.decode_separator_key::<u8, PostcardCodec>(i).unwrap();
+            let sep: u8 = reader.decode_separator_key::<u8, PodCodec>(i).unwrap();
             assert_eq!(sep, (i + 1) as u8);
         }
+    }
+
+    // --- Internal node builder / reader (PostcardCodec — requires serde feature) ---
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn internal_single_separator_postcard() {
+        let children = [10u64, 20u64];
+        let separators = [5u32];
+        let page = build_internal_node::<u32, PostcardCodec>(&children, &separators);
+        let reader = InternalReader::new(&page);
+        assert_eq!(reader.count(), 1);
+        let sep: u32 = reader
+            .decode_separator_key::<u32, PostcardCodec>(0)
+            .unwrap();
+        assert_eq!(sep, 5u32);
     }
 }

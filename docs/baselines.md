@@ -272,45 +272,48 @@ behaviour — they do not shift the median, only widen the CI.
 ## Tiered collections baselines {#sec:tiered-baselines}
 
 **Bench command:** `direnv exec . cargo bench --bench tiered --features tiered`
-**Date:** 2026-07-01
+**Date:** 2026-07-02 (updated after T.1 — TieredBag flush insert_many optimisation)
 **Notes:** All median times from criterion. `TieredCollection` with `PropagationPolicy::Manual`
 (propagation overhead excluded) unless otherwise noted.
-Results in `/private/tmp/bench_tiered_1782899618.txt`.
+Results in `/private/tmp/bench_tiered_new_types_1782915695.txt`.
 
 **Tuning findings (T.0d):** See `docs/perf-tuning-plan.md` for the full tuning log.
 Key result: `Mutex` is 60% faster than `RwLock` for uncontended reads on Apple Silicon
-M5 Max (5 ns vs 8 ns). `Immediate` propagation adds 2460× overhead vs `Manual` at
-n=1 000.
+M5 Max (5 ns vs 8 ns). `Immediate` propagation adds ~6× overhead vs `Manual` at n=1 000.
+
+**Tuning (T.1 — 2026-07-02):** `TieredBag::flush` now calls `cold.insert_many(elem, count)`
+instead of looping `count` times. Each distinct element costs one HAMT path-copy regardless
+of count. `flush_1000` improved 45.6% (75.5 µs → 41.2 µs). See `perf-tuning-plan.md` Log.
 
 ### TieredCollection (HashMap tier: StdHashMap → PdsHashMap)
 
 | Benchmark | n=100 | n=1 000 | n=10 000 |
 |-----------|------:|--------:|---------:|
-| `tiered_hash/insert` (build from empty) | 3.82 µs | 45.8 µs | ~420 µs |
-| `tiered_hash/get_hit` (hot-tier hit) | — | 8.51 ns | — |
-| `tiered_hash/get_cold_fallback` (cold-tier hit) | — | 10.33 ns | — |
-| `tiered_hash/flush_1000` (flush 1 000 entries) | — | 272.7 µs | — |
-| `tiered_hash/cold_snapshot` (Arc clone of cold) | — | 5.85 ns | — |
+| `tiered_hash/insert` (build from empty) | 3.59 µs | 43.4 µs | 405 µs |
+| `tiered_hash/get_hit` (hot-tier hit) | — | 8.59 ns | — |
+| `tiered_hash/get_cold_fallback` (cold-tier fallback) | — | 9.51 ns | — |
+| `tiered_hash/flush_1000` (flush 1 000 entries) | — | 279.6 µs | — |
+| `tiered_hash/cold_snapshot` (Arc clone of cold) | — | 5.60 ns | — |
 
 ### TieredCollection (OrdMap tier: StdBTreeMap → PdsOrdMap)
 
 | Benchmark | n=100 | n=1 000 | n=10 000 |
 |-----------|------:|--------:|---------:|
-| `tiered_ord/insert` (build from empty) | 2.63 µs | 35.3 µs | 643 µs |
-| `tiered_ord/get_hit` (hot-tier hit) | — | 7.90 ns | — |
-| `tiered_ord/get_cold_fallback` (cold-tier hit) | — | 10.61 ns | — |
-| `tiered_ord/flush_1000` (flush 1 000 entries) | — | 212.9 µs | — |
-| `tiered_ord/cold_snapshot` (Arc clone of cold) | — | 5.91 ns | — |
+| `tiered_ord/insert` (build from empty) | 2.51 µs | 32.8 µs | 598 µs |
+| `tiered_ord/get_hit` (hot-tier hit) | — | 7.54 ns | — |
+| `tiered_ord/get_cold_fallback` (cold-tier fallback) | — | 7.94 ns | — |
+| `tiered_ord/flush_1000` (flush 1 000 entries) | — | 174.2 µs | — |
+| `tiered_ord/cold_snapshot` (Arc clone of cold) | — | 5.65 ns | — |
 
 ### TieredSequence (Vector tier: StdVec → PdsVector)
 
 | Benchmark | n=100 | n=1 000 | n=10 000 |
 |-----------|------:|--------:|---------:|
-| `tiered_vec/push_back` (build from empty) | ~645 ns | ~5.1 µs | ~49 µs |
-| `tiered_vec/get_hit` (hot-tier hit) | — | 5.07 ns | — |
-| `tiered_vec/get_cold_fallback` (cold-tier hit) | — | 12.56 ns | — |
-| `tiered_vec/flush_1000` (flush 1 000 elements) | — | 18.73 µs | — |
-| `tiered_vec/cold_snapshot` (Arc clone of cold) | — | 10.34 ns | — |
+| `tiered_vec/push_back` (build from empty) | 654 ns | 4.95 µs | 46.5 µs |
+| `tiered_vec/get_hit` (hot-tier hit) | — | 4.83 ns | — |
+| `tiered_vec/get_cold_fallback` (cold-tier fallback) | — | 7.68 ns | — |
+| `tiered_vec/flush_1000` (flush 1 000 elements) | — | 8.05 µs | — |
+| `tiered_vec/cold_snapshot` (Arc clone of cold) | — | 11.80 ns | — |
 
 ### 3-tier TieredCollection (StdHashMap → PdsHashMap → MerkleWrapper, `traits` feature)
 
@@ -321,29 +324,122 @@ n=1 000.
 | `tiered_3tier_hash/flush_1000` (flush 1 000 entries) | — | 280.7 µs | — |
 | `tiered_3tier_hash/cold_snapshot` (Arc clone of cold) | — | 5.46 ns | — |
 
+*Note: 3-tier baselines are from 2026-07-01 (bench file: bench_tiered_1782899618.txt).*
+
 ### Propagation policy overhead (tiered_hash, n=1 000)
 
 | Policy | Time | vs Manual |
 |--------|-----:|----------:|
-| `Manual` (no propagation) | 44.1 µs | 1.0× |
-| `Immediate` (propagate after every insert) | 108.5 ms | 2 460× |
+| `Manual` (no propagation) | 44.2 µs | 1.0× |
+| `Immediate` (propagate after every insert) | 280.7 µs | 6.4× |
 
-**Observation:** `Immediate` policy propagates and flushes after every single insert,
-making it unsuitable for bulk-insert workloads. Use `Batched(n)` or `Manual` + explicit
+**Observation:** `Immediate` policy propagates and flushes after every single insert.
+At n=1 000 with unique keys (as in this benchmark, each insert adds to hot without
+accumulating count), the flush cost is bounded and the overhead is modest (6×). For
+workloads with high multiplicity per key, use `Batched(n)` or `Manual` + explicit
 `flush()` for bulk operations.
+
+### TieredSet (StdHashSet → PdsHashSet)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_set/insert` | 3.66 µs | 45.4 µs | 410 µs |
+| `tiered_set/contains_hit` (hot-tier hit) | — | 8.05 ns | — |
+| `tiered_set/contains_cold_fallback` | — | 9.28 ns | — |
+| `tiered_set/flush_1000` | — | 277.6 µs | — |
+| `tiered_set/cold_snapshot` | — | 5.46 ns | — |
+
+### TieredBag (StdHashBag → PdsBag)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_bag/insert` | 3.26 µs | 37.6 µs | 381 µs |
+| `tiered_bag/count_hit` (hot-tier hit) | — | 9.26 ns | — |
+| `tiered_bag/count_cold_fallback` | — | 9.40 ns | — |
+| `tiered_bag/flush_1000` | — | **41.2 µs** | — |
+| `tiered_bag/cold_snapshot` | — | 5.81 ns | — |
+
+*TieredBag flush is 6.7× faster than TieredSet/TieredHashMap flush because each distinct
+element costs one HAMT path-copy via `insert_many` (T.1 optimisation, 2026-07-02).*
+
+### TieredMultiMap (StdHashMultiMap → PdsHashMultiMap)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_multimap/insert` | 8.16 µs | 57.7 µs | 668 µs |
+| `tiered_multimap/get_all_hit` (hot-tier hit) | — | 59.0 ns | — |
+| `tiered_multimap/get_all_cold_fallback` | — | 124.3 ns | — |
+| `tiered_multimap/flush_1000` | — | 109.2 µs | — |
+| `tiered_multimap/cold_snapshot` | — | 5.82 ns | — |
+
+### TieredBiMap (StdBiMap → PdsBiMap)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_bimap/insert` | 8.78 µs | 105 µs | 927 µs |
+| `tiered_bimap/get_by_key_hit` (hot-tier hit) | — | 9.48 ns | — |
+| `tiered_bimap/get_by_key_cold_fallback` | — | 9.30 ns | — |
+| `tiered_bimap/flush_1000` | — | 195.2 µs | — |
+| `tiered_bimap/cold_snapshot` | — | 7.39 ns | — |
+
+### TieredSymMap (StdSymMap → PdsSymMap)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_symmap/insert` | 8.16 µs | 97.6 µs | 853 µs |
+| `tiered_symmap/get_hit` (hot-tier hit) | — | 8.08 ns | — |
+| `tiered_symmap/get_cold_fallback` | — | 9.60 ns | — |
+| `tiered_symmap/flush_1000` | — | 188.4 µs | — |
+| `tiered_symmap/cold_snapshot` | — | 7.38 ns | — |
+
+### TieredInsertionOrderMap (StdInsertionOrderMap → PdsInsertionOrderMap)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_iom/insert` | 5.31 µs | 66.0 µs | 622 µs |
+| `tiered_iom/get_hit` (hot-tier hit) | — | 13.90 ns | — |
+| `tiered_iom/get_cold_fallback` | — | 13.21 ns | — |
+| `tiered_iom/flush_1000` | — | 120.8 µs | — |
+| `tiered_iom/cold_snapshot` | — | 7.15 ns | — |
+
+### TieredTrie (StdTrie → PdsTrie)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_trie/insert` | 12.1 µs | 128 µs | 1.38 ms |
+| `tiered_trie/get_hit` (hot-tier hit) | — | 30.0 ns | — |
+| `tiered_trie/get_cold_fallback` | — | 32.1 ns | — |
+| `tiered_trie/flush_1000` | — | 247.0 µs | — |
+| `tiered_trie/cold_snapshot` | — | 5.78 ns | — |
+
+### TieredUniqueVector (StdVec → PdsUniqueVec)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_unique_vec/push_back` | 3.70 µs | 45.9 µs | 370 µs |
+| `tiered_unique_vec/contains_hit` (hot-tier hit) | — | 9.20 ns | — |
+| `tiered_unique_vec/contains_cold_fallback` | — | 9.46 ns | — |
+| `tiered_unique_vec/flush_1000` | — | 85.5 µs | — |
+| `tiered_unique_vec/cold_snapshot` | — | 15.4 ns | — |
 
 ### Key observations
 
-- **Cold snapshot is O(1)** at ~5–10 ns regardless of collection size — pure Arc clone
+- **Cold snapshot is O(1)** at ~5–15 ns regardless of collection size — pure Arc clone
   of the persistent collection (structural sharing; no data copied).
-- **Hot-tier hit is faster than cold-tier hit** by ~2 ns — one fewer Arc dereference
-  through the Mutex guard path.
-- **OrdMap flush is 22% faster than HashMap flush** at n=1 000 (212.9 µs vs 272.7 µs):
+- **TieredBag flush is the fastest map-like flush** at 41.2 µs — 6.7× faster than
+  TieredSet (277.6 µs) because `insert_many` amortises count multiplicity into one
+  HAMT path-copy per distinct element (T.1 optimisation, 2026-07-02).
+- **TieredBiMap and TieredSymMap insert cost** (~8–9 µs/100 vs ~3.6 µs/100 for
+  TieredHashMap) reflects the double-index maintenance — both key→value and value→key
+  HAMTs are updated on every insert.
+- **TieredTrie is the slowest collection** across all operations (~30 ns get_hit vs
+  ~8 ns for hash-based types) reflecting trie traversal vs HAMT probing.
+- **TieredMultiMap get_all is expensive** at 59–124 ns because it allocates a Vec
+  of values per call, not a single-element lookup.
+- **OrdMap flush is 38% faster than HashMap flush** at n=1 000 (174 µs vs 280 µs):
   BTreeMap drain is more cache-friendly than HashMap drain for sequential traversal.
-- **Vector flush is 15× faster than HashMap flush** at n=1 000 (18.73 µs vs 272.7 µs):
+- **Vector flush is 35× faster than HashMap flush** at n=1 000 (8.05 µs vs 279.6 µs):
   append-log semantics avoid the full merge pass required by map flush.
-- **3-tier overhead vs 2-tier** is small: +7 ns per insert at n=100, +9% for flush
-  at n=1 000. An extra Merkle hash layer adds ~4 µs amortised per 1 000 inserts.
 
 ---
 

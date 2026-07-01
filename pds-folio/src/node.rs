@@ -61,7 +61,7 @@
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::codec::{Codec, CodecError};
+use crate::codec::{CodecError, ValueCodec};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -205,9 +205,7 @@ impl LeafBuilder {
         value: &V,
     ) -> Result<(), CodecError>
     where
-        K: serde::Serialize,
-        V: serde::Serialize,
-        C: Codec,
+        C: ValueCodec<K> + ValueCodec<V>,
     {
         if self.count >= LEAF_CAP {
             return Err(CodecError::Encode(format!(
@@ -217,9 +215,9 @@ impl LeafBuilder {
         }
 
         let mut key_bytes = Vec::new();
-        C::encode(key, &mut key_bytes)?;
+        <C as ValueCodec<K>>::encode(key, &mut key_bytes)?;
         let mut val_bytes = Vec::new();
-        C::encode(value, &mut val_bytes)?;
+        <C as ValueCodec<V>>::encode(value, &mut val_bytes)?;
 
         if key_bytes.len() > u16::MAX as usize {
             return Err(CodecError::Encode(
@@ -362,9 +360,7 @@ impl<'a> LeafReader<'a> {
     /// Time: O(entry_size).
     pub fn get_entry<K, V, C>(&self, i: usize) -> Result<(K, V), CodecError>
     where
-        K: for<'de> serde::Deserialize<'de>,
-        V: for<'de> serde::Deserialize<'de>,
-        C: Codec,
+        C: ValueCodec<K> + ValueCodec<V>,
     {
         assert!(
             i < self.count,
@@ -400,8 +396,8 @@ impl<'a> LeafReader<'a> {
 
         let key_bytes = &entry_bytes[2..2 + key_len];
         let val_bytes = &entry_bytes[2 + key_len..];
-        let key = C::decode(key_bytes)?;
-        let value = C::decode(val_bytes)?;
+        let key = <C as ValueCodec<K>>::decode(key_bytes)?;
+        let value = <C as ValueCodec<V>>::decode(val_bytes)?;
         Ok((key, value))
     }
 }
@@ -530,6 +526,8 @@ pub fn build_internal(bitmap: u32, children: &[u64]) -> HamtNodePage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::PodCodec;
+    #[cfg(feature = "serde")]
     use crate::codec::PostcardCodec;
 
     // -----------------------------------------------------------------------
@@ -581,6 +579,7 @@ mod tests {
         assert_eq!(reader.count(), 0);
     }
 
+    #[cfg(feature = "serde")]
     #[test]
     fn leaf_postcard_single_entry_round_trip() {
         let mut builder = LeafBuilder::new();
@@ -603,6 +602,7 @@ mod tests {
         assert_eq!(v, "world");
     }
 
+    #[cfg(feature = "serde")]
     #[test]
     fn leaf_postcard_multiple_entries_round_trip() {
         let mut builder = LeafBuilder::new();
@@ -627,7 +627,6 @@ mod tests {
 
     #[test]
     fn leaf_pod_u64_keys_and_values_round_trip() {
-        use crate::codec::PodCodec;
         let mut builder = LeafBuilder::new();
         for i in 0u64..4 {
             builder
@@ -651,12 +650,14 @@ mod tests {
     fn leaf_rejects_overflow_at_cap() {
         let mut builder = LeafBuilder::new();
         for i in 0..LEAF_CAP {
+            // Use u64 pairs (fixed size, always fit) to fill up to LEAF_CAP.
             builder
-                .push_framed::<_, _, PostcardCodec>(i as u64, &format!("{i:04}"), &i)
-                .expect("entry {i} must fit");
+                .push_framed::<u64, u64, PodCodec>(i as u64, &(i as u64), &(i as u64))
+                .expect("entry must fit");
         }
-        // LEAF_CAP + 1 must be rejected.
-        let result = builder.push_framed::<_, _, PostcardCodec>(LEAF_CAP as u64, &"extra", &0u32);
+        // LEAF_CAP + 1 must be rejected (leaf is full at LEAF_CAP entries).
+        let result =
+            builder.push_framed::<u64, u64, PodCodec>(LEAF_CAP as u64, &0u64, &0u64);
         assert!(result.is_err(), "push beyond LEAF_CAP must fail");
     }
 

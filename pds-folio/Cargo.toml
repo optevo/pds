@@ -17,9 +17,12 @@ path = "./src/lib.rs"
 
 [features]
 default = []
+# serde — enables PostcardCodec for any #[derive(Serialize, Deserialize)] type.
+# Without this flag only PodCodec (zero-copy for bytemuck::Pod types) is available,
+# and serde/postcard are not compiled in at all.
+serde = ["dep:serde", "dep:postcard"]
 # consensus = ["folio-consensus"]  # Placeholder — add when folio-consensus crate exists.
 #                                   # Allows callers to pass a Raft-backed Backend.
-# serde = ["dep:serde_core"]       # Placeholder — add if no_std + alloc environments needed.
 
 [dependencies]
 # Folio storage substrate — mmap-backed page allocator.
@@ -32,10 +35,10 @@ folio-rope = { path = "../../folio/folio-rope" }
 pds = { workspace = true, features = ["traits"] }
 # merkle-spine — PageIndexBackend trait (G.5 HamtIndex integration).
 merkle-spine = { path = "../../merkle-spine" }
-# Serialisation for keys and values (PostcardCodec).
-serde = { version = "1", features = ["derive"] }
-postcard = { version = "1", default-features = false, features = ["alloc"] }
-# Zero-copy Pod codec support (PodCodec).
+# Compact variable-length encoding for PostcardCodec (optional — serde feature).
+serde = { version = "1", features = ["derive"], optional = true }
+postcard = { version = "1", default-features = false, features = ["alloc"], optional = true }
+# Zero-copy Pod codec support (PodCodec — always available, no feature flag).
 bytemuck = { version = "1", features = ["derive"] }
 # Typed errors.
 thiserror = "2"

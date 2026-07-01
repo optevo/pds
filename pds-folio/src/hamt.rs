@@ -26,14 +26,15 @@
 //!
 //! # Codec
 //!
-//! The `C: Codec` type parameter controls how keys and values are serialised
-//! into leaf node byte arrays.  See [`crate::codec`] for built-in options.
+//! The `C: ValueCodec<K> + ValueCodec<V>` type parameter controls how keys and
+//! values are serialised into leaf node byte arrays.  See [`crate::codec`] for
+//! built-in options.
 //!
 //! # Type parameters
 //!
-//! - `K` — key type; must be `Serialize + Hash + Eq + Clone`
-//! - `V` — value type; must be `Serialize + DeserializeOwned + Clone`
-//! - `C` — codec; defaults to [`crate::codec::PostcardCodec`]
+//! - `K` — key type; must be `Hash + Eq + Clone`
+//! - `V` — value type; must be `Clone`
+//! - `C` — codec; defaults to [`crate::codec::PodCodec`]
 //! - `B` — folio backend; defaults to [`folio_core::backend::MemBackend`]
 
 use std::collections::{HashMap, VecDeque};
@@ -46,12 +47,10 @@ use folio_core::{
     page::PageType,
     store::FolioStore,
 };
-use serde::{Deserialize, Serialize};
-
 use folio_collections::refcount::PageRefcount;
 
 use crate::{
-    codec::{Codec, CodecError, PostcardCodec},
+    codec::{CodecError, PodCodec, ValueCodec},
     node::{
         build_internal, HamtNodePage, InternalReader, LeafBuilder, LeafReader, BRANCH_BITS,
         BRANCH_MASK, DISCRIMINANT_INTERNAL, DISCRIMINANT_LEAF, LEAF_CAP,
@@ -234,17 +233,17 @@ impl<B: Backend<Error = BackendError>> NodeStore<B> {
 ///
 /// let backend = MemBackend::new(4096, 64);
 /// let store = FolioStore::create(backend, 4096, 64, ChecksumKind::Xxh3, true).unwrap();
-/// let map: HamtMap = HamtMap::new(store);
-/// let map2 = map.insert("key".to_string(), 42u64).unwrap();
-/// assert_eq!(map.get(&"key".to_string()).unwrap(), None);
-/// assert_eq!(map2.get(&"key".to_string()).unwrap(), Some(42u64));
+/// let map: HamtMap<u64, u64> = HamtMap::new(store);
+/// let map2 = map.insert(1u64, 42u64).unwrap();
+/// assert_eq!(map.get(&1u64).unwrap(), None);
+/// assert_eq!(map2.get(&1u64).unwrap(), Some(42u64));
 /// ```
 #[derive(Debug)]
-pub struct HamtMap<K = String, V = u64, C = PostcardCodec, B = MemBackend>
+pub struct HamtMap<K = u64, V = u64, C = PodCodec, B = MemBackend>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Hash + Eq + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Shared node store.
@@ -259,9 +258,9 @@ where
 
 impl<K, V, C, B> HamtMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Hash + Eq + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     // -----------------------------------------------------------------------
@@ -938,9 +937,9 @@ where
 
 impl<K, V, C, B> Clone for HamtMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Hash + Eq + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Clones this map snapshot in O(1) by incrementing the root page's
@@ -962,9 +961,9 @@ where
 
 impl<K, V, C, B> Drop for HamtMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Hash + Eq + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Drops this map snapshot.
@@ -1001,9 +1000,9 @@ where
 /// folio lock is acquired only once per leaf page.
 pub struct HamtMapIter<'a, K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Hash + Eq + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Shared reference to the node store.
@@ -1019,9 +1018,9 @@ where
 
 impl<K, V, C, B> std::fmt::Debug for HamtMapIter<'_, K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone + std::fmt::Debug,
-    V: Serialize + for<'de> Deserialize<'de> + Clone + std::fmt::Debug,
-    C: Codec,
+    K: Hash + Eq + Clone + std::fmt::Debug,
+    V: Clone + std::fmt::Debug,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1034,9 +1033,9 @@ where
 
 impl<K, V, C, B> Iterator for HamtMapIter<'_, K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Hash + Eq + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     type Item = Result<(K, V), HamtError>;
@@ -1110,6 +1109,8 @@ mod tests {
     use super::*;
     use crate::codec::PodCodec;
     use folio_core::{checksum::ChecksumKind, store::FolioStore};
+    #[cfg(feature = "serde")]
+    use crate::codec::PostcardCodec;
 
     fn make_store() -> FolioStore<MemBackend> {
         let backend = MemBackend::new(4096, 256);
@@ -1118,91 +1119,87 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // PostcardCodec (String keys)
+    // PodCodec (u64 keys — always available)
     // -----------------------------------------------------------------------
 
     #[test]
     fn empty_map_is_empty() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
+        let map: HamtMap<u64, u64, PodCodec> = HamtMap::new(make_store());
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
-        assert_eq!(map.get(&"foo".to_string()).unwrap(), None);
-        assert!(!map.contains_key(&"foo".to_string()).unwrap());
+        assert_eq!(map.get(&0u64).unwrap(), None);
+        assert!(!map.contains_key(&0u64).unwrap());
     }
 
     #[test]
     fn single_insert_and_get() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let map2 = map.insert("hello".to_string(), 42u32).unwrap();
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let map2 = map.insert(1u64, 42u32).unwrap();
         assert_eq!(map2.len(), 1);
         assert!(!map2.is_empty());
-        assert_eq!(map2.get(&"hello".to_string()).unwrap(), Some(42u32));
-        assert_eq!(map2.get(&"world".to_string()).unwrap(), None);
+        assert_eq!(map2.get(&1u64).unwrap(), Some(42u32));
+        assert_eq!(map2.get(&2u64).unwrap(), None);
         // Original unchanged.
         assert!(map.is_empty());
     }
 
     #[test]
-    fn multiple_inserts_postcard() {
-        let map: HamtMap<String, u64> = HamtMap::new(make_store());
+    fn multiple_inserts_pod() {
+        let map: HamtMap<u64, u64, PodCodec> = HamtMap::new(make_store());
         let mut current = map;
         for i in 0u64..32 {
-            current = current.insert(format!("key{i}"), i * 10).unwrap();
+            current = current.insert(i, i * 10).unwrap();
         }
         assert_eq!(current.len(), 32);
         for i in 0u64..32 {
-            let val = current.get(&format!("key{i}")).unwrap();
-            assert_eq!(val, Some(i * 10), "missing key{i}");
+            let val = current.get(&i).unwrap();
+            assert_eq!(val, Some(i * 10), "missing key {i}");
         }
     }
 
     #[test]
     fn overwrite_existing_key() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let m1 = map.insert("k".to_string(), 1u32).unwrap();
-        let m2 = m1.insert("k".to_string(), 99u32).unwrap();
-        assert_eq!(m1.get(&"k".to_string()).unwrap(), Some(1u32));
-        assert_eq!(m2.get(&"k".to_string()).unwrap(), Some(99u32));
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let m1 = map.insert(1u64, 1u32).unwrap();
+        let m2 = m1.insert(1u64, 99u32).unwrap();
+        assert_eq!(m1.get(&1u64).unwrap(), Some(1u32));
+        assert_eq!(m2.get(&1u64).unwrap(), Some(99u32));
         assert_eq!(m1.len(), 1);
         assert_eq!(m2.len(), 1); // overwrite, not insert
     }
 
     #[test]
     fn remove_present_key() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let m1 = map.insert("a".to_string(), 10u32).unwrap();
-        let m2 = m1.insert("b".to_string(), 20u32).unwrap();
-        let (m3, removed) = m2.remove(&"a".to_string()).unwrap();
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let m1 = map.insert(10u64, 10u32).unwrap();
+        let m2 = m1.insert(20u64, 20u32).unwrap();
+        let (m3, removed) = m2.remove(&10u64).unwrap();
         assert_eq!(removed, Some(10u32));
         assert_eq!(m3.len(), 1);
-        assert_eq!(m3.get(&"a".to_string()).unwrap(), None);
-        assert_eq!(m3.get(&"b".to_string()).unwrap(), Some(20u32));
+        assert_eq!(m3.get(&10u64).unwrap(), None);
+        assert_eq!(m3.get(&20u64).unwrap(), Some(20u32));
         // Original unchanged.
-        assert_eq!(m2.get(&"a".to_string()).unwrap(), Some(10u32));
+        assert_eq!(m2.get(&10u64).unwrap(), Some(10u32));
     }
 
     #[test]
     fn remove_absent_key() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let m1 = map.insert("a".to_string(), 1u32).unwrap();
-        let (m2, removed) = m1.remove(&"b".to_string()).unwrap();
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let m1 = map.insert(1u64, 1u32).unwrap();
+        let (m2, removed) = m1.remove(&2u64).unwrap();
         assert_eq!(removed, None);
         assert_eq!(m2.len(), 1);
-        assert_eq!(m2.get(&"a".to_string()).unwrap(), Some(1u32));
+        assert_eq!(m2.get(&1u64).unwrap(), Some(1u32));
     }
 
     #[test]
     fn remove_all_entries_produces_empty_map() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let m1 = map.insert("x".to_string(), 1u32).unwrap();
-        let (m2, _) = m1.remove(&"x".to_string()).unwrap();
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let m1 = map.insert(99u64, 1u32).unwrap();
+        let (m2, _) = m1.remove(&99u64).unwrap();
         assert!(m2.is_empty());
         assert_eq!(m2.root, None);
     }
-
-    // -----------------------------------------------------------------------
-    // PodCodec (u64 keys and values)
-    // -----------------------------------------------------------------------
 
     #[test]
     fn pod_codec_insert_and_get_u64() {
@@ -1234,10 +1231,10 @@ mod tests {
 
     #[test]
     fn contains_key_is_consistent_with_get() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let m1 = map.insert("present".to_string(), 1u32).unwrap();
-        assert!(m1.contains_key(&"present".to_string()).unwrap());
-        assert!(!m1.contains_key(&"absent".to_string()).unwrap());
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let m1 = map.insert(42u64, 1u32).unwrap();
+        assert!(m1.contains_key(&42u64).unwrap());
+        assert!(!m1.contains_key(&99u64).unwrap());
     }
 
     // -----------------------------------------------------------------------
@@ -1248,9 +1245,9 @@ mod tests {
     /// all entries after the original is dropped.
     #[test]
     fn clone_shares_pages_original_drop_leaves_clone_intact() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let m1 = map.insert("a".to_string(), 1u32).unwrap();
-        let m2 = m1.insert("b".to_string(), 2u32).unwrap();
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let m1 = map.insert(1u64, 1u32).unwrap();
+        let m2 = m1.insert(2u64, 2u32).unwrap();
 
         // Clone m2; m2 and m2_clone share all pages.
         let m2_clone = m2.clone();
@@ -1260,16 +1257,16 @@ mod tests {
         drop(m2);
 
         // All entries remain readable via the clone.
-        assert_eq!(m2_clone.get(&"a".to_string()).unwrap(), Some(1u32));
-        assert_eq!(m2_clone.get(&"b".to_string()).unwrap(), Some(2u32));
+        assert_eq!(m2_clone.get(&1u64).unwrap(), Some(1u32));
+        assert_eq!(m2_clone.get(&2u64).unwrap(), Some(2u32));
     }
 
     /// After both the original and all clones are dropped, the refcount table
     /// should be empty (all pages freed).
     #[test]
     fn all_clones_dropped_refcounts_empty() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let m1 = map.insert("x".to_string(), 42u32).unwrap();
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let m1 = map.insert(42u64, 42u32).unwrap();
         let clone1 = m1.clone();
         let clone2 = m1.clone();
 
@@ -1310,10 +1307,10 @@ mod tests {
     /// Multiple clones can be independently read after all intermediate drops.
     #[test]
     fn multiple_snapshots_independent() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let m1 = map.insert("k1".to_string(), 1u32).unwrap();
-        let m2 = m1.insert("k2".to_string(), 2u32).unwrap();
-        let m3 = m2.insert("k3".to_string(), 3u32).unwrap();
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let m1 = map.insert(10u64, 1u32).unwrap();
+        let m2 = m1.insert(20u64, 2u32).unwrap();
+        let m3 = m2.insert(30u64, 3u32).unwrap();
 
         // Clone intermediate snapshots.
         let snap1 = m1.clone();
@@ -1324,20 +1321,20 @@ mod tests {
         drop(m2);
         drop(m3);
 
-        // snap1 sees only k1.
-        assert_eq!(snap1.get(&"k1".to_string()).unwrap(), Some(1u32));
-        assert_eq!(snap1.get(&"k2".to_string()).unwrap(), None);
+        // snap1 sees only key 10.
+        assert_eq!(snap1.get(&10u64).unwrap(), Some(1u32));
+        assert_eq!(snap1.get(&20u64).unwrap(), None);
 
         // snap3 sees all three keys.
-        assert_eq!(snap3.get(&"k1".to_string()).unwrap(), Some(1u32));
-        assert_eq!(snap3.get(&"k2".to_string()).unwrap(), Some(2u32));
-        assert_eq!(snap3.get(&"k3".to_string()).unwrap(), Some(3u32));
+        assert_eq!(snap3.get(&10u64).unwrap(), Some(1u32));
+        assert_eq!(snap3.get(&20u64).unwrap(), Some(2u32));
+        assert_eq!(snap3.get(&30u64).unwrap(), Some(3u32));
     }
 
     /// Dropping an empty map is a no-op (no pages to free).
     #[test]
     fn drop_empty_map_is_noop() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
         drop(map); // Must not panic.
     }
 
@@ -1345,11 +1342,11 @@ mod tests {
     /// no longer re-allocates pages.
     #[test]
     fn remove_absent_key_no_extra_alloc() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let m1 = map.insert("a".to_string(), 1u32).unwrap();
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let m1 = map.insert(1u64, 1u32).unwrap();
         let root_before = m1.root;
 
-        let (m2, removed) = m1.remove(&"absent".to_string()).unwrap();
+        let (m2, removed) = m1.remove(&9999u64).unwrap();
         assert_eq!(removed, None);
         // The root page ID must be the same — no new page was allocated.
         assert_eq!(m2.root, root_before);
@@ -1362,30 +1359,30 @@ mod tests {
     /// Two independent mutation chains from the same base must remain independent.
     #[test]
     fn two_chains_from_same_base_are_independent() {
-        let base: HamtMap<String, u32> = HamtMap::new(make_store());
-        let base = base.insert("shared".to_string(), 0u32).unwrap();
+        let base: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let base = base.insert(0u64, 0u32).unwrap();
 
         // Chain A.
-        let a1 = base.insert("a".to_string(), 1u32).unwrap();
-        let a2 = a1.insert("a2".to_string(), 2u32).unwrap();
+        let a1 = base.insert(1u64, 1u32).unwrap();
+        let a2 = a1.insert(2u64, 2u32).unwrap();
 
         // Chain B.
-        let b1 = base.insert("b".to_string(), 10u32).unwrap();
-        let b2 = b1.insert("b2".to_string(), 20u32).unwrap();
+        let b1 = base.insert(100u64, 10u32).unwrap();
+        let b2 = b1.insert(200u64, 20u32).unwrap();
 
-        // Chain A sees "a" keys, not "b" keys.
-        assert_eq!(a2.get(&"a".to_string()).unwrap(), Some(1u32));
-        assert_eq!(a2.get(&"a2".to_string()).unwrap(), Some(2u32));
-        assert_eq!(a2.get(&"b".to_string()).unwrap(), None);
+        // Chain A sees its keys, not chain B's keys.
+        assert_eq!(a2.get(&1u64).unwrap(), Some(1u32));
+        assert_eq!(a2.get(&2u64).unwrap(), Some(2u32));
+        assert_eq!(a2.get(&100u64).unwrap(), None);
 
-        // Chain B sees "b" keys, not "a" keys.
-        assert_eq!(b2.get(&"b".to_string()).unwrap(), Some(10u32));
-        assert_eq!(b2.get(&"b2".to_string()).unwrap(), Some(20u32));
-        assert_eq!(b2.get(&"a".to_string()).unwrap(), None);
+        // Chain B sees its keys, not chain A's keys.
+        assert_eq!(b2.get(&100u64).unwrap(), Some(10u32));
+        assert_eq!(b2.get(&200u64).unwrap(), Some(20u32));
+        assert_eq!(b2.get(&1u64).unwrap(), None);
 
         // Both see the shared key.
-        assert_eq!(a2.get(&"shared".to_string()).unwrap(), Some(0u32));
-        assert_eq!(b2.get(&"shared".to_string()).unwrap(), Some(0u32));
+        assert_eq!(a2.get(&0u64).unwrap(), Some(0u32));
+        assert_eq!(b2.get(&0u64).unwrap(), Some(0u32));
     }
 
     /// Iterator over a large map returns exactly the right entries.
@@ -1427,16 +1424,16 @@ mod tests {
     /// clone.
     #[test]
     fn mutation_does_not_affect_clone() {
-        let map: HamtMap<String, u32> = HamtMap::new(make_store());
-        let m1 = map.insert("k".to_string(), 1u32).unwrap();
-        // Clone, then mutate the original clone.
+        let map: HamtMap<u64, u32, PodCodec> = HamtMap::new(make_store());
+        let m1 = map.insert(1u64, 1u32).unwrap();
+        // Clone, then mutate.
         let snap = m1.clone();
-        let m2 = m1.insert("k".to_string(), 99u32).unwrap();
+        let m2 = m1.insert(1u64, 99u32).unwrap();
 
         // snap sees the pre-mutation value.
-        assert_eq!(snap.get(&"k".to_string()).unwrap(), Some(1u32));
+        assert_eq!(snap.get(&1u64).unwrap(), Some(1u32));
         // m2 sees the updated value.
-        assert_eq!(m2.get(&"k".to_string()).unwrap(), Some(99u32));
+        assert_eq!(m2.get(&1u64).unwrap(), Some(99u32));
     }
 
     /// HamtError::BadDiscriminant is reachable only via internal corruption.
@@ -1449,5 +1446,25 @@ mod tests {
             s.contains("0xab") || s.contains("0xAB") || s.contains("171"),
             "unexpected format: {s}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // PostcardCodec (String keys — requires serde feature)
+    // -----------------------------------------------------------------------
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn postcard_string_keys_insert_and_get() {
+        use crate::hamt::HamtMap;
+        let map: HamtMap<String, u64, PostcardCodec> = HamtMap::new(make_store());
+        let mut current = map;
+        for i in 0u64..8 {
+            current = current.insert(format!("key{i}"), i * 10).unwrap();
+        }
+        assert_eq!(current.len(), 8);
+        for i in 0u64..8 {
+            let val = current.get(&format!("key{i}")).unwrap();
+            assert_eq!(val, Some(i * 10), "missing key{i}");
+        }
     }
 }

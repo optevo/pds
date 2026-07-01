@@ -204,6 +204,49 @@ interruptions (>10×) can throw off the outlier detector too.
 
 *Entries appended as the tuning loop runs. Newest first.*
 
+### 2026-07-02 — T.1: TieredBag flush — insert_many replaces O(count) loop (45.6% improvement)
+
+**Crate:** pds (tiered)
+**Benchmark:** `tiered_bag/flush_1000`
+
+| Before | After | Change |
+|-------:|------:|-------:|
+| 75.5 µs | 41.2 µs | **−45.6%** |
+
+**Root cause:** `TieredBagState::flush` merged hot elements into cold with:
+```rust
+for (elem, count) in self.hot.drain() {
+    for _ in 0..count {
+        self.cold.insert(elem.clone());  // count HAMT path-copies per element
+    }
+}
+```
+Each `insert` call triggers one HAMT path-copy (O(log n) functional update), so an
+element with count=10 caused 10 separate structural updates. The flush benchmark
+inserts 100 distinct elements with count 10 each → 1 000 HAMT updates on flush.
+
+**Fix:** Added `insert_many` to the `BagBackend` trait as a default method (default:
+count-loop fallback). Overridden in `PdsBagBackend` to delegate to `pds::Bag::insert_many`
+(one HAMT path-copy regardless of count), and in `PdsOrdBagBackend` to delegate to
+`pds::OrdBag::insert_many`. The flush loop now calls:
+```rust
+for (elem, count) in self.hot.drain() {
+    self.cold.insert_many(elem, count);  // one HAMT path-copy per distinct element
+}
+```
+
+**Files changed:**
+- `src/tiered/bag_backend.rs` — added `insert_many` default method to `BagBackend` trait
+- `src/tiered/bag_backends.rs` — added `insert_many` override to both `PdsBagBackend`
+  and `PdsOrdBagBackend`
+- `src/tiered/bag.rs` — updated `flush` to use `self.cold.insert_many(elem, count)`
+
+**Quality gate:** `bash test.sh` — all checks passed.
+**Baseline used:** criterion baseline `bag_before` (75.53 µs median).
+**Commit:** `b48f4b3` — "perf: TieredBag flush use insert_many — O(1) HAMT/B+ update per element"
+
+---
+
 ### 2026-07-01 — T.0d Candidate 5: Immediate vs Manual policy overhead (documented — no code change)
 
 **Crate:** pds (tiered)

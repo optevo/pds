@@ -35,10 +35,8 @@ use folio_core::{
     page::PageType,
     store::FolioStore,
 };
-use serde::{Deserialize, Serialize};
-
 use crate::{
-    codec::{Codec, CodecError, PostcardCodec},
+    codec::{CodecError, PodCodec, ValueCodec},
     vector::{
         build_internal, InternalReader, LeafBuilder, LeafReader, VectorNodePage, BRANCHING_FACTOR,
         DISCRIMINANT_INTERNAL, DISCRIMINANT_LEAF,
@@ -138,10 +136,10 @@ impl<B: Backend<Error = BackendError>> VectorNodeStore<B> {
 /// - `C` — codec; defaults to [`PostcardCodec`]
 /// - `B` — folio backend; defaults to [`MemBackend`]
 #[derive(Debug)]
-pub struct FolioVector<A = (), C = PostcardCodec, B = MemBackend>
+pub struct FolioVector<A = u64, C = PodCodec, B = MemBackend>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    A: Clone,
+    C: ValueCodec<A>,
     B: Backend<Error = BackendError>,
 {
     /// Shared node store.
@@ -158,8 +156,8 @@ where
 
 impl<A, C, B> FolioVector<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    A: Clone,
+    C: ValueCodec<A>,
     B: Backend<Error = BackendError>,
 {
     /// Creates a new empty `FolioVector` backed by `store`.

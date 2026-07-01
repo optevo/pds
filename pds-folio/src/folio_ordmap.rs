@@ -36,14 +36,12 @@ use folio_core::{
     page::PageType,
     store::FolioStore,
 };
-use serde::{Deserialize, Serialize};
-
 use crate::{
     btree::{
         build_internal_node, BTreeNodePage, InternalReader, LeafBuilder, LeafReader, BTREE_ORDER,
         DISCRIMINANT_INTERNAL, DISCRIMINANT_LEAF,
     },
-    codec::{Codec, CodecError, PostcardCodec},
+    codec::{CodecError, PodCodec, ValueCodec},
 };
 
 // ---------------------------------------------------------------------------
@@ -130,11 +128,11 @@ impl<B: Backend<Error = BackendError>> OrdMapNodeStore<B> {
 /// - `C` — codec; defaults to [`PostcardCodec`]
 /// - `B` — folio backend; defaults to [`MemBackend`]
 #[derive(Debug)]
-pub struct FolioOrdMap<K = (), V = (), C = PostcardCodec, B = MemBackend>
+pub struct FolioOrdMap<K = u64, V = u64, C = PodCodec, B = MemBackend>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Ord + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     store: Arc<Mutex<OrdMapNodeStore<B>>>,
@@ -149,9 +147,9 @@ where
 
 impl<K, V, C, B> FolioOrdMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Ord + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Creates a new, empty `FolioOrdMap` backed by `store`.
@@ -836,9 +834,9 @@ enum InsertResult<K> {
 
 impl<K, V, C, B> Clone for FolioOrdMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Ord + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Clones the map in O(1) by sharing the root page.
@@ -864,9 +862,9 @@ where
 
 impl<K, V, C, B> Drop for FolioOrdMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Ord + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     fn drop(&mut self) {
@@ -885,9 +883,9 @@ where
 
 impl<K, V, C, B> FolioOrdMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Ord + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Iterative DFS to collect pages to free on drop.
@@ -921,18 +919,18 @@ where
 
 impl<K, V, C, B> pds::traits::PersistentCollection for FolioOrdMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Ord + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
 }
 
 impl<K, V, C, B> pds::traits::PersistentOrdMap<K, V> for FolioOrdMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Ord + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     fn get_cloned(&self, key: &K) -> Option<V> {
@@ -981,6 +979,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::PodCodec;
     use folio_core::{backend::MemBackend, checksum::ChecksumKind};
 
     fn make_store() -> FolioStore<MemBackend> {
@@ -989,7 +988,7 @@ mod tests {
             .expect("store creation must succeed")
     }
 
-    type TestMap = FolioOrdMap<u32, u32, PostcardCodec, MemBackend>;
+    type TestMap = FolioOrdMap<u32, u32, PodCodec, MemBackend>;
 
     fn empty_map() -> TestMap {
         FolioOrdMap::new(make_store())
