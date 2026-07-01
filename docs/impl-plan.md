@@ -989,6 +989,163 @@ All residual items including R.17 and the range-view API refactor are now comple
 
 ---
 
+## Phase T — Tiered write-behind collections {#phase-t}
+
+A composable, configurable pipeline where hot writes land on a fast mutable tier
+and propagate asynchronously to progressively richer (but slower) persistent tiers.
+Callers accept a bounded data-loss window in exchange for near-transient write
+throughput and "for free" access to structural sharing, disk durability, and Merkle
+identity at whatever lag they can tolerate.
+
+**Design:** each tier implements `CollectionBackend<K, V>`. A
+`TieredCollection<K, V, Hot, Cold>` is itself a `CollectionBackend`, so stages
+compose recursively — three tiers are
+`TieredCollection<K, V, S0, TieredCollection<K, V, S1, S2>>`.
+
+**Propagation policy** is configurable per tier boundary, independently of the
+backends chosen:
+
+| Policy | Trigger |
+|--------|---------|
+| `Immediate` | Synchronous — cold tier updated on every write |
+| `Batched(n)` | Propagate after `n` writes accumulate |
+| `Timed(d)` | Background thread propagates every `d` |
+| `Manual` | Only on explicit `flush()` call |
+
+**Available backends (by phase):**
+
+| Backend | Provided by | Status |
+|---------|-------------|--------|
+| `StdHashMapBackend` | pds (`tiered` feature) | T.0 |
+| `PdsHashMapBackend` | pds (`tiered` feature) | T.0 |
+| `FolioHamtMapBackend` | pds-folio | T.1 (after G.12) |
+| `VersionedHamtBackend` | pds-merkle-spine | T.2 (after H.8) |
+| `MerkleWrapperBackend` | pds (`tiered` feature) | T.0 |
+
+**Common compositions:**
+
+| Use case | Composition |
+|----------|-------------|
+| Fast writes + structural sharing | `Std → Pds` |
+| Fast writes + content identity (no disk) | `Std → MerkleWrapper<Pds>` |
+| Fast writes + disk durability | `Std → Pds → Folio(Disk)` |
+| Fast writes + full stack | `Std → Pds → VersionedHamt` |
+| Single tier, no mirroring | any backend directly |
+
+**Blocking `pds-durable::TieredMap`:** once T.1 + T.2 are complete, `TieredMap`
+is superseded. Mark `pds-durable` maintenance-only and deprecate `TieredMap` in
+favour of `TieredCollection<K, V, StdHashMapBackend, FolioHamtMapBackend>` at
+that point (see DEC-DURABLE-1).
+
+---
+
+### T.0 — Core infrastructure {#t0}
+
+**Scope:** the `tiered` feature in the pds root crate. No folio or merkle-spine
+dependency — backends for those tiers are added in T.1 / T.2.
+
+**Deliverables:**
+
+1. **`CollectionBackend<K, V>` trait** (`src/tiered/backend.rs`)
+
+   ```rust
+   pub trait CollectionBackend<K, V>: Send + 'static {
+       fn get(&self, key: &K) -> Option<V>;
+       fn insert(&mut self, key: K, value: V) -> Option<V>;
+       fn remove(&mut self, key: &K) -> Option<V>;
+       fn len(&self) -> usize;
+       fn is_empty(&self) -> bool;
+       /// Bulk-load from an iterator — used during propagation.
+       fn load_from(&mut self, iter: impl Iterator<Item = (K, V)>);
+       /// Drain all entries — called on the hot tier before propagating.
+       fn drain(&mut self) -> Vec<(K, V)>;
+       /// Snapshot this backend as an owned value — used to read the cold tier.
+       fn snapshot(&self) -> Self where Self: Sized + Clone { self.clone() }
+   }
+   ```
+
+2. **Concrete backends** (`src/tiered/backends.rs`)
+   - `StdHashMapBackend<K, V>` — wraps `std::collections::HashMap<K, V>`
+   - `PdsHashMapBackend<K, V>` — wraps `pds::HashMap<K, V>`
+   - `MerkleWrapperBackend<K, V>` — wraps `MerkleWrapper<pds::HashMap<K, V>>`
+
+3. **`PropagationPolicy`** (`src/tiered/policy.rs`)
+
+   ```rust
+   pub enum PropagationPolicy {
+       Immediate,
+       Batched(usize),       // propagate after n pending writes
+       Timed(Duration),      // background thread wakes every d
+       Manual,               // only on explicit flush()
+   }
+   ```
+
+4. **`TieredCollection<K, V, Hot, Cold>`** (`src/tiered/mod.rs`)
+
+   Internal state in `Arc<Mutex<TieredState<K, V, Hot, Cold>>>` so the collection
+   is cheaply cloneable and shareable across threads.
+
+   Public API:
+   - `new(hot: Hot, cold: Cold, policy: PropagationPolicy) -> Self`
+   - `insert(&self, key: K, value: V) -> Option<V>` — writes to hot only
+   - `get(&self, key: &K) -> Option<V>` — reads hot; falls back to cold
+   - `remove(&self, key: &K) -> Option<V>` — removes from hot; marks deletion
+   - `flush(&self)` — drains hot into cold synchronously
+   - `cold_snapshot(&self) -> Cold` — clone of the current cold tier
+   - `start_background_propagation(&self) -> PropagationHandle` — spawns a thread
+     (only meaningful with `Timed` or `Batched` policy)
+   - `len(&self) -> usize` — hot + cold (deduped)
+
+   `PropagationHandle` wraps a `JoinHandle` + stop channel; dropping it stops the
+   background thread.
+
+   Deletion handling: a `pending_deletes: HashSet<K>` in hot-tier state tracks keys
+   removed from hot but not yet propagated to cold. `get` checks this set before
+   falling back to cold. `flush` applies deletions to cold then clears the set.
+
+5. **Tests** (`src/tiered/tests.rs`)
+   - Insert into hot, read back
+   - Insert into hot, `flush`, read from `cold_snapshot`
+   - Delete from hot, ensure not visible via cold fallback before flush
+   - Delete from hot, `flush`, ensure gone from cold snapshot
+   - `Batched(n)` policy auto-propagates after n inserts
+   - `Immediate` policy: cold snapshot always matches hot
+   - Concurrent inserts from two threads (both via cloned `TieredCollection`)
+   - `MerkleWrapperBackend` as cold: `cold_snapshot().merkle_root()` changes after flush
+
+**Feature gate:** `tiered = ["std"]` in `Cargo.toml`. No new external crate deps.
+
+**Acceptance:** `test.sh` passes across all three variants (default, all-features,
+small-chunks). `cargo clippy --all-features -- -D warnings` clean.
+
+---
+
+### T.1 — Folio backend wrapper {#t1}
+
+Add `FolioHamtMapBackend<K, V, B: Backend>` in `pds-folio`.
+
+**Blocked by:** Phase G.12 (pds-folio Vector + OrdMap/OrdSet complete and stable).
+
+---
+
+### T.2 — Merkle-spine backend wrapper {#t2}
+
+Add `VersionedHamtBackend<K, V, C, B>` in `pds-merkle-spine`.
+
+**Blocked by:** Phase H.8 (VersionedHamt full implementation stable).
+
+---
+
+### T.3 — Migrate and deprecate pds-durable::TieredMap {#t3}
+
+Replace `pds-durable::TieredMap` with `TieredCollection<K, V, StdHashMapBackend,
+FolioHamtMapBackend<DiskBackend>>` (or `VersionedHamtBackend` if full history is
+needed). Mark `pds-durable` maintenance-only. See DEC-DURABLE-1.
+
+**Blocked by:** T.1 + T.2 complete; folio disk Backend implemented.
+
+---
+
 ## Cross-project execution sequence {#cross-project-sequence}
 
 This work spans three projects. The table below shows the complete serial order
