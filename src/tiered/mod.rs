@@ -56,6 +56,9 @@ pub mod bag_backends;
 pub mod bimap;
 pub mod bimap_backend;
 pub mod bimap_backends;
+pub mod insertion_order;
+pub mod insertion_order_backend;
+pub mod insertion_order_backends;
 pub mod multimap;
 pub mod multimap_backend;
 pub mod multimap_backends;
@@ -79,6 +82,8 @@ mod tests_bimap;
 #[cfg(test)]
 mod tests_compose;
 #[cfg(test)]
+mod tests_insertion_order;
+#[cfg(test)]
 mod tests_multimap;
 #[cfg(test)]
 mod tests_ord;
@@ -94,6 +99,8 @@ pub use bag::{TieredBag, TieredOrdBag};
 pub use bag_backend::{BagBackend, OrderedBagBackend};
 pub use bimap::{TieredBiMap, TieredOrdBiMap};
 pub use bimap_backend::BiMapBackend;
+pub use insertion_order::{TieredInsertionOrderMap, TieredInsertionOrderSet};
+pub use insertion_order_backend::{InsertionOrderMapBackend, InsertionOrderSetBackend};
 pub use multimap::TieredMultiMap;
 pub use multimap_backend::MultiMapBackend;
 pub use policy::PropagationPolicy;

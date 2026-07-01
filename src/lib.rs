@@ -840,6 +840,17 @@ pub use tiered::symmap_backends::{PdsOrdSymMapBackend, PdsSymMapBackend};
 #[cfg(feature = "tiered")]
 pub use tiered::{SymMapBackend, SymMapDirection, TieredOrdSymMap, TieredSymMap};
 
+#[cfg(feature = "tiered")]
+pub use tiered::insertion_order_backends::{
+    PdsInsertionOrderMapBackend, PdsInsertionOrderSetBackend, PdsOrdInsertionOrderMapBackend,
+    PdsOrdInsertionOrderSetBackend,
+};
+#[cfg(feature = "tiered")]
+pub use tiered::{
+    InsertionOrderMapBackend, InsertionOrderSetBackend, TieredInsertionOrderMap,
+    TieredInsertionOrderSet,
+};
+
 #[cfg(test)]
 mod test;
 
