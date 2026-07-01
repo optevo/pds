@@ -1,6 +1,6 @@
 //! `pds-folio` — folio-backed persistent data structures with structural sharing.
 //!
-//! Provides five collection types backed by folio mmap'd pages, all implementing
+//! Provides six collection types backed by folio mmap'd pages, all implementing
 //! the cross-variant traits from [`pds::traits`] so callers can be generic over
 //! the storage backend:
 //!
@@ -11,6 +11,7 @@
 //! | [`folio_vector::FolioVector`] | [`folio_vector`] | [`pds::traits::PersistentVector`] |
 //! | [`folio_ordmap::FolioOrdMap`] | [`folio_ordmap`] | [`pds::traits::PersistentOrdMap`] |
 //! | [`folio_ordset::FolioOrdSet`] | [`folio_ordset`] | [`pds::traits::PersistentOrdSet`] |
+//! | [`rope::FolioRope`] | [`rope`] | — (persistent UTF-8 text buffer — serde-free, O(1) clone) |
 //!
 //! # Storage model
 //!
@@ -67,9 +68,9 @@
 //!
 //! # Status
 //!
-//! **Phase G complete** — all five collection types implemented with full CRUD,
-//! structural sharing, and [`pds::traits`] impls.  G.1–G.12 done.
-//! See `docs/impl-plan.md` for the full history.
+//! **Phase G in progress** — all five collection types implemented with full CRUD,
+//! structural sharing, and [`pds::traits`] impls.  G.1–G.15 done; G.16 adds
+//! `FolioRope` re-export.  See `docs/impl-plan.md` for the full history.
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
@@ -83,6 +84,7 @@ pub mod folio_vector;
 pub mod hamt;
 pub mod hamt_index;
 pub mod node;
+pub mod rope;
 pub mod set;
 pub mod traits;
 pub mod vector;

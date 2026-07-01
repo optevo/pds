@@ -19,6 +19,14 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.16 — Add folio-rope dependency and module re-export.**
+  - `pds-folio/Cargo.toml`: added `folio-rope = { path = "../../folio/folio-rope" }`.
+  - `src/lib.rs`: added `pub mod rope;`; updated crate-level doc table with Rope row.
+  - `src/rope.rs`: re-exports `FolioRope`, `RopeSnapshot`, `RopeError` from
+    `folio_rope::{rope,snapshot,error}` modules; two tests (basic round-trip,
+    clone independence).
+  - Full `test.sh` green.
+
 - **[2026-07-01] G.13–G.15 — Documentation polish and feature flag notes.**
   - `src/lib.rs` crate-level doc updated: collection type table, storage model,
     codec, structural sharing invariants, consensus backend note, phase status.

@@ -546,6 +546,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "folio-rope"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "folio-collections",
+ "folio-core",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -919,6 +930,7 @@ dependencies = [
  "criterion 0.5.1",
  "folio-collections",
  "folio-core",
+ "folio-rope",
  "merkle-spine",
  "pds",
  "postcard",

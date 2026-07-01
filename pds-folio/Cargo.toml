@@ -26,6 +26,8 @@ default = []
 folio-core = { path = "../../folio/folio-core" }
 # Folio collections — FolioSlab (slab allocator), FolioBTree (refcount table).
 folio-collections = { path = "../../folio/folio-collections" }
+# Folio rope — persistent UTF-8 rope backed by folio pages.
+folio-rope = { path = "../../folio/folio-rope" }
 # pds cross-variant traits — PersistentMap, PersistentSet, etc.
 pds = { workspace = true, features = ["traits"] }
 # merkle-spine — PageIndexBackend trait (G.5 HamtIndex integration).
