@@ -809,6 +809,14 @@ pub use tiered::{
     PropagationHandle, PropagationPolicy, TieredCollection, TieredOrdMap, TieredSequence,
     TieredVector,
 };
+#[cfg(feature = "tiered")]
+pub use tiered::{OrderedSetBackend, SetBackend};
+#[cfg(feature = "tiered")]
+pub use tiered::set_backends::{
+    PdsHashSetBackend, PdsOrdSetBackend, StdBTreeSetBackend, StdHashSetBackend,
+};
+#[cfg(feature = "tiered")]
+pub use tiered::{TieredOrdSet, TieredSet, TieredSetOrdExt};
 
 #[cfg(test)]
 mod test;

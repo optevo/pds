@@ -54,6 +54,9 @@ pub mod policy;
 pub mod sequence;
 pub mod sequence_backend;
 pub mod sequence_backends;
+pub mod set;
+pub mod set_backend;
+pub mod set_backends;
 
 #[cfg(test)]
 mod tests;
@@ -63,11 +66,15 @@ mod tests_compose;
 mod tests_ord;
 #[cfg(test)]
 mod tests_seq;
+#[cfg(test)]
+mod tests_set;
 
 pub use backend::{CollectionBackend, OrderedCollectionBackend};
 pub use policy::PropagationPolicy;
 pub use sequence::TieredSequence;
 pub use sequence::TieredVector;
+pub use set::{TieredOrdSet, TieredSet, TieredSetOrdExt};
+pub use set_backend::{OrderedSetBackend, SetBackend};
 
 use std::collections::HashSet;
 use std::marker::PhantomData;
