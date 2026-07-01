@@ -856,6 +856,11 @@ pub use tiered::trie_backends::{PdsOrdTrieBackend, PdsTrieBackend};
 #[cfg(feature = "tiered")]
 pub use tiered::{TieredOrdTrie, TieredTrie, TrieBackend};
 
+#[cfg(feature = "tiered")]
+pub use tiered::unique_vec_backends::PdsUniqueVecBackend;
+#[cfg(feature = "tiered")]
+pub use tiered::{TieredPdsUniqueVector, TieredUniqueVector, UniqueVecBackend};
+
 #[cfg(test)]
 mod test;
 

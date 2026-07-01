@@ -75,6 +75,9 @@ pub mod symmap_backends;
 pub mod trie;
 pub mod trie_backend;
 pub mod trie_backends;
+pub mod unique_vec;
+pub mod unique_vec_backend;
+pub mod unique_vec_backends;
 
 #[cfg(test)]
 mod tests;
@@ -98,6 +101,8 @@ mod tests_set;
 mod tests_symmap;
 #[cfg(test)]
 mod tests_trie;
+#[cfg(test)]
+mod tests_unique_vec;
 
 pub use backend::{CollectionBackend, OrderedCollectionBackend};
 pub use bag::{TieredBag, TieredOrdBag};
@@ -117,6 +122,8 @@ pub use symmap::{TieredOrdSymMap, TieredSymMap};
 pub use symmap_backend::{SymMapBackend, SymMapDirection};
 pub use trie::{TieredOrdTrie, TieredTrie};
 pub use trie_backend::TrieBackend;
+pub use unique_vec::{TieredPdsUniqueVector, TieredUniqueVector};
+pub use unique_vec_backend::UniqueVecBackend;
 
 use std::collections::HashSet;
 use std::marker::PhantomData;
