@@ -1062,11 +1062,21 @@ backends chosen:
 
 | Backend | Provided by | Status |
 |---------|-------------|--------|
-| `StdHashMapBackend` | pds (`tiered` feature) | T.0 |
-| `PdsHashMapBackend` | pds (`tiered` feature) | T.0 |
+| `StdHashMapBackend` | pds (`tiered` feature) | ✓ T.0 |
+| `PdsHashMapBackend` | pds (`tiered` feature) | ✓ T.0 |
+| `MerkleWrapperBackend` | pds (`tiered` feature) | ✓ T.0 |
+| `StdBTreeMapBackend`, `PdsOrdMapBackend` | pds (`tiered` feature) | ✓ T.0b |
+| `StdVecBackend`, `PdsVectorBackend` | pds (`tiered` feature) | ✓ T.0c |
 | `FolioHamtMapBackend` | pds-folio | T.1 (after G.12) |
 | `VersionedHamtBackend` | pds-merkle-spine | T.2 (after H.8) |
-| `MerkleWrapperBackend` | pds (`tiered` feature) | T.0 |
+| Set backends (`StdHashSet`, `PdsHashSet`, `StdBTreeSet`, `PdsOrdSet`) | pds | T.6 |
+| Bag backends (`PdsBag`, `PdsOrdBag`) | pds | T.7 |
+| MultiMap backends (`PdsHashMultiMap`, `PdsOrdMultiMap`) | pds | T.8 |
+| BiMap backends (`PdsBiMap`, `PdsOrdBiMap`) | pds | T.9 |
+| SymMap backends (`PdsSymMap`, `PdsOrdSymMap`) | pds | T.10 |
+| InsertionOrder backends (Map + Set, Ord variants) | pds | T.11 |
+| Trie backends (`PdsTrie`, `PdsOrdTrie`) | pds | T.12 |
+| UniqueVector backends | pds | T.13 |
 
 **Common compositions:**
 
@@ -1249,6 +1259,10 @@ trait is needed. A `TieredVector<A, Hot, Cold>` type wraps a
 
 1. **`SequenceBackend<A>`** in `src/tiered/sequence_backend.rs`
 
+   `push_front` and `pop_front` are intentionally omitted — cold is an append-only
+   committed log; prepending to hot would produce indices inconsistent with cold's
+   committed prefix.
+
    ```rust
    pub trait SequenceBackend<A>: Send + 'static
    where
@@ -1256,12 +1270,10 @@ trait is needed. A `TieredVector<A, Hot, Cold>` type wraps a
    {
        fn get(&self, index: usize) -> Option<A>;
        fn push_back(&mut self, value: A);
-       fn push_front(&mut self, value: A);
        fn pop_back(&mut self) -> Option<A>;
-       fn pop_front(&mut self) -> Option<A>;
        fn len(&self) -> usize;
        fn is_empty(&self) -> bool;
-       /// Bulk-replace from iterator (used during propagation).
+       /// Append from iterator — extends cold; does NOT clear first.
        fn load_from(&mut self, iter: impl Iterator<Item = A>);
        /// Drain all elements, leaving the backend empty.
        fn drain(&mut self) -> Vec<A>;
@@ -1270,11 +1282,9 @@ trait is needed. A `TieredVector<A, Hot, Cold>` type wraps a
 
 2. **Concrete sequence backends** in `src/tiered/sequence_backends.rs`
 
-   - **`StdVecBackend<A>`** — wraps `std::vec::Vec<A>`. `push_front` uses
-     `Vec::insert(0, …)` (O(n) — document this). `drain` uses `Vec::drain(..)`.
+   - **`StdVecBackend<A>`** — wraps `std::vec::Vec<A>`. `drain` uses `Vec::drain(..)`.
    - **`PdsVectorBackend<A>`** — wraps `crate::Vector<A>`. All mutations use
-     the functional API (`push_back`, `push_front`, `pop_back`, `pop_front` return
-     new vectors). `drain` collects all elements and resets to empty vector.
+     the functional API. `drain` collects all elements and resets to empty vector.
 
 3. **`TieredSequence<A, Hot, Cold>`** in `src/tiered/sequence.rs`
 
@@ -1300,7 +1310,6 @@ trait is needed. A `TieredVector<A, Hot, Cold>` type wraps a
    Public API:
    - `new(hot: Hot, cold: Cold, policy: PropagationPolicy) -> Self`
    - `push_back(&self, value: A)` — writes to hot; auto-flushes per policy
-   - `push_front(&self, value: A)` — writes to hot
    - `pop_back(&self) -> Option<A>` — pops from hot; if hot empty, pops from cold
    - `get(&self, index: usize) -> Option<A>` — cold[0..cold.len()] then hot[0..]
    - `len(&self) -> usize` — `cold.len() + hot.len()`
@@ -1425,6 +1434,473 @@ FolioHamtMapBackend<DiskBackend>>` (or `VersionedHamtBackend` if full history is
 needed). Mark `pds-durable` maintenance-only. See DEC-DURABLE-1.
 
 **Blocked by:** T.1 + T.2 complete; folio disk Backend implemented.
+
+---
+
+### T.4 — Efficient incremental flush {#t4}
+
+**Scope:** eliminate the O(hot + cold) drain+reload in `TieredState::flush` and
+replace it with O(hot × log cold) per-entry inserts.
+
+**Problem:** the current flush in `src/tiered/mod.rs` is:
+1. Drain all of cold — O(cold)
+2. Build a merged `Vec` filtering out hot-overridden keys — O(hot + cold)
+3. Reload cold via `load_from` (replace semantics) — O(hot + cold)
+
+This means flushing 10 hot writes into a 1M-entry cold tier costs O(1M), not O(10).
+
+**Fix:** `CollectionBackend` already has `insert(k, v)` and `remove(k)` methods.
+Flush can call these individually instead of the drain+reload cycle:
+
+```rust
+fn flush(&mut self) {
+    for key in self.pending_deletes.drain() {
+        self.cold.remove(&key);
+    }
+    for (k, v) in self.hot.drain() {
+        self.cold.insert(k, v);
+    }
+    self.write_count = 0;
+}
+```
+
+This is O(hot × log cold) for B-tree-backed cold tiers and O(hot) expected for
+hash-backed cold tiers. The intermediate `Vec` allocation disappears entirely.
+
+**Sequence backend:** `TieredSequenceState::flush` already uses append semantics
+(`cold.load_from(hot.drain())`) which is already O(hot) — no change needed there.
+
+**Deliverables:**
+1. Replace `TieredState::flush` in `src/tiered/mod.rs` with the per-entry approach.
+2. Bench `flush_n` before/after — record in `docs/baselines.md`.
+3. Verify all existing tiered tests still pass.
+
+**Acceptance:** `test.sh` passes. Benchmark shows flush of 100 hot entries into a
+10K-entry cold tier is ≥ 5× faster than before.
+
+---
+
+### T.5 — Ergonomic background propagation {#t5}
+
+**Scope:** make `Timed` policy usable without boilerplate; eliminate the manual
+`start_background_propagation()` call for the common case.
+
+**Problem:** with a `Timed(d)` policy, the background flush thread does not start
+automatically — the caller must call `start_background_propagation()` and hold the
+returned `PropagationHandle`. Forgetting this call silently produces a collection
+that behaves as `Manual`. In a 3-tier composition, each tier boundary needs its own
+call, making setup error-prone.
+
+**Deliverables:**
+
+1. **`TieredCollection::with_timed_propagation`** convenience constructor:
+
+   ```rust
+   /// Creates a `TieredCollection` with `Timed(interval)` policy and immediately
+   /// starts the background propagation thread.
+   ///
+   /// Returns `(collection, handle)`. Drop `handle` to stop the thread.
+   pub fn with_timed_propagation(
+       hot: Hot,
+       cold: Cold,
+       interval: std::time::Duration,
+   ) -> (Self, PropagationHandle)
+   ```
+
+   Analogous constructor for `TieredSequence::with_timed_propagation`.
+
+2. **Debug-mode warning** (via `eprintln!` gated on `#[cfg(debug_assertions)]`) if
+   a `TieredCollection` with `Timed` policy is dropped without
+   `start_background_propagation` ever having been called. Implemented via a
+   `propagation_started: bool` flag in `TieredState`, set to `true` on first
+   `start_background_propagation` call, checked in `Drop`.
+
+3. **`start_all_propagation` free function** for 3-tier compositions:
+
+   ```rust
+   /// Starts background propagation on `outer` and, if `Cold` itself is a
+   /// `TieredCollection`, on `outer.cold_snapshot()` as well.
+   /// Returns a `Vec<PropagationHandle>` — drop all to stop all threads.
+   pub fn start_all_propagation<K, V, Hot, Mid, Inner>(
+       outer: &TieredCollection<K, V, Hot, TieredCollection<K, V, Mid, Inner>>,
+   ) -> Vec<PropagationHandle>
+   ```
+
+   This covers the 2-boundary (3-tier) case. Four-tier would need a separate
+   overload — document that as the limit; deeper compositions wire propagation
+   manually.
+
+4. **Tests** covering:
+   - `with_timed_propagation`: push 100 items, sleep past interval, confirm cold
+     snapshot non-empty without manual flush.
+   - Drop without ever starting propagation on `Timed` policy: confirm debug warning
+     fires (test via flag check, not eprintln capture).
+
+**Acceptance:** `test.sh` passes. Existing API unchanged — `new()` + explicit
+`start_background_propagation()` still works.
+
+---
+
+### T.6 — SetBackend and TieredSet / TieredOrdSet {#t6}
+
+**Scope:** tiered write-behind support for `HashSet` and `OrdSet`.
+
+Sets have no value type, so `CollectionBackend<K, V>` does not apply. A new trait
+`SetBackend<A>` is needed, analogous to `CollectionBackend` but without `V`.
+
+**Deliverables:**
+
+1. **`SetBackend<A>` trait** in `src/tiered/set_backend.rs`:
+
+   ```rust
+   pub trait SetBackend<A>: Send + 'static
+   where
+       A: Clone,
+   {
+       fn contains(&self, value: &A) -> bool;
+       fn insert(&mut self, value: A) -> bool;   // true if newly inserted
+       fn remove(&mut self, value: &A) -> bool;  // true if was present
+       fn len(&self) -> usize;
+       fn is_empty(&self) -> bool;
+       fn load_from(&mut self, iter: impl Iterator<Item = A>);
+       fn drain(&mut self) -> Vec<A>;
+   }
+   ```
+
+2. **Concrete set backends** in `src/tiered/set_backends.rs`:
+   - `StdHashSetBackend<A>` — wraps `std::collections::HashSet<A>`
+   - `PdsHashSetBackend<A>` — wraps `pds::HashSet<A>`
+   - `StdBTreeSetBackend<A>` — wraps `std::collections::BTreeSet<A>`
+   - `PdsOrdSetBackend<A>` — wraps `pds::OrdSet<A>`
+
+3. **`TieredSet<A, Hot, Cold>`** in `src/tiered/set.rs`:
+
+   Mirrors `TieredCollection`. Internal `Arc<Mutex<TieredSetState>>`. Pending
+   removals tracked via `pending_removes: HashSet<A>`.
+
+   Public API: `insert`, `contains`, `remove`, `len`, `is_empty`, `flush`,
+   `cold_snapshot`, `hot_snapshot`, `start_background_propagation`.
+
+   - `contains` checks hot first, then `pending_removes`, then cold.
+   - `remove` removes from hot (if present) and adds to `pending_removes`.
+   - Flush: for each pending removal call `cold.remove`; for each hot entry call
+     `cold.insert`. O(hot × log cold).
+
+   **`TieredSet` implements `SetBackend<A>`** for recursive composition.
+
+4. **`OrderedSetBackend<A>: SetBackend<A>`** sub-trait with `iter_ordered`,
+   `range`, `first`, `last` — analogous to `OrderedCollectionBackend`. Implemented
+   by `StdBTreeSetBackend` and `PdsOrdSetBackend`.
+
+5. **`TieredOrdSet<A, Hot, Cold>`** type alias + `TieredSetOrdExt` extension trait
+   (same pattern as `TieredCollectionOrdExt`).
+
+6. **Type aliases and re-exports** in `src/lib.rs`.
+
+7. **Tests:** insert/remove/contains across hot+cold boundary; pending remove not
+   visible via cold fallback before flush; `Batched` policy; concurrent inserts;
+   `OrdSet` range + iter_ordered; 3-tier composition.
+
+**Acceptance:** `test.sh` passes. Clippy clean.
+
+---
+
+### T.7 — BagBackend and TieredBag / TieredOrdBag {#t7}
+
+**Scope:** tiered support for `Bag` (hash-backed multiset) and `OrdBag` (B-tree
+multiset). These track element multiplicity — inserting the same element twice
+yields count 2, not 1.
+
+**Deliverables:**
+
+1. **`BagBackend<A>` trait** in `src/tiered/bag_backend.rs`:
+
+   ```rust
+   pub trait BagBackend<A>: Send + 'static
+   where
+       A: Clone,
+   {
+       fn insert(&mut self, value: A);           // always increments count
+       fn remove(&mut self, value: &A) -> bool;  // decrements; true if was present
+       fn count(&self, value: &A) -> usize;
+       fn contains(&self, value: &A) -> bool { self.count(value) > 0 }
+       fn len(&self) -> usize;                   // total element count (with multiplicity)
+       fn is_empty(&self) -> bool;
+       fn load_from(&mut self, iter: impl Iterator<Item = (A, usize)>); // (element, count) pairs
+       fn drain(&mut self) -> Vec<(A, usize)>;                          // returns (element, count) pairs
+   }
+   ```
+
+2. **Concrete backends:** `StdHashBagBackend<A>`, `PdsBagBackend<A>`,
+   `StdBTreeBagBackend<A>`, `PdsOrdBagBackend<A>`.
+
+3. **`TieredBag<A, Hot, Cold>`** with count-aware merge on flush. Flush semantics:
+   for each `(element, count)` pair drained from hot, add `count` to the cold
+   tier's existing count for that element (not replace). Pending removals track
+   `(element, count_to_remove)` pairs.
+
+4. **`TieredOrdBag<A, Hot, Cold>`** type alias + `TieredBagOrdExt` extension
+   for `iter_ordered` / `range` (returning `(A, usize)` pairs).
+
+5. **Tests** covering multiplicity semantics: insert same element twice → count 2;
+   remove once → count 1; flush merges counts correctly.
+
+**Acceptance:** `test.sh` passes. Clippy clean.
+
+**Blocked by:** T.6 (establishes the SetBackend pattern this mirrors).
+
+---
+
+### T.8 — TieredMultiMap (HashMultiMap + OrdMultiMap) {#t8}
+
+**Scope:** tiered support for `HashMultiMap<K, V>` and `OrdMultiMap<K, V>`. These
+are maps from one key to multiple values — semantically `CollectionBackend<K,
+Vec<V>>` but with set-of-values semantics (duplicate values per key are tracked by
+the underlying structure).
+
+**Design note:** `HashMultiMap` is internally a `HashMap<K, HashSet<V>>` and
+`OrdMultiMap` is internally an `OrdMap<K, OrdSet<V>>`. The tiered layer does not
+need a new trait — instead, `CollectionBackend<K, Vec<V>>` (or `HashSet<V>`) can
+serve, with the cold backend being a `PdsHashMapBackend<K, PdsHashSet<V>>`. The
+complexity is in merge semantics: flush must union the value-sets per key, not
+replace them.
+
+**Deliverables:**
+
+1. **`MultiMapBackend<K, V>` trait** in `src/tiered/multimap_backend.rs`:
+
+   ```rust
+   pub trait MultiMapBackend<K, V>: Send + 'static
+   where
+       K: Clone, V: Clone,
+   {
+       fn insert(&mut self, key: K, value: V);
+       fn remove_entry(&mut self, key: &K, value: &V) -> bool;
+       fn remove_key(&mut self, key: &K) -> bool;
+       fn get_all(&self, key: &K) -> Vec<V>;
+       fn contains(&self, key: &K, value: &V) -> bool;
+       fn len(&self) -> usize;        // total (key, value) pair count
+       fn is_empty(&self) -> bool;
+       fn load_from(&mut self, iter: impl Iterator<Item = (K, V)>);
+       fn drain(&mut self) -> Vec<(K, V)>;
+   }
+   ```
+
+2. **Concrete backends:** `PdsHashMultiMapBackend<K, V>`,
+   `PdsOrdMultiMapBackend<K, V>` (wrapping the pds types directly).
+
+3. **`TieredMultiMap<K, V, Hot, Cold>`** with union-merge on flush. Pending
+   removals split into `pending_entry_removes: HashSet<(K, V)>` and
+   `pending_key_removes: HashSet<K>`.
+
+4. **`TieredOrdMultiMap<K, V, Hot, Cold>`** type alias.
+
+5. **Tests** covering multi-value semantics, merge on flush, key removal.
+
+**Acceptance:** `test.sh` passes.
+
+**Blocked by:** T.6 (SetBackend pattern).
+
+---
+
+### T.9 — TieredBiMap / TieredOrdBiMap {#t9}
+
+**Scope:** tiered support for `BiMap<K, V>` and `OrdBiMap<K, V>`. A bijection
+maintains both forward (K→V) and reverse (V→K) indexes with a uniqueness invariant:
+each V maps to exactly one K and vice versa.
+
+**Design note:** the bijection invariant cannot be guaranteed within a single hot
+tier while a write is pending (a V might temporarily map to two K values until
+flush resolves the conflict). The tiered layer therefore **does not maintain the
+bijection invariant within the hot tier** — it is guaranteed only in the cold tier
+(post-flush). Document this clearly. Callers who need a consistent bijection must
+flush before querying the reverse index.
+
+**Deliverables:**
+
+1. **`BiMapBackend<K, V>` trait** with `insert(k, v)`, `get_by_key(k)`,
+   `get_by_value(v)`, `remove_by_key(k)`, `remove_by_value(v)`, `len`, `drain`,
+   `load_from`.
+
+2. **`PdsBiMapBackend<K, V>`** and **`PdsOrdBiMapBackend<K, V>`** concrete backends.
+
+3. **`TieredBiMap<K, V, Hot, Cold>`** with a clear doc note that the bijection
+   invariant is only guaranteed in cold (post-flush). Flush uses per-entry inserts
+   (O(hot × log cold)).
+
+4. **Tests** covering forward/reverse lookup, flush, and explicit documentation
+   that pre-flush reverse-lookup on hot may be inconsistent.
+
+**Acceptance:** `test.sh` passes. Doc comment explicitly states the invariant caveat.
+
+**Blocked by:** T.6.
+
+---
+
+### T.10 — TieredSymMap / TieredOrdSymMap {#t10}
+
+**Scope:** tiered support for `SymMap<A>` and `OrdSymMap<A>`. A symmetric map
+stores pairs `(a, b)` where `get(a, b) == get(b, a)` — the reverse edge is
+always present.
+
+**Design note:** same caveat as BiMap — symmetry is only guaranteed in cold
+post-flush. `insert(a, b, v)` inserts both `(a,b)→v` and `(b,a)→v` in hot; flush
+propagates both to cold.
+
+**Deliverables:**
+
+1. **`SymMapBackend<A, V>` trait** with `insert(a: A, b: A, value: V)`,
+   `get(a: &A, b: &A) -> Option<V>`, `remove(a: &A, b: &A)`, `len`, `drain`
+   (returns `Vec<(A, A, V)>` normalised to `a ≤ b`), `load_from`.
+
+2. **`PdsSymMapBackend<A, V>`** and **`PdsOrdSymMapBackend<A, V>`**.
+
+3. **`TieredSymMap<A, V, Hot, Cold>`** — `insert` writes both orderings to hot.
+   Flush propagates both orderings to cold via per-entry inserts.
+
+4. **Tests** covering symmetric read, flush, pre-flush caveat.
+
+**Acceptance:** `test.sh` passes.
+
+**Blocked by:** T.6.
+
+---
+
+### T.11 — TieredInsertionOrder types {#t11}
+
+**Scope:** tiered support for `InsertionOrderMap<K, V>`, `InsertionOrderSet<A>`,
+`OrdInsertionOrderMap<K, V>`, `OrdInsertionOrderSet<A>`. These collections preserve
+the order in which elements were first inserted.
+
+**Design note:** insertion order is a cross-tier property — an element inserted in
+hot at time T1 must appear before an element inserted in cold at time T2 > T1 if
+T1 < T2. This is hard to reconstruct after a flush without timestamps. The simplest
+correct approach: flush appends hot entries to cold in hot's insertion order; the
+combined insertion order is cold-order then hot-order (matching the append-log
+model of `TieredSequence`). This means cold accumulates insertion history in
+committed order — analogous to the append-log semantics of tiered sequences.
+
+**Deliverables:**
+
+1. **`InsertionOrderMapBackend<K, V>` trait** with the standard
+   `CollectionBackend<K, V>` operations plus `iter_insertion_order() -> Vec<(K, V)>`.
+   `load_from` appends in iterator order (not replace — unlike `CollectionBackend`).
+
+2. **Concrete backends:** `PdsInsertionOrderMapBackend<K, V>`,
+   `PdsInsertionOrderSetBackend<A>`, `PdsOrdInsertionOrderMapBackend<K, V>`,
+   `PdsOrdInsertionOrderSetBackend<A>`.
+
+3. **`TieredInsertionOrderMap<K, V, Hot, Cold>`** — reads return hot value if
+   present (latest write wins), else cold. `iter_insertion_order` returns
+   cold-order entries then hot-order entries (in insertion order within each tier),
+   deduplicating by key (hot wins for duplicates).
+
+4. **Tests** covering insertion-order preservation across flush, key update
+   (updates value but does not change insertion position in cold).
+
+**Acceptance:** `test.sh` passes.
+
+**Blocked by:** T.6.
+
+---
+
+### T.12 — TieredTrie / TieredOrdTrie {#t12}
+
+**Scope:** tiered support for `Trie<K, V>` and `OrdTrie<K, V>`. Tries add prefix
+queries: `prefix_get(prefix: &[K])` returns all entries whose key starts with
+`prefix`.
+
+**Design note:** tries use sequences of keys (not single scalar keys) — the
+`CollectionBackend<Vec<K>, V>` model works if backends store `(Vec<K>, V)` pairs,
+but prefix queries require walking the trie structure. A dedicated `TrieBackend`
+trait is needed.
+
+**Deliverables:**
+
+1. **`TrieBackend<K, V>` trait** in `src/tiered/trie_backend.rs`:
+
+   ```rust
+   pub trait TrieBackend<K, V>: Send + 'static
+   where
+       K: Clone, V: Clone,
+   {
+       fn get(&self, key: &[K]) -> Option<V>;
+       fn insert(&mut self, key: Vec<K>, value: V) -> Option<V>;
+       fn remove(&mut self, key: &[K]) -> Option<V>;
+       fn prefix_get(&self, prefix: &[K]) -> Vec<(Vec<K>, V)>;
+       fn len(&self) -> usize;
+       fn is_empty(&self) -> bool;
+       fn load_from(&mut self, iter: impl Iterator<Item = (Vec<K>, V)>);
+       fn drain(&mut self) -> Vec<(Vec<K>, V)>;
+   }
+   ```
+
+2. **Concrete backends:** `PdsTrieBackend<K, V>`, `PdsOrdTrieBackend<K, V>`.
+
+3. **`TieredTrie<K, V, Hot, Cold>`** in `src/tiered/trie.rs`. Pending deletes
+   track `Vec<K>` keys. `prefix_get` merges results from hot and cold (hot wins
+   on duplicate exact keys). Flush uses per-entry `cold.insert`.
+
+4. **`TieredOrdTrie<K, V, Hot, Cold>`** type alias.
+
+5. **Tests** covering exact-key lookup, prefix queries spanning hot+cold, flush,
+   remove.
+
+**Acceptance:** `test.sh` passes. Clippy clean.
+
+**Blocked by:** T.6 (establishes the pattern).
+
+---
+
+### T.13 — TieredUniqueVector {#t13}
+
+**Scope:** tiered support for `UniqueVector<A>` — an ordered sequence with a
+uniqueness constraint (each element appears at most once).
+
+**Design note:** uniqueness must be checked across both tiers. `push_back(x)` must
+reject `x` if it is already in hot or cold. This means every write needs a cross-tier
+lookup, which costs O(hot + log cold) if hot is unsorted. An auxiliary
+`hot_set: HashSet<A>` in `TieredUniqueVectorState` can make this O(1) expected
+for the hot-containment check.
+
+**Deliverables:**
+
+1. **`UniqueVectorBackend<A>` trait** in `src/tiered/unique_vec_backend.rs`:
+
+   ```rust
+   pub trait UniqueVectorBackend<A>: Send + 'static
+   where
+       A: Clone,
+   {
+       fn push_back(&mut self, value: A) -> bool;    // false if already present
+       fn get(&self, index: usize) -> Option<A>;
+       fn contains(&self, value: &A) -> bool;
+       fn pop_back(&mut self) -> Option<A>;
+       fn len(&self) -> usize;
+       fn is_empty(&self) -> bool;
+       fn load_from(&mut self, iter: impl Iterator<Item = A>); // skip duplicates
+       fn drain(&mut self) -> Vec<A>;
+   }
+   ```
+
+2. **Concrete backends:** `StdUniqueVecBackend<A>` (Vec + HashSet auxiliary),
+   `PdsUniqueVectorBackend<A>` (pds::UniqueVector).
+
+3. **`TieredUniqueVector<A, Hot, Cold>`** in `src/tiered/unique_vec.rs`.
+
+   - `hot_index: HashSet<A>` in state for O(1) duplicate check on push.
+   - `push_back`: check `hot_index` and `cold.contains` first; reject if present.
+   - Index semantics: `0..cold.len()` → cold, `cold.len()..total` → hot (same as
+     `TieredSequence`).
+   - Flush: for each hot element, call `cold.push_back` only if not already in
+     cold (dedup). Clear hot and `hot_index`.
+
+4. **Tests** covering duplicate rejection across tiers, cross-tier index access,
+   flush dedup, concurrent push.
+
+**Acceptance:** `test.sh` passes.
+
+**Blocked by:** T.0c (TieredSequence pattern).
 
 ---
 
