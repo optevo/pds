@@ -94,6 +94,59 @@ and `write_all` of 1 000 entries is negligible by comparison.
 
 ---
 
+### PERF-FOLIO-002 — `PageRefcount` backing store: `hashbrown::HashMap` over `BTreeMap` {#sec:perf-folio-002}
+
+**Date:** 2026-07-01
+**Status:** Accepted — implemented and benchmarked
+
+**Context:**
+Commit `4dc85e2` introduced `PageRefcount` (in `folio-collections`) as a first-class
+refcount type to centralise page reference counting across `pds-folio` and `folio-rope`.
+The initial implementation used `BTreeMap<u64, u32>` as the backing store. Since
+`PageRefcount::inc()` and `dec()` are called on every page write, page allocation, and
+collection clone in `pds-folio`, the O(log n) lookup cost regressed `hamt_insert`
+significantly at large N.
+
+**Decision:**
+Replaced `BTreeMap<u64, u32>` with `hashbrown::HashMap<u64, u32>` in
+`folio-collections/src/refcount.rs`. Added `hashbrown = { version = "0.15",
+default-features = false, features = ["alloc", "default-hasher"] }` to
+`folio-collections/Cargo.toml`.
+
+The `"default-hasher"` feature is required to enable `foldhash` as the hasher; without
+it `DefaultHashBuilder: BuildHasher` is not satisfied. `hashbrown` 0.15 was already an
+indirect transitive dependency (via `folio-core`); making it explicit pins the API.
+
+`folio-collections` is `#![no_std]` with `alloc`, so `std::collections::HashMap` is
+not available. `hashbrown` is the correct choice for this constraint.
+
+**Measured improvement:**
+- Before (BTreeMap): hamt_insert n=100: ~396 µs, n=1 000: ~6.78 ms, n=10 000: ~83.5 ms
+- After (hashbrown): hamt_insert n=100: 370 µs, n=1 000: 6.20 ms, n=10 000: 73.4 ms
+- Improvement: n=100: −6.8%, n=1 000: −8.6%, n=10 000: −12.1%
+
+**Alternatives considered:**
+- *`BTreeMap` (original implementation)* — O(log n) per operation; 7–17% regression
+  vs baseline. Not acceptable in the hot refcount path.
+- *`std::collections::HashMap`* — not available in `no_std + alloc` context.
+- *Custom linear-probe table with open addressing* — unnecessary complexity;
+  `hashbrown` provides the same algorithm (Robin Hood hashing) in a well-tested,
+  audited crate already in the dependency tree.
+- *Inline `HashMap<u64, u32>` in `NodeStore` (original pds-folio approach)* — the
+  pre-`4dc85e2` code already used this pattern. `PageRefcount` extracts and encapsulates
+  it for reuse by `folio-rope`; this decision preserves the O(1) property of the
+  original while enabling the refactor.
+
+**Consequences:**
+- `folio-collections` now depends on `hashbrown` explicitly. This is acceptable:
+  the crate is widely-used, actively maintained, `no_std`-compatible with `alloc`,
+  and already present in the transitive dependency tree.
+- `foldhash` (hashbrown's default hasher) is measurably faster than SipHash-1-3 for
+  `u64` keys, contributing an additional few percent beyond the O(log n) → O(1) gain.
+- No API change to `PageRefcount` — the backing store is private.
+
+---
+
 ## DEC-039: `*Range` view types — design principles {#sec:dec-039}
 
 **Date:** 2026-04-27

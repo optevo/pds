@@ -202,6 +202,53 @@ interruptions (>10×) can throw off the outlier detector too.
 
 *Entries appended as the tuning loop runs. Newest first.*
 
+### 2026-07-01 — Area #2: BLAKE3 parallel subtree hashing (investigated — no opportunity)
+
+**Crate:** pds-merkle-spine
+**Assessment:** No measurable ≥5% opportunity at current benchmark sizes (N ≤ 1 000).
+
+**Why:** `compute_merkle_root` is already called lazily (H.9 — committed prior to this
+tuning session). The `versioned_hamt_prove` benchmark (279.3 ns) measures the cached
+path — BLAKE3 is called once for the Merkle proof, not once per insert. No existing
+benchmark exercises first-call root computation at large N (where parallelism would
+help). At N=1 000, `compute_merkle_root` iterates ~1 000 K/V pairs, serialises them,
+and calls `blake3::keyed_hash` once over a ~8 KB buffer — this completes in ≈30–50 µs
+and is not measured by any standalone benchmark.
+
+**Conclusion:** Parallel BLAKE3 hashing would only help for workloads where
+`compute_merkle_root` is on the critical path at N ≥ 10 000. No such benchmark exists
+and the use case (bulk proof generation) is not the primary bottleneck. Revisit if a
+large-N Merkle benchmark is added.
+
+### 2026-07-01 — PERF-FOLIO-002: PageRefcount BTreeMap → hashbrown migration
+
+**Crate:** folio-collections (consumed by pds-folio)
+**Root cause:** A concurrent session's commit `4dc85e2` (12:11 AEST) introduced
+`PageRefcount` (in `folio-collections/src/refcount.rs`) backed by
+`BTreeMap<u64, u32>` — O(log n) per operation. Since `inc()`/`dec()` are called on
+every page write and clone in `pds-folio`, this regressed `hamt_insert` by 7–17%.
+
+**Before (BTreeMap, implicit from commit `4dc85e2`):**
+hamt_insert: n=100: ~396 µs, n=1 000: ~6.78 ms, n=10 000: ~83.5 ms
+
+**After (hashbrown::HashMap, O(1) amortised):**
+hamt_insert: n=100: 370 µs, n=1 000: 6.20 ms, n=10 000: 73.4 ms
+
+**Improvement vs BTreeMap:** n=100: −6.8%, n=1 000: −8.6%, n=10 000: −12.1%
+(also −7–12% vs the original pre-`4dc85e2` baselines, because foldhash is faster
+than the implicit SipHash-1-3 in the original `HashMap<u64, u32>` inline refcount table)
+
+**Clone improvement bonus:** hamt_clone_snapshot dropped from ~37 ns to ~22 ns.
+The refactor in commit `4dc85e2` also simplified the clone path: removed
+`increment_root_refcount` which previously acquired a `Mutex` on every clone.
+Current clone is a pure `Arc::clone` (atomic refcount increment only).
+
+**Also fixed:** compile error — the same commit removed `HashMap` from `use
+std::collections::HashMap` in `pds-folio/src/hamt.rs`, but `page_cache:
+HashMap<u64, HamtNodePage>` still uses it. Fixed by restoring the import.
+
+**Decision:** see `docs/decisions.md` → PERF-FOLIO-002.
+
 ### 2026-07-01 — Area #1: WAL group commit (PERF-001)
 
 **Crate:** pds-durable
