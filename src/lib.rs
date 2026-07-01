@@ -783,6 +783,11 @@ pub use crate::vector::{GenericVector, Vector};
 #[cfg(feature = "traits")]
 pub mod traits;
 
+#[cfg(feature = "traits")]
+mod merkle_wrapper;
+#[cfg(feature = "traits")]
+pub use merkle_wrapper::MerkleWrapper;
+
 #[cfg(test)]
 mod test;
 

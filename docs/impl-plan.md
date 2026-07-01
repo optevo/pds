@@ -59,6 +59,38 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-07-01] Architectural improvements — MerkleWrapper, decision log, trait boundary note, selection guidance.**
+  Four improvements from the post-H.8 architectural review:
+
+  1. `MerkleWrapper<C, K, V>` (`src/merkle_wrapper.rs`, `traits` feature) — content-addressed
+     Merkle identity over any `PersistentMap<K, V>`. In-memory alternative to
+     `pds-merkle-spine::VersionedHamt`; no folio dependency. Implements
+     `PersistentCollection`, `PersistentMap`, `VersionedPersistentMap`, and
+     `MerklePersistentMap`. `VersionId = [u8; 32]` (the BLAKE3 Merkle root). Root hash
+     computed from sorted leaf hashes via a binary Merkle tree (postcard serialisation +
+     BLAKE3). Cached in `OnceLock`; not propagated through `Clone` (hash is cheap to
+     recompute and deterministic). `prove_inclusion` / `verify_proof` use sibling-hash
+     proof path. New optional deps: `blake3 = "1"`, `postcard = "1"` (both behind
+     `traits` feature gate).
+
+  2. `docs/decisions.md` additions:
+     - DEC-DURABLE-1: role boundary between `pds-durable` (explicit checkpoint/fsync)
+       and `pds-folio` disk backend (transparent page-level persistence). Deferred
+       deprecation evaluation until folio disk backend lands.
+     - DEC-ARCH-MERKLE: two-tier Merkle capability (`MerkleWrapper` for in-memory
+       identity; `VersionedHamt` for persistent versioned history).
+
+  3. Trait boundary note in `src/traits.rs` — explains why `pds-durable` types do not
+     implement `PersistentCollection` (durability is orthogonal to structural sharing).
+
+  4. Backend selection table in `pds-folio/src/lib.rs` — crate-level guidance on
+     when to use pds vs pds-folio vs MerkleWrapper vs pds-merkle-spine vs pds-durable.
+
+  Tests: 20 unit tests in `src/merkle_wrapper.rs` covering root hash properties,
+  round-trip stability, clone behaviour, get_at/checkout version identity, proof
+  generation and verification, tampered-value rejection, diff semantics, and
+  PersistentMap delegation. All tests green; `test.sh` passes.
+
 - **[2026-07-01] pds-merkle-spine H.0–H.8 — `VersionedHamt` full implementation.**
   New workspace member `pds-merkle-spine` (crate `pds-merkle-spine`): thin facade
   combining `pds-folio`'s `HamtMap<K,V,C,B>` with `merkle-spine`'s BLAKE3 hash primitives.
@@ -3920,6 +3952,24 @@ All major tracks complete. Remaining open items listed in [Residual](#residual).
 8. **Serialisation track:** ✓ COMPLETE (6.6 done: HashMap, HashSet via
    HashMapPool; OrdMap, OrdSet via OrdMapPool; Vector via VectorPool)
 9. **Trie track:** ✓ COMPLETE (6.9 done)
+
+---
+
+## Architectural open items (post-H.8 review) {#arch-open}
+
+These items were identified during the 2026-07-01 architectural review. None are
+blocking; all are deferred until the relevant infrastructure lands.
+
+- **DEC-DURABLE-1 follow-up:** Evaluate whether `pds-durable`'s `TieredMap` is
+  superseded once `pds-folio` gains a disk `Backend` implementation. If yes, mark
+  `pds-durable` maintenance-only and deprecate `TieredMap`. Gate: `pds-folio` disk
+  backend must be complete and benchmarked against `pds-durable` for the relevant
+  workload patterns.
+
+- **pds-folio disk Backend:** Add a CoW+WAL disk-backed `Backend` implementation to
+  `pds-folio`. This is the prerequisite for the DEC-DURABLE-1 re-evaluation and
+  enables the folio tier in the `MerkleWrapper` → `VersionedHamt` upgrade path.
+  (Unblocks DEC-DURABLE-1 re-evaluation.)
 
 ---
 

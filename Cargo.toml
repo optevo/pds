@@ -62,9 +62,10 @@ persist = ["std", "dep:serde_core", "hash-intern"]
 ord-hash = ["std"]
 # Cross-variant trait layer: PersistentCollection, PersistentMap, PersistentSet,
 # PersistentVector, PersistentOrdMap, PersistentOrdSet, VersionedPersistentMap,
-# MerklePersistentMap. In-memory impls included; folio/merkle-spine impls planned
-# (pds-folio, pds-merkle-spine workspace members). Requires std.
-traits = ["std"]
+# MerklePersistentMap, MerkleWrapper. In-memory impls included; folio/merkle-spine
+# impls planned (pds-folio, pds-merkle-spine workspace members). Requires std.
+# blake3 and postcard are required by MerkleWrapper.
+traits = ["std", "dep:blake3", "dep:postcard", "dep:serde_core"]
 
 [dependencies]
 bitmaps = { version = "3", default-features = false }
@@ -77,6 +78,11 @@ proptest = { version = "1.0", optional = true }
 serde_core = { version = "1.0.224", optional = true }
 rayon = { version = "1", optional = true }
 arbitrary = { version = "1.0", optional = true }
+# blake3 and postcard are required by MerkleWrapper (traits feature).
+# Auto-approved under the three-condition rule: required for functionality,
+# no pure-Rust alternative in the tree, both are widely used and well-maintained.
+blake3 = { version = "1", optional = true }
+postcard = { version = "1", default-features = false, features = ["alloc"], optional = true }
 wide = { version = "0.7", default-features = false }
 equivalent = "1.0.2"
 arc-swap = { version = "1.9", optional = true }

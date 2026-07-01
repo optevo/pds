@@ -47,6 +47,24 @@
 //! folio).  A `consensus` feature flag (`consensus = ["folio-consensus"]`) will be
 //! added when a folio consensus backend exists.
 //!
+//! # Backend selection
+//!
+//! Choose the right backend for your use case:
+//!
+//! | Requirement | Use |
+//! |-------------|-----|
+//! | Pure in-memory, maximum speed | `pds` (`HashMap`, `OrdMap`, `Vector`) |
+//! | Disk persistence, large datasets (N > 10M) | `pds-folio` (`HamtMap`, `FolioVec`) |
+//! | Cryptographic identity over in-memory data | `pds::MerkleWrapper<C>` |
+//! | Versioned history + disk durability + proofs | `pds-merkle-spine` (`VersionedHamt`) |
+//! | ACID semantics + explicit checkpoint control | `pds-durable` (`DurableMap`) |
+//!
+//! **Performance tradeoff:** `pds-folio`'s page indirection adds roughly 2–3×
+//! latency vs `pds` at small N (e.g. `HashMap::get` ≈ 78 ns vs `HamtMap::get`
+//! ≈ 150–200 ns on MemBackend). `pds-folio` wins when the working set exceeds
+//! available RAM, when disk durability is required, or when N > ~10M keys where
+//! the page cache amortises the indirection cost.
+//!
 //! # Status
 //!
 //! **Phase G complete** — all five collection types implemented with full CRUD,

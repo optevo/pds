@@ -19,6 +19,19 @@ use std::ops::RangeBounds;
 use crate::hash_width::HashWidth;
 use crate::shared_ptr::SharedPointerKind;
 
+// --- Trait boundary note ---
+//
+// `pds-durable` types (`DurableMap`, `DurableHashMap`) intentionally do NOT
+// implement `PersistentCollection` or any trait in this hierarchy. Durability
+// is orthogonal to structural sharing: a `DurableMap` is a mutable, WAL-backed
+// wrapper around standard collections — it does not provide O(1) clone or
+// immutable structural sharing. Callers should not expect `pds-durable` types
+// to be substitutable for `PersistentMap` implementors.
+//
+// For transparent page-level persistence with the persistent-collection API,
+// see `pds-folio` (planned disk Backend). For content-addressed identity over
+// in-memory collections, see `MerkleWrapper` in this crate.
+
 // --- Marker trait ---
 
 /// Marker trait for persistent (immutable with structural sharing) collections.

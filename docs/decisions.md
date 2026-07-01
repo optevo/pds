@@ -2588,4 +2588,82 @@ Full results: `docs/baselines.md` § "OrdTrie set operations" and § "Trie set o
 - `from_iter` O(n) bulk load: implemented for `InsertionOrderMap` (Investigation B)
   and `InsertionOrderSet` (found during subsequent audit; same fix).
 - `OrdTrie` merge-walk and `Trie` `ptr_eq` fast-path: implemented (Investigation C).
+
+---
+
+## DEC-DURABLE-1: pds-durable vs pds-folio role boundary {#sec:dec-durable-1}
+
+**Date:** 2026-07-01
+**Status:** Accepted
+
+**Context:**
+`pds-durable` provides WAL-backed durability (Relaxed/Strict modes) wrapping
+`std::HashMap` and `pds::HashMap` as tiers. Once `pds-folio` gains a disk-backed
+`Backend` implementation (planned), a caller could use `pds-folio::HamtMap` with
+the disk backend to achieve similar durability at the page level. This creates an
+apparent overlap between the two crates.
+
+**Decision:**
+The two solve different problems and target different use cases:
+
+- `pds-durable`: ACID semantics with explicit checkpoint control, batch-insert API,
+  strict/relaxed fsync modes, designed for transactional key-value workloads where
+  the caller controls flush granularity.
+- `pds-folio` (future disk backend): transparent page-level persistence; the caller
+  does not manage WAL or checkpoints; durability is a property of the storage
+  backend, not the collection API.
+
+**Alternatives considered:**
+- *Unify under pds-folio* — rejected: the folio disk backend does not yet exist,
+  and even when it does, the WAL/checkpoint model of pds-durable is a better fit for
+  workloads that need explicit durability control at the application level.
+
+**Consequences:**
+When `pds-folio`'s disk backend lands, evaluate whether `pds-durable`'s `TieredMap`
+is superseded for simple durability workloads. If so, mark `pds-durable`
+maintenance-only and deprecate `TieredMap` in its favour. Until then, both coexist.
+Callers needing explicit checkpoint and fsync control should use `pds-durable`;
+callers wanting transparent persistence should wait for the folio disk backend.
+
+---
+
+## DEC-ARCH-MERKLE: Merkle versioning requires folio for full persistence; in-memory via MerkleWrapper {#sec:dec-arch-merkle}
+
+**Date:** 2026-07-01
+**Status:** Accepted
+
+**Context:**
+The architectural review identified that `pds-merkle-spine` is tightly coupled to
+folio-backed storage, preventing Merkle identity from being used over in-memory
+collections. A lightweight alternative was needed for callers that only require a
+cryptographic fingerprint or inclusion proof, without the overhead of folio page
+management or navigable version history.
+
+**Decision:**
+Two tiers of Merkle capability exist:
+
+1. `MerkleWrapper<C>` (in pds, `traits` feature) — content-addressed identity over
+   any `PersistentMap<K, V>`. Uses the content hash as the version ID. No page
+   persistence, no folio dependency. Suitable when you need a cryptographic
+   fingerprint or inclusion proof but do not need version history navigation or disk
+   durability.
+
+2. `pds-merkle-spine::VersionedHamt` — full Merkle versioning with navigable history,
+   folio page-level persistence, and historical proofs. Requires folio; version IDs
+   are stable across process restarts.
+
+**Alternatives considered:**
+- *Add history storage to MerkleWrapper* — rejected: this would require retaining
+  full collection snapshots (O(N) memory per historical version), defeating the
+  purpose of a lightweight wrapper. `pds-merkle-spine` already solves this correctly.
+- *Make pds-merkle-spine usable without folio* — rejected: the entire design of
+  merkle-spine is predicated on stable page IDs surviving process restarts. Without
+  folio, page IDs are meaningless.
+
+**Consequences:**
+Callers wanting only content-addressable identity (e.g. "is this collection the same
+as a remote copy?") should use `MerkleWrapper`. Callers needing versioned history,
+disk durability, or proof verification across restarts should use `pds-merkle-spine`.
+The two are not mutually exclusive: a `MerkleWrapper` can wrap any `PersistentMap`,
+including the in-memory type that backs a `VersionedHamt` snapshot.
 - All findings (positive and negative) recorded here per the decision log convention.
