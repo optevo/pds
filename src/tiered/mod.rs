@@ -107,38 +107,22 @@ where
 {
     /// Flushes the hot tier into the cold tier.
     ///
-    /// 1. Drains all entries from hot.
-    /// 2. Applies `pending_deletes` to cold (removing those keys).
-    /// 3. Loads the drained entries into cold.
-    /// 4. Resets `write_count` and clears `pending_deletes`.
+    /// Uses per-entry inserts — O(hot × log cold) — instead of the previous
+    /// O(hot + cold) drain-and-reload approach. Pending deletes are applied
+    /// first, then each hot entry is inserted individually into cold. This
+    /// avoids allocating an intermediate Vec of all cold entries and performing
+    /// a full cold drain, at the cost of O(log cold) per hot entry.
     fn flush(&mut self) {
-        // Drain hot tier entries.
-        let hot_entries = self.hot.drain();
-
-        // Apply pending deletes to cold before loading hot entries, so a delete
-        // that happened after a previous flush is not resurrected by load_from.
+        // Apply pending deletes to cold before inserting hot entries, so that a
+        // delete which occurred after the last flush is not resurrected.
         for key in self.pending_deletes.drain() {
             self.cold.remove(&key);
         }
-
-        // Merge hot entries into cold. We use load_from which clears cold first
-        // if there are hot entries, or a merge if not. Because load_from clears,
-        // we need to first read what's in cold, merge with hot, then load_from.
-        if !hot_entries.is_empty() {
-            // Collect existing cold entries that are NOT being overwritten by hot.
-            let hot_keys: HashSet<_> = hot_entries.iter().map(|(k, _)| k).cloned().collect();
-            let cold_entries: Vec<(K, V)> = self
-                .cold
-                .drain()
-                .into_iter()
-                .filter(|(k, _)| !hot_keys.contains(k))
-                .collect();
-
-            // Merge: cold survivors + hot entries.
-            let merged = cold_entries.into_iter().chain(hot_entries);
-            self.cold.load_from(merged);
+        // Insert each hot entry directly into cold. Hot wins on key conflicts
+        // because these inserts happen after the pending-delete pass.
+        for (k, v) in self.hot.drain() {
+            self.cold.insert(k, v);
         }
-
         self.write_count = 0;
     }
 
