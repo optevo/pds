@@ -817,6 +817,12 @@ pub use tiered::set_backends::{
 };
 #[cfg(feature = "tiered")]
 pub use tiered::{TieredOrdSet, TieredSet, TieredSetOrdExt};
+#[cfg(feature = "tiered")]
+pub use tiered::{BagBackend, OrderedBagBackend};
+#[cfg(feature = "tiered")]
+pub use tiered::bag_backends::{PdsBagBackend, PdsOrdBagBackend};
+#[cfg(feature = "tiered")]
+pub use tiered::{TieredBag, TieredOrdBag};
 
 #[cfg(test)]
 mod test;

@@ -50,6 +50,9 @@
 
 pub mod backend;
 pub mod backends;
+pub mod bag;
+pub mod bag_backend;
+pub mod bag_backends;
 pub mod policy;
 pub mod sequence;
 pub mod sequence_backend;
@@ -61,6 +64,8 @@ pub mod set_backends;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_bag;
+#[cfg(test)]
 mod tests_compose;
 #[cfg(test)]
 mod tests_ord;
@@ -70,6 +75,8 @@ mod tests_seq;
 mod tests_set;
 
 pub use backend::{CollectionBackend, OrderedCollectionBackend};
+pub use bag::{TieredBag, TieredOrdBag};
+pub use bag_backend::{BagBackend, OrderedBagBackend};
 pub use policy::PropagationPolicy;
 pub use sequence::TieredSequence;
 pub use sequence::TieredVector;
