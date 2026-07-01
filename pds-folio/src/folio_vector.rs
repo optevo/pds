@@ -26,11 +26,9 @@
 //! The `C: Codec` type parameter controls how elements are serialised into leaf
 //! node byte arrays.  See [`crate::codec`] for built-in options.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
+use folio_collections::refcount::PageRefcount;
 use folio_core::{
     backend::{Backend, MemBackend},
     error::BackendError,
@@ -84,7 +82,7 @@ pub(crate) struct VectorNodeStore<B> {
     /// The underlying folio page store.
     pub(crate) store: FolioStore<B>,
     /// Shared-page refcount table.  Absent = refcount 1 (unique).
-    pub(crate) refcounts: HashMap<u64, u32>,
+    pub(crate) refcounts: PageRefcount,
 }
 
 impl<B: Backend<Error = BackendError>> VectorNodeStore<B> {
@@ -112,29 +110,14 @@ impl<B: Backend<Error = BackendError>> VectorNodeStore<B> {
 
     /// Increments the reference count for `page_id`.
     pub(crate) fn increment_refcount(&mut self, page_id: u64) {
-        let entry = self.refcounts.entry(page_id).or_insert(1);
-        *entry += 1;
+        self.refcounts.inc(page_id);
     }
 
     /// Decrements the reference count for `page_id`.
     ///
     /// Returns `true` if the page should be freed (was last unique reference).
     pub(crate) fn decrement_refcount(&mut self, page_id: u64) -> bool {
-        match self.refcounts.get_mut(&page_id) {
-            None => {
-                // Implicit refcount 1 — dropping the last reference.
-                true
-            }
-            Some(count) => {
-                *count -= 1;
-                if *count <= 1 {
-                    self.refcounts.remove(&page_id);
-                    false
-                } else {
-                    false
-                }
-            }
-        }
+        self.refcounts.dec(page_id) == 0
     }
 }
 
@@ -186,7 +169,7 @@ where
     pub fn new(store: FolioStore<B>) -> Self {
         let node_store = VectorNodeStore {
             store,
-            refcounts: HashMap::new(),
+            refcounts: PageRefcount::new(),
         };
         Self {
             store: Arc::new(Mutex::new(node_store)),

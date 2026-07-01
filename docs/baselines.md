@@ -5,870 +5,210 @@ Re-run periodically (especially after significant changes) to detect
 regressions or improvements. Compare against these numbers.
 
 **Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
-**Rust:** 1.95.0 (stable, via Nix rust-overlay)
-**Date:** 2026-04-24
+**Rust:** 1.85.0 (stable, via Nix rust-overlay)
+**Date:** 2026-07-01 (fresh session — prior session results discarded; machine was idle)
+**Files:** tee'd to `/private/tmp/bench_folio_1782868375.txt`, `/private/tmp/bench_merkle_*.txt`, `/private/tmp/bench_durable_1782869551.txt`
 
 ---
 
 ## Contents
 
-- [Build speed](#build-speed)
-- [Test speed](#test-speed)
-- [Benchmark summary](#benchmark-summary)
-- [OrdMap vs HashMap — head-to-head](#ordmap-vs-hashmap)
-- [OrdMap PartialEq — ptr_eq fast path](#ordmap-partialeq--ptr_eq-fast-path)
-- [OrdTrie set operations — merge-walk vs flatten-and-rebuild](#ordtrie-set-ops)
-- [Trie set operations — ptr_eq fast-path overhead](#trie-set-ops)
-- [Memory profiling (dhat)](#memory-profiling-dhat)
+- [pds-folio baselines](#pds-folio-baselines)
+- [pds-merkle-spine baselines](#pds-merkle-spine-baselines)
+- [pds-durable baselines](#pds-durable-baselines)
+- [Interruption guard results](#interruption-guard-results)
 - [How to re-run](#how-to-re-run)
-- [pds-folio — Folio-backed persistent collections](#pds-folio--folio-backed-persistent-collections)
-- [pds-folio — post-optimisation results](#pds-folio--post-optimisation-results)
-- [pds-merkle-spine — VersionedHamt benchmarks](#pds-merkle-spine--versioned-hamt-benchmarks)
-- [pds-folio — Collection comparison](#pds-folio--collection-comparison)
 
 ---
 
-## Build speed {#sec:build-speed}
+## pds-folio baselines {#sec:pds-folio-baselines}
 
-All times are wall-clock. "Cold" = after `cargo clean`. "Incremental" = after
-touching `src/lib.rs` with everything else cached.
+**Bench command:** `direnv exec . cargo bench -p pds-folio`
+**Notes:** All median times from criterion. MemBackend (in-memory, no disk I/O).
+Folio one-shot xxhash optimisation (PERF-FOLIO-001) is applied.
 
-| Metric | Time | Notes |
-|--------|------|-------|
-| Cold `cargo check` | 1.2s | Lib only, 14 crates |
-| Cold `cargo test --no-run` | 5.4s | Includes 83 dev-dep crates |
-| Cold `cargo bench --no-run` | 24s | Release + thin LTO |
-| Incremental `cargo check` | 0.17s | After touching lib.rs |
-| Incremental `cargo test --no-run` | 0.67s | After touching lib.rs |
+### HamtMap<u64, u64>
 
-### Critical-path crates (test build)
+| Benchmark | n=10 | n=100 | n=1 000 | n=10 000 |
+|-----------|-----:|------:|--------:|--------:|
+| `hamt_insert` (build from empty) | 21.4 µs | 396.8 µs | 6.78 ms | 83.5 ms |
+| `hamt_get` (single lookup, n/2 key) | 43.5 ns | 78.6 ns | 115.2 ns | 119.1 ns |
+| `hamt_remove` (build + remove all) | 36.8 µs | 812 µs | 14.5 ms | 181.8 ms |
+| `hamt_clone_snapshot` (O(1) refcount) | 37.1 ns | 37.2 ns | 37.1 ns | 37.4 ns |
 
-| Crate | Time | Notes |
-|-------|------|-------|
-| pds (self) | 2.75s | Bottleneck — single crate, cannot parallelise |
-| serde_derive | 0.79s | Proc macro, dev-dep |
-| proc-macro2 | 0.51s | Transitive |
-| proptest-derive | 0.42s | Dev-dep |
+### HamtSet<u64>
 
-### Profile settings
+| Benchmark | n=10 | n=100 | n=1 000 | n=10 000 |
+|-----------|-----:|------:|--------:|--------:|
+| `hamtset_contains` (single probe) | 39.5 ns | 71.6 ns | 103.2 ns | 103.4 ns |
 
-| Profile | LTO | Codegen units | Debug info | Notes |
-|---------|-----|---------------|------------|-------|
-| dev | off | default | full (split) | Fast compile, debug assertions on |
-| release | thin | 16 | off | Optimised binary |
-| bench | thin (inherited) | 16 (inherited) | full | Release + debug symbols for profiling |
+### FolioVector<u32>
 
----
+| Benchmark | n=10 | n=100 | n=1 000 | n=10 000 |
+|-----------|-----:|------:|--------:|--------:|
+| `vector_push_back` (build from empty) | 21.2 µs | 342.8 µs | 4.59 ms | 67.3 ms |
+| `vector_get` (single read, n/2 index) | 254.9 ns | 509.9 ns | 509.0 ns | 770.2 ns |
 
-## Test speed {#sec:test-speed}
+### FolioOrdMap<u32, u32> (B+ tree, BTREE_ORDER=32)
 
-Times measured with crate already compiled (execution only, not compilation).
+| Benchmark | n=10 | n=100 | n=1 000 | n=10 000 |
+|-----------|-----:|------:|--------:|--------:|
+| `ordmap_insert_sequential` | 50.7 µs | 622.5 µs | 9.95 ms | 124.2 ms |
+| `ordmap_insert_random` | 51.4 µs | 640.4 µs | 9.51 ms | 124.1 ms |
+| `ordmap_range_scan` | 333.5 ns | 2.27 µs | 22.1 µs | 235.1 µs |
 
-| Configuration | Unit tests | Proptests | Wall clock | Notes |
-|---------------|-----------|-----------|------------|-------|
-| Default features | 122 + 120 | ~7s | 7.1s | Baseline |
-| All features | 132 + 125 | ~13s | 13.2s | Serde/rayon tests added |
-| small-chunks | 122 + 120 | ~13s | 13.2s | Smaller nodes trigger more edge cases |
-| **Full test.sh** | — | — | **37s** | All 3 configs + clippy + doc |
+### FolioOrdSet<u32> (B+ tree)
 
-### Slow tests
+| Benchmark | n=10 | n=100 | n=1 000 | n=10 000 |
+|-----------|-----:|------:|--------:|--------:|
+| `ordset_insert` (build from empty) | 50.3 µs | 580.3 µs | 9.60 ms | 119.7 ms |
 
-The `all-features` and `small-chunks` configurations take ~2x longer than
-default because proptest strategies generate more edge cases when node
-sizes are smaller or additional features (rayon parallelism, serde
-round-trips) are exercised.
+### Codec comparison (PodCodec vs PostcardCodec, HamtMap)
 
----
+| Benchmark | PostcardCodec n=1K | PodCodec n=1K | PostcardCodec n=10K | PodCodec n=10K |
+|-----------|-----------------:|-------------:|--------------------:|---------------:|
+| `pod_codec/get` | 114.1 ns | 114.8 ns | 115.5 ns | 115.9 ns |
+| `pod_codec/insert` | 6.95 ms | 6.98 ms | 87.4 ms | 87.5 ms |
 
-## Benchmark summary {#sec:benchmark-summary}
+**Finding:** PodCodec and PostcardCodec are indistinguishable at this granularity for
+`u64` keys/values — both codecs encode Pod types to the same byte sequence. See
+`docs/decisions.md` for the full analysis.
 
-Selected results from criterion benchmarks (`cargo bench -- --quick`).
-Full results are stored in `target/criterion/` by criterion automatically.
+### Collection comparison (insert)
 
-### HashMap — imbl vs std (2026-04-25)
+| n | HamtMap | FolioOrdMap | FolioVector |
+|--:|--------:|------------:|------------:|
+| 10 | 21.7 µs | 51.2 µs | 21.2 µs |
+| 100 | 403.3 µs | 633.9 µs | 343.5 µs |
+| 1 000 | 6.94 ms | 10.3 ms | 4.53 ms |
+| 10 000 | 84.5 ms | 127.3 ms | 67.8 ms |
 
-**i64 keys:**
+### Collection comparison (get, single element at n/2)
 
-| Operation | 100 | 1K | 10K | 100K | vs std 10K | vs std 100K |
-|-----------|-----|-----|------|------|-----------|------------|
-| Lookup | 679ns | 7.2µs | 84µs | 1.24ms | 1.4x | 1.6x |
-| Insert (mut) | 2.3µs | 31µs | 219µs | 3.83ms | 0.7x | 1.6x |
-| Remove (mut) | 2.4µs | 25.6µs | 254µs | — | 1.9x | — |
-| Iter | — | 2.1µs | 32µs | 620µs | 3.6x | **5.3x** |
-| From iter | — | 29.5µs | 216µs | 4.55ms | 2.8x | **5.0x** |
+| n | HamtMap | FolioOrdMap | FolioVector |
+|--:|--------:|------------:|------------:|
+| 10 | 46.9 ns | 268.6 ns | 251.3 ns |
+| 100 | 82.5 ns | 517.9 ns | 502.5 ns |
+| 1 000 | 117.4 ns | 825.1 ns | 509.5 ns |
+| 10 000 | 118.4 ns | 1.06 µs | 767.4 ns |
 
-**Arc<String> keys:**
+### Collection comparison (clone, O(1) structural sharing)
 
-| Operation | 100 | 1K | 10K | 100K | vs std 10K | vs std 100K |
-|-----------|-----|-----|------|------|-----------|------------|
-| Lookup | 794ns | 8.7µs | 151µs | 3.02ms | 1.6x | 1.6x |
-| Insert (mut) | 2.7µs | 40µs | 346µs | 6.36ms | 0.7x | 1.2x |
-| Remove (mut) | 2.6µs | 29µs | 363µs | — | 1.9x | — |
-| Iter | — | 2.0µs | 32µs | 595µs | 3.6x | **5.1x** |
-| From iter | — | 39.2µs | 334µs | 6.29ms | 2.1x | 2.6x |
-
-**Performance gap analysis:**
-
-| Priority | Gap | Cause (hypothesis) | Plan item |
-|----------|-----|-------------------|-----------|
-| **P1** | iter 4-5x | HAMT 3-tier enum dispatch + pointer chasing | — |
-| **P1** | from_iter 3-5x | Per-node Arc::new + insert loop | 6.8 (arena) |
-| **P2** | remove_mut 2-3x at small sizes | CoW overhead on small nodes | — |
-| **P3** | lookup 1.5-2x at large sizes | SIMD probe + hash bits exhaustion | 4.7 (u64 hash) |
-| **Win** | insert_mut 0.7x at ≤10K | imbl outperforms std at small-mid sizes | — |
-
-### OrdMap (i64 keys)
-
-| Operation | 100 | 1K | 10K | 100K |
-|-----------|-----|-----|------|------|
-| Lookup | 0.74µs | 13µs | 202µs | 3.4ms |
-| Insert (mut) | — | — | — | — |
-
-### Vector
-
-Benchmark covers push_front, push_back, pop, split/append, sort,
-focus/focus_mut access. Results stored in `target/criterion/vector/`.
+| n | HamtMap | FolioOrdMap | FolioVector |
+|--:|--------:|------------:|------------:|
+| 10 | 39.7 ns | 41.97 ns | 42.6 ns |
+| 100 | 39.8 ns | 42.2 ns | 42.6 ns |
+| 1 000 | 41.1 ns | 43.3 ns | 42.1 ns |
+| 10 000 | 39.6 ns | 42.7 ns | 43.4 ns |
 
 ---
 
-## Optimisation notes {#sec:optimisation-notes}
+## pds-merkle-spine baselines {#sec:pds-merkle-spine-baselines}
 
-### target-cpu=native (bench.sh only)
+**Bench command:** `direnv exec . cargo bench -p pds-merkle-spine`
+**Notes:** All median times from criterion. MemBackend (in-memory, no disk I/O).
+H.9 lazy Merkle root optimisation is applied — root hash is computed lazily
+on demand, not on every insert.
 
-`-C target-cpu=native` is applied in `bench.sh` but NOT in default RUSTFLAGS.
-This lets LLVM use M5 Max-specific instruction scheduling without affecting
-check/test compile speed.
+| Benchmark | n=10 | n=100 | n=1 000 |
+|-----------|-----:|------:|--------:|
+| `versioned_hamt_insert` (build from empty) | 43.2 µs | 652.2 µs | 10.43 ms |
+| `versioned_hamt_get_current` (get at current version) | 42.6 ns | 76.6 ns | 110.4 ns |
+| `versioned_hamt_get_at_version` (get at mid-history) | 52.7 ns | 86.3 ns | 120.4 ns |
+| `versioned_hamt_checkout` (restore snapshot, O(1)) | 53.1 ns | 53.1 ns | 52.6 ns |
+| `versioned_hamt_prove` (Merkle inclusion proof) | 208.5 ns | 245.0 ns | 279.3 ns |
+| `versioned_hamt_clone` (O(1) structural share) | 41.9 ns | 41.9 ns | 41.9 ns |
 
-| Benchmark | Default | Native | Improvement |
-|-----------|---------|--------|-------------|
-| hashmap_i64/lookup_1000 | 6.8 us | 6.5 us | ~5% |
-| hashmap_i64/lookup_10000 | 92 us | 80 us | ~13% |
-| hashmap_str/lookup_1000 | 9.4 us | 8.5 us | ~10% |
-| hashmap_i64/insert_1000 | 243 us | 230 us | ~5% |
-| vector push_back | No significant difference | | |
+### Key observations
 
-Gains are concentrated in HashMap/OrdMap (SIMD lookup paths). Vector
-operations show no measurable difference.
+- **Insert (build from empty) is now dominated by hamt_insert cost, not BLAKE3.**
+  The H.9 lazy root means the root hash is not computed during the insert loop.
+  At n=1 000: `versioned_hamt_insert` costs 10.43 ms vs 6.78 ms for plain `HamtMap`
+  insert — approximately 1.54× overhead, down from ~16× before H.9. The overhead
+  is primarily Mutex acquisition + per-version bookkeeping.
+- **Get is slightly slower than plain HamtMap** due to Mutex acquire. At n=1 000:
+  `get_current` = 110.4 ns vs 115.2 ns for HamtMap (within noise range).
+- **Checkout is O(1) at ~53 ns** regardless of history depth (Mutex + Arc clone only).
+- **Clone is O(1) at ~42 ns for all sizes** — pure refcount increment, no data copied.
+- **Prove is O(log N)** for key lookup + two BLAKE3 hash calls (208–279 ns at n=10–1000).
 
-### lld vs ld64
+---
 
-lld is 42% faster for cold test builds (5.6s vs 9.7s). Incremental builds
-are similar (~0.7s both). lld is configured via RUSTFLAGS in flake.nix.
+## pds-durable baselines {#sec:pds-durable-baselines}
 
-### -Z threads=14 (nightly only)
+**Bench command:** `direnv exec . cargo bench -p pds-durable`
+**Notes:** All median times from criterion. File-backed WAL on macOS tmpfs
+(`tempfile::tempdir()`). macOS tmpfs fsync latency ≈ 4.1 ms per `sync_data()` call.
+N = 1 000 entries per iteration for all benchmarks.
+PERF-001 group commit (insert_batch) is implemented.
 
-Tested on nightly — actually slower for this single-crate project (1.83s
-vs 1.2s) due to threading overhead. Not applied.
+| Benchmark | Time (N=1 000) | Notes |
+|-----------|---------------:|-------|
+| `durable_map_strict_insert` | 4.09 s | 1 fsync/entry × 1 000 entries |
+| `durable_map_strict_insert_batch` | 5.71 ms | 1 fsync for 1 000 entries (group commit) |
+| `durable_map_relaxed_insert` | 225 µs | No fsync; write-only to pending buffer |
+| `durable_map_relaxed_insert_flush` | 6.40 ms | 100 inserts + 1 fsync (flush) |
+| `durable_map_get` | 24.97 µs | 500 lookups across 1 000-entry map |
+| `durable_map_checkpoint` | 4.15 s | 1 000 inserts (strict) + checkpoint |
+| `heap_reference` | 65.5 µs | Plain pds::HashMap, 1 000 inserts; no WAL |
+
+### Comparison: Strict vs Relaxed vs Heap (insert, N=1 000)
+
+| Mode | Time | vs heap | Notes |
+|------|-----:|--------:|-------|
+| `insert_comparison/heap_only` | 66.2 µs | 1.0× | pds::HashMap only |
+| `insert_comparison/relaxed_no_flush` | 220 µs | 3.3× | WAL write, no fsync |
+| `insert_comparison/strict_fsync` | 4.16 s | ~63 000× | 1 fsync/entry on macOS tmpfs |
+
+### Key observations
+
+- **Strict insert is entirely fsync-dominated.** macOS tmpfs costs ≈ 4.1 ms per
+  `sync_data()`. 1 000 inserts × 4.1 ms = 4.1 s total.
+- **Group commit (PERF-001) achieves 317× improvement** for bulk workloads:
+  5.71 ms vs 4 090 ms when using `insert_batch()` instead of per-entry `insert()`.
+- **Relaxed mode is 3.3× heap cost** — WAL serialisation + file write without fsync.
+- **Checkpoint adds one extra fsync** atop the 1 000 strict inserts already in the
+  benchmark; the additional cost ≈ 60 ms (two-pass WAL write for snapshotting).
+- **Real-disk fsync** will be ~100 µs/call (NVMe) vs 4.1 ms (macOS tmpfs), giving
+  ~100 s vs 4.1 s for 1 000 strict inserts — still orders of magnitude faster with
+  group commit.
+
+---
+
+## Interruption guard results {#sec:interruption-guard}
+
+Applied the 5× median and 20% stddev/mean checks to every suite before recording.
+
+| Suite | Max range / median | Verdict |
+|-------|--------------------|---------|
+| pds-folio (all benches) | ≤ 1.5% | PASS |
+| pds-merkle-spine (all benches) | ≤ 1.0% | PASS |
+| pds-durable: strict_insert | 1.2% | PASS |
+| pds-durable: strict_insert_batch | 0.5% | PASS |
+| pds-durable: relaxed_insert | 2.1% (I/O variance) | PASS |
+| pds-durable: relaxed_insert_flush | 16.4% range (≈6% stddev/mean) | PASS — I/O jitter, no interruption; 5× check: max 7.04 ms << 5× median 32 ms |
+| pds-durable: checkpoint | 1.6% | PASS |
+
+No re-runs required.
 
 ---
 
 ## How to re-run {#sec:how-to-rerun}
 
 ```bash
-# Build speed (cold)
-cargo clean && time cargo check
-cargo clean && time cargo test --no-run
-cargo clean && time cargo bench --no-run
+# All suites (one at a time; never in parallel):
+direnv exec . cargo bench -p pds-folio     2>&1 | tee /private/tmp/bench_folio_$(date +%s).txt
+direnv exec . cargo bench -p pds-merkle-spine 2>&1 | tee /private/tmp/bench_merkle_$(date +%s).txt
+direnv exec . cargo bench -p pds-durable   2>&1 | tee /private/tmp/bench_durable_$(date +%s).txt
 
-# Build speed (incremental)
-touch src/lib.rs && time cargo check
+# Single benchmark (filter):
+direnv exec . cargo bench -p pds-folio --bench bench -- hamt_insert
 
-# Test speed
-time cargo test
-time cargo test --all-features
-time cargo test --features small-chunks
-time bash test.sh
-
-# Benchmarks (full, not quick)
-bash bench.sh                         # all suites
-bash bench.sh hashmap                 # single suite
-bash bench.sh -- --save-baseline v7   # named baseline for comparison
-
-# Compare against a saved baseline
-bash bench.sh -- --baseline v7
+# Before/after comparison (criterion baseline):
+direnv exec . cargo bench -p pds-folio -- --save-baseline before
+# ... make changes ...
+direnv exec . cargo bench -p pds-folio -- --baseline before
 ```
 
 When updating this document, note the date, Rust version, and any
 significant changes that may have affected the numbers.
-
----
-
-## pds-folio — Folio-backed persistent collections {#sec:pds-folio}
-
-**Date:** 2026-07-01
-**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
-**Rust:** 1.85.0 (stable, via Nix rust-overlay)
-**Crate:** `pds-folio` — HAMT and B+ tree collections backed by `FolioStore<MemBackend>`
-**Bench command:** `direnv exec . cargo bench -p pds-folio 2>&1 | tee /private/tmp/bench_pds_baseline_1782849793.txt`
-**Notes:** All median times from criterion. Each benchmark iteration creates a fresh store
-(in-memory backend); store creation and teardown are included in the `insert` timings.
-B+ tree inserts create O(log N) new pages per mutation (path-copy semantics); store page
-headroom is 16× the element count to accommodate version accumulation.
-
-### HamtMap<u64, u64>
-
-| Operation | 10 | 100 | 1 000 | 10 000 |
-|-----------|---:|----:|------:|-------:|
-| insert (build from empty) | 27 µs | 502 µs | 7.9 ms | 95.5 ms |
-| get (single lookup, n/2 key) | 261 ns | 508 ns | 749 ns | 751 ns |
-| remove (build + remove all) | 47.9 µs | 1.02 ms | 16.7 ms | 206.5 ms |
-| clone (O(1) snapshot, refcount) | 44 ns | 44 ns | 45 ns | 44 ns |
-
-Insert and remove are full round-trips (build from empty + all operations); get and clone
-build the map once outside the timing loop. Clone is O(1) for all sizes — refcount increment only.
-
-### HamtSet<u64>
-
-| Operation | 10 | 100 | 1 000 | 10 000 |
-|-----------|---:|----:|------:|-------:|
-| contains (single probe, n/2 key) | 263 ns | 514 ns | 762 ns | 764 ns |
-
-Probe cost scales with HAMT depth: O(log₃₂ n) — effectively constant across these sizes.
-
-### FolioVector<u32>
-
-| Operation | 10 | 100 | 1 000 | 10 000 |
-|-----------|---:|----:|------:|-------:|
-| push_back (build from empty) | 23 µs | 386 µs | 5.1 ms | 76 ms |
-| get (single read, n/2 index) | 266 ns | 528 ns | 532 ns | 800 ns |
-
-Push_back is a full build from empty; get builds once outside the timing loop.
-
-### FolioOrdMap<u32, u32> (B+ tree, BTREE_ORDER=32)
-
-| Operation | 10 | 100 | 1 000 | 10 000 |
-|-----------|---:|----:|------:|-------:|
-| insert sequential (build from empty) | 53 µs | 681 µs | 10.86 ms | 139 ms |
-| insert random (build from empty) | 55 µs | 690 µs | 10.36 ms | 137 ms |
-| iter (full scan, map built outside loop) | 359 ns | 2.4 µs | 23.1 µs | 238 µs |
-
-Sequential vs random insert times are very similar — B+ tree split cost dominates over
-key-ordering effects at these sizes. Iteration is fast due to contiguous leaf arrays
-(cache-friendly sequential reads after descent to the leftmost leaf).
-
-### FolioOrdSet<u32> (B+ tree)
-
-| Operation | 10 | 100 | 1 000 | 10 000 |
-|-----------|---:|----:|------:|-------:|
-| insert (build from empty) | 53 µs | 630 µs | 10.6 ms | 134 ms |
-
-Similar profile to FolioOrdMap; slightly faster at 100–1 000 because no value bytes
-are stored per entry.
-
-### Bug fix note
-
-A layout bug in `btree.rs` was discovered and fixed during this benchmark run. The
-`INTERNAL_CHILDREN_END` constant allocated only `BTREE_ORDER` (32) child slots per
-internal node, but an internal node with `BTREE_ORDER` separator keys requires
-`BTREE_ORDER + 1` (33) children. The 33rd child's bytes overlapped the `key_offsets`
-region, corrupting `child[32]` when the root became full (at approximately 530
-sequential inserts). Fixed: `INTERNAL_CHILDREN_END = 4 + (BTREE_ORDER + 1) * 8 = 268`.
-See `docs/decisions.md` for the full analysis.
-
----
-
-## pds-folio — post-optimisation results {#sec:pds-folio-opt}
-
-**Date:** 2026-07-01
-**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
-**Optimisation:** `page_checksum_prezeroed` one-shot fast-path in `folio-core`
-**Method:** When the checksum field in the page header is already zeroed (guaranteed
-by `write_page_with_buf`), use a single `xxh3_64(buf)` call instead of three
-`Xxh3Default::update()` calls in the streaming hasher. The checksum is always
-written with `header.checksum = 0` before computing, so the one-shot and streaming
-paths produce identical results.
-
-**Profiling finding:** approximately 30% of CPU time in write-heavy benchmarks
-(`hamt_insert`, `hamt_remove`, `vector_push_back`, `ordmap_insert`) was spent in
-`xxhash_rust::xxh3::xxh3_stateful_consume_stripes` — the internal hot loop of the
-streaming hasher. Switching to the one-shot path eliminates hasher initialisation
-and reduces the number of internal processing calls.
-
-### HamtMap — write benchmarks after optimisation
-
-| Operation | n=10 | n=100 | n=1 000 | n=10 000 | Change (10K) |
-|-----------|-----:|------:|--------:|--------:|-------------|
-| insert | 26 µs | 470 µs | 7.4 ms | 90.0 ms | **−6.0%** |
-| remove | 45.8 µs | 949 µs | 15.7 ms | 197 ms | **−5.4%** |
-| clone (snapshot) | 42 ns | 42 ns | 42 ns | 42 ns | −6% (noise floor) |
-
-### FolioVector — write benchmarks after optimisation
-
-| Operation | n=10 | n=100 | n=1 000 | n=10 000 | Change (10K) |
-|-----------|-----:|------:|--------:|--------:|-------------|
-| push_back | 21.8 µs | 366 µs | 4.7 ms | 70.1 ms | **−8.2%** |
-
-### FolioOrdMap / FolioOrdSet — write benchmarks after optimisation
-
-| Operation | n=10 | n=100 | n=1 000 | n=10 000 | Change (10K) |
-|-----------|-----:|------:|--------:|--------:|-------------|
-| ordmap insert sequential | 51.8 µs | 647 µs | 10.4 ms | 132 ms | **−3.3%** |
-| ordmap insert random | 53.1 µs | 671 µs | 9.9 ms | 131 ms | **−4.3%** |
-| ordset insert | 51.4 µs | 606 µs | 9.7 ms | 125 ms | **−7.5%** |
-
-### Read benchmarks (no change expected)
-
-| Operation | n=10 | n=10 000 | Change |
-|-----------|-----:|---------:|--------|
-| hamt_get | 258 ns | 755 ns | ≈0% (within noise) |
-| hamtset_contains | 260 ns | 757 ns | ≈0% (within noise) |
-| vector_get | 262 ns | 793 ns | ≈0% (within noise) |
-| ordmap_range_scan | 360 ns | 240 µs | ≈0% (within noise) |
-
-Read operations do not call `write_page_with_buf` — no change expected or observed.
-
----
-
-## OrdMap vs HashMap — head-to-head {#sec:ordmap-vs-hashmap}
-
-**Date:** 2026-04-27
-**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
-**Rust:** 1.95.0 (stable)
-**Bench:** `cargo bench --bench compare --features rayon -- compare/<op>`
-**Keys:** `i64`, randomised, seeded RNG (reproducible)
-**Method:** Each benchmark runs one operation per iteration across the full
-key set; all values are the criterion median.
-
-### lookup (n random hits)
-
-| Size  | HashMap   | OrdMap    | Faster |
-|------:|----------:|----------:|--------|
-|   100 |   549 ns  |   630 ns  | HashMap ×1.15 |
-| 1,000 |  5.76 µs  | 10.60 µs  | HashMap ×1.84 |
-| 10,000|  74.6 µs  |  157 µs   | HashMap ×2.11 |
-| 100,000| 1.17 ms  |  2.27 ms  | HashMap ×1.94 |
-
-HAMT gives O(1) amortised lookups (fixed trie depth for the key range);
-OrdMap is O(log n) with a higher constant due to binary search per B+ node.
-
-### insert_mut (build from empty, n sequential inserts, sole owner)
-
-| Size  | HashMap   | OrdMap    | Faster |
-|------:|----------:|----------:|--------|
-|   100 |  2.20 µs  |  1.26 µs  | OrdMap ×1.74 |
-| 1,000 | 30.4 µs   | 16.2 µs   | OrdMap ×1.88 |
-| 10,000| 236 µs    | 230 µs    | ≈ equal       |
-| 100,000| 3.97 ms  |  2.01 ms  | OrdMap ×1.98 |
-
-OrdMap wins when the map is solely owned: copy-on-write detects the sole
-reference and mutates in-place without allocating. HashMap's HAMT must
-always rewrite trie nodes even under sole ownership.
-
-### remove_mut (remove all keys in shuffled order, sole owner)
-
-| Size  | HashMap   | OrdMap    | Faster |
-|------:|----------:|----------:|--------|
-|   100 |  2.87 µs  |  1.31 µs  | OrdMap ×2.19 |
-| 1,000 | 32.7 µs   | 18.9 µs   | OrdMap ×1.73 |
-| 10,000| 328 µs    |  380 µs   | HashMap ×1.16 |
-| 100,000| 6.15 ms  |  7.38 ms  | HashMap ×1.20 |
-
-Crossover near 10K: OrdMap rebalancing cost overtakes HAMT's per-remove
-overhead as the tree grows. At 100K OrdMap is ~20% slower.
-
-### iter (full iteration, all n entries)
-
-| Size  | HashMap   | OrdMap    | Faster |
-|------:|----------:|----------:|--------|
-|   100 |   199 ns  |   145 ns  | OrdMap ×1.37 |
-| 1,000 |  1.89 µs  |  1.35 µs  | OrdMap ×1.40 |
-| 10,000|  33.3 µs  |  14.3 µs  | OrdMap ×2.33 |
-| 100,000|  553 µs  |   155 µs  | OrdMap ×3.57 |
-
-B+ tree leaves are contiguous arrays of up to 32 key-value pairs — cache
-line friendly. HAMT nodes are sparse bitmapped arrays with irregular
-sizes; traversal has worse spatial locality.
-
-### from_iter (bulk construction from Vec of pairs)
-
-| Size  | HashMap   | OrdMap    | Faster |
-|------:|----------:|----------:|--------|
-|   100 |  2.21 µs  |  1.18 µs  | OrdMap ×1.87 |
-| 1,000 | 30.4 µs   | 17.1 µs   | OrdMap ×1.78 |
-| 10,000| 246 µs    |  179 µs   | OrdMap ×1.37 |
-| 100,000| 4.05 ms  |  2.05 ms  | OrdMap ×1.98 |
-
-OrdMap `from_iter` benefits from in-place mutation of the sole owner
-during bulk insert; HashMap always pays allocation cost per HAMT node.
-
-### par_union (two maps with 50% overlap, parallel)
-
-| Size  | HashMap   | OrdMap    | Faster |
-|------:|----------:|----------:|--------|
-| 10,000|  1.08 ms  |  267 µs   | OrdMap ×4.0 |
-| 100,000| 13.0 ms  |  840 µs   | OrdMap ×15.5 |
-
-OrdMap uses the O(m log(n/m)) parallel join algorithm (split + recurse +
-concat). HashMap uses filter+reduce (collect all keys not in self, then
-insert sequentially) — O(n) with a large sequential bottleneck. The gap
-widens with size because the join algorithm's sequential phase is O(log n).
-
-### par_intersection (two maps with 50% overlap, parallel)
-
-| Size  | HashMap   | OrdMap    | Faster |
-|------:|----------:|----------:|--------|
-| 10,000|  929 µs   |  437 µs   | OrdMap ×2.1 |
-| 100,000|  9.55 ms |  1.49 ms  | OrdMap ×6.4 |
-
-Same join-vs-filter algorithm difference as par_union.
-
-### Summary
-
-| Operation | Winner | Margin |
-|-----------|--------|--------|
-| lookup | HashMap | 1.2–2.1× |
-| insert_mut | OrdMap | 1.7–2.0× (except ~equal at 10K) |
-| remove_mut | OrdMap at ≤1K; HashMap at ≥10K | up to ×2.2 / ×1.2 |
-| iter | OrdMap | 1.4–3.6× |
-| from_iter | OrdMap | 1.4–2.0× |
-| par_union | OrdMap | 4–16× |
-| par_intersection | OrdMap | 2–6× |
-
-**When to use HashMap:** random key lookups dominate (point queries on
-large maps). The HAMT's O(1) amortised lookup is ~2× faster than B+ tree
-binary search at 10K–100K entries.
-
-**When to use OrdMap:** writes, iteration, bulk construction, parallel
-set operations, or when sorted order / range queries are needed. In most
-workloads OrdMap is equal or faster, with a large advantage in parallel
-set operations.
-
----
-
-## OrdMap PartialEq — ptr_eq fast path {#sec:ordmap-eq-ptr-eq}
-
-`cargo bench --bench ordmap --features rayon -- eq_clone`
-
-Measures `map == map.clone()` where both maps are unmodified clones (structurally
-shared root). Before the fix, this fell back to `diff()` — O(n) element-by-element
-scan. After adding the `ptr_eq` fast path, it short-circuits immediately.
-
-| Size | Time (after fix) |
-|------|-----------------|
-| 1,000 | 1.165 ns |
-| 10,000 | 1.146 ns |
-| 100,000 | 1.162 ns |
-
-**O(1) for all sizes** — a single pointer comparison. For a 100K-element map the
-prior O(n) scan would have taken ~hundreds of microseconds; the fix is a >10,000×
-speedup on that pattern. Content hash cache (`ord-hash` feature) would also have
-short-circuited if pre-populated, but a fresh clone has `cache = 0` (uncached) so
-the ptr_eq check is the only reliable O(1) fast path.
-
----
-
-## Memory profiling (dhat) {#sec:memory-profiling}
-
-**Date:** 2026-04-26
-**Run:** `cargo bench --bench memory` (bench profile: release + debuginfo)
-
-Allocation counts and bytes per operation. Measures heap pressure, not
-peak RSS. Lower is better. Re-run with `cargo bench --bench memory` to update.
-
-### HashMap<i64, i64>
-
-| Operation | Allocs | Bytes |
-|-----------|--------|-------|
-| from_iter(1K) | 226 | 120 KB |
-| from_iter(10K) | 1,134 | 528 KB |
-| from_iter(100K) | 29,633 | 13.9 MB |
-| single insert (10K base) | 3 | 2.5 KB |
-| clone + modify (10K base) | 3 | 2.5 KB |
-| clone (10K) | 0 | 0 |
-
-~0.3 allocs/element at scale — inherent to HAMT trie structure (one
-Arc per node, plus promotions through SmallSimd → LargeSimd → Hamt tiers).
-Clone is O(1) / zero allocs. Single insert touches O(log n) nodes.
-
-### HashSet<i64>
-
-| Operation | Allocs | Bytes |
-|-----------|--------|-------|
-| from_iter(1K) | 248 | 92 KB |
-| from_iter(10K) | 1,147 | 381 KB |
-| from_iter(100K) | 29,709 | 9.8 MB |
-
-Smaller per-entry footprint than HashMap (no value stored).
-
-### OrdMap<i64, i64>
-
-| Operation | Allocs | Bytes |
-|-----------|--------|-------|
-| from_iter(1K) | 68 | 36 KB |
-| from_iter(10K) | 666 | 358 KB |
-| from_iter(100K) | 6,641 | 3.6 MB |
-| single insert (10K base) | 5 | 2.8 KB |
-| clone + modify (10K base) | 4 | 2.2 KB |
-
-B+ tree with NODE_SIZE=16 — up to 16 key-value pairs per leaf allocation.
-~0.07 allocs/element at scale (approximately n/16 leaves + branch nodes).
-**4.5× fewer allocations and 3.9× fewer bytes than HashMap at 100K entries.**
-
-### OrdSet<i64>
-
-| Operation | Allocs | Bytes |
-|-----------|--------|-------|
-| from_iter(1K) | 68 | 20 KB |
-| from_iter(10K) | 666 | 198 KB |
-| from_iter(100K) | 6,641 | 2.0 MB |
-
-**4.5× fewer allocations than HashSet at 100K entries.**
-
-### HashMap vs OrdMap — summary
-
-| Entries | HashMap allocs | OrdMap allocs | Ratio |
-|--------:|:--------------:|:-------------:|:-----:|
-| 1,000   | 226            | 68            | 3.3×  |
-| 10,000  | 1,134          | 666           | 1.7×  |
-| 100,000 | 29,633         | 6,641         | 4.5×  |
-
-The ratio grows with scale because HAMT trie depth increases with n
-(hash bit exhaustion forces more levels), while B+ tree height grows as
-log₁₆(n) with 16 entries per leaf.
-
-### Vector<i64>
-
-| Operation | Allocs | Bytes |
-|-----------|--------|-------|
-| push_back(1K) | 21 | 12 KB |
-| push_back(10K) | 169 | 95 KB |
-| push_back(100K) | 1,619 | 906 KB |
-| from_iter (same as push_back) | — | — |
-| clone + push_back (10K base) | 1 | 536 B |
-
-RRB tree has excellent allocation density: ~0.016 allocs/element.
-Clone + single push_back = 1 allocation (new leaf chunk).
-
-### Bag<i64>
-
-| Operation | Allocs | Bytes |
-|-----------|--------|-------|
-| from_iter(1K) | 266 | 141 KB |
-| from_iter(10K) | 1,142 | 535 KB |
-| from_iter(100K) | 29,639 | 13.9 MB |
-
-Backed by HashMap — same allocation profile.
-
-### BiMap<i64, i64> / SymMap<i64>
-
-| Operation | Allocs | Bytes |
-|-----------|--------|-------|
-| BiMap from_iter(10K) | 2,300 | 1.1 MB |
-| SymMap from_iter(10K) | 2,283 | 1.1 MB |
-
-~2× HashMap allocations — each type maintains two internal maps.
-
----
-
-## OrdTrie set operations — merge-walk vs flatten-and-rebuild {#sec:ordtrie-set-ops}
-
-**Date:** 2026-04-27 | **Benchmark:** `cargo bench --bench trie`
-**Machine:** MacBook Pro M5 Max | **Rust:** 1.95.0 stable
-
-Compares the pre-DEC-038 flatten-and-rebuild implementation (old) against the
-new merge-walk with ptr_eq fast-paths. Test tries use base-8, fixed-depth paths:
-200-entry (depth 3) and 2 000-entry (depth 4). Three scenarios:
-- **overlapping** — 50% of paths shared between the two tries (typical case)
-- **disjoint** — no paths in common (worst case for merge-walk advantage)
-- **identical** — `b = a.clone()` (ptr_eq fast-path fires; O(1) vs O(n))
-
-### union
-
-| Scenario | n | old | new | speedup |
-|----------|---|-----|-----|---------|
-| overlapping | 200 | 17.85 µs | 4.46 µs | **4.0×** |
-| disjoint | 200 | 17.06 µs | 382 ns | **44.7×** |
-| identical | 200 | 18.29 µs | 7.0 ns | **~2 600×** |
-| overlapping | 2 000 | 201 µs | 41.7 µs | **4.8×** |
-| disjoint | 2 000 | 190 µs | 602 ns | **315×** |
-| identical | 2 000 | 215 µs | 6.8 ns | **~31 600×** |
-
-### difference
-
-| Scenario | n | old | new | speedup |
-|----------|---|-----|-----|---------|
-| overlapping | 200 | 15.24 µs | 2.02 µs | **7.5×** |
-| disjoint | 200 | 17.61 µs | 231 ns | **76×** |
-| identical | 200 | 12.98 µs | 3.9 ns | **~3 300×** |
-| overlapping | 2 000 | 180 µs | 17.2 µs | **10.5×** |
-| disjoint | 2 000 | 196 µs | 514 ns | **382×** |
-| identical | 2 000 | 166 µs | 3.9 ns | **~42 500×** |
-
-### intersection
-
-| Scenario | n | old | new | speedup |
-|----------|---|-----|-----|---------|
-| overlapping | 200 | 15.77 µs | 3.26 µs | **4.8×** |
-| disjoint | 200 | 11.94 µs | 156 ns | **76.5×** |
-| identical | 200 | 19.39 µs | 3.85 ns | **~5 000×** |
-| overlapping | 2 000 | 178 µs | 31.8 µs | **5.6×** |
-| disjoint | 2 000 | 125 µs | 283 ns | **443×** |
-| identical | 2 000 | 242 µs | 3.9 ns | **~62 000×** |
-
-### symmetric_difference
-
-| Scenario | n | old | new | speedup |
-|----------|---|-----|-----|---------|
-| overlapping | 200 | 40.2 µs | 2.99 µs | **13.4×** |
-| identical | 200 | 26.5 µs | 4.1 ns | **~6 500×** |
-| overlapping | 2 000 | 464 µs | 25.3 µs | **18.4×** |
-| identical | 2 000 | 338 µs | 4.1 ns | **~82 500×** |
-
-### Why the disjoint case is so much faster
-
-The disjoint result is counterintuitive — the new implementation is 44–443× faster even
-when no paths are shared. Reason: the merge-walk never descends into a subtree unless
-both operands have a child at that key. For a fully disjoint union, it simply iterates
-`other.children` and adopts each child wholesale via a single OrdMap insert — no
-recursion, no path allocation. The old flatten-and-rebuild unconditionally materialised
-every `Vec<K>` path for every element in the consumed operand, regardless of overlap.
-
----
-
-## Trie set operations — ptr_eq fast-path overhead {#sec:trie-set-ops}
-
-**Date:** 2026-04-27 | **Benchmark:** `cargo bench --bench trie`
-
-The `Trie` set operations (union, difference, intersection, symmetric_difference) retain
-the flatten-and-rebuild approach for the non-matching case but add a single ptr_eq check
-at the top. Benchmark questions: (a) does the ptr_eq check add measurable overhead when
-it returns false? (b) how much does it save when it fires?
-
-### union
-
-| Scenario | n | old (no ptr_eq) | new (ptr_eq) | diff |
-|----------|---|-----------------|--------------|------|
-| different | 200 | 25.40 µs | 25.46 µs | **+0.2% (noise)** |
-| identical | 200 | 25.98 µs | 6.70 ns | **~3 900×** |
-| different | 2 000 | 285.78 µs | 286.05 µs | **+0.1% (noise)** |
-| identical | 2 000 | 292.22 µs | 6.76 ns | **~43 200×** |
-
-### difference
-
-| Scenario | n | old (no ptr_eq) | new (ptr_eq) | diff |
-|----------|---|-----------------|--------------|------|
-| different | 200 | 20.36 µs | 20.49 µs | **+0.6% (noise)** |
-| identical | 200 | 15.93 µs | 4.71 ns | **~3 400×** |
-| different | 2 000 | 243.89 µs | 246.80 µs | **+1.2% (noise)** |
-| identical | 2 000 | 196.17 µs | 4.72 ns | **~41 500×** |
-
-**Conclusions:** The ptr_eq check adds zero measurable overhead in the non-matching case
-(differences are within criterion noise bounds, no consistent direction). When the fast-path
-fires (identical tries — `a.op(a.clone())`), the speedup is thousands-fold: O(1) vs O(n × d).
-
----
-
-## OrdMapRange — lazy construction optimisation {#sec:ordmaprange-lazy}
-
-**Date:** 2026-04-27 | **Benchmark:** `cargo bench --bench ordmap --all-features -- ordmap_subrange`
-**Machine:** MacBook Pro M5 Max | **Rust:** 1.95.0 stable
-
-Before: `submap()` called `ord_map_range_scan` — a full O(k) iterator pass that counted
-all entries and cached `len`, `first`, and `last` at construction.
-
-After: `ord_map_range_endpoints` uses `DoubleEndedIterator` to find `first` and `last` in
-O(log n). The count is deferred to the first call of `len()` via `cached_len: AtomicUsize`
-(sentinel `usize::MAX`). `is_empty()` uses `self.first.is_none()` — always O(1).
-
-### Construction
-
-| n (range = middle 50%) | Before | After | Speedup |
-|------------------------|--------|-------|---------|
-| 1,000 (k≈500) | ~812 ns | 60 ns | **−95%, ~13×** |
-| 10,000 (k≈5000) | ~11,000 ns | 73 ns | **−99.3%, ~150×** |
-
-### len() — lazy, cached after first call
-
-| n | Before (always O(1)) | After (O(1) if cached) | Note |
-|---|---------------------|----------------------|------|
-| 1,000 | ~350 ps | ~703 ps | AtomicUsize relaxed load vs plain usize |
-| 10,000 | ~350 ps | ~728 ps | same |
-
-The ~2× cost of the atomic relaxed load vs a plain usize read is sub-nanosecond either
-way; immaterial in practice. The first (uncached) call costs ~1.1 µs for k=500 (O(k) scan).
-
-### first / last — both O(1) from cached fields
-
-| n | Before | After | Note |
-|---|--------|-------|------|
-| 1,000 | ~510 ps | ~440 ps | −14% |
-| 10,000 | ~510 ps | ~462 ps | −9% |
-
-Slightly faster because the cached `first`/`last` options are now populated in O(log n)
-by the endpoint scan rather than as a by-product of the full O(k) scan.
-
-### chain (two `submap` constructs + two `submap` calls)
-
-| n | Before | After | Speedup |
-|---|--------|-------|---------|
-| 1,000 | ~640 ns | 57 ns | **−91%, ~11×** |
-| 10,000 | ~5,800 ns | 78 ns | **−98.7%, ~75×** |
-
-The chain benchmark constructs a submap and then narrows it — both construction costs
-collapse from O(k)+O(k') to O(log n)+O(log n').
-
-### Trade-off
-
-`construct + len` in a single use-case is ~5–7% slower overall (the O(k) scan is
-deferred but not eliminated). All other patterns are dramatically faster. If `len()` is
-never called (common for iteration-only or contains-only workloads), the O(k) scan is
-never paid at all.
-
----
-
-## pds-merkle-spine — VersionedHamt benchmarks {#sec:versioned-hamt}
-
-**Date:** 2026-07-01
-**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
-**Backend:** MemBackend (in-memory, no disk I/O)
-**Codec:** PostcardCodec
-**Keys/values:** u64 → u64, sequential
-**Bench command:** `direnv exec . cargo bench -p pds-merkle-spine 2>&1 | tee /private/tmp/bench_versioned_hamt_<ts>.txt`
-**Notes:** All median times from criterion. `insert` builds the map from scratch inside
-the timing loop, including Merkle root recomputation (full O(N) BLAKE3 hash pass) on
-every mutation. `get_current` and `get_at_version` build once outside the loop. `checkout`
-and `clone` are both O(1) refcount operations. `prove_inclusion` acquires the Mutex,
-clones the snapshot (O(1)), and hashes the key and value bytes.
-
-### Benchmark results
-
-| Benchmark | n=10 | n=100 | n=1 000 |
-|-----------|-----:|------:|--------:|
-| `versioned_hamt_insert` (build from empty) | 52.5 µs | 1.57 ms | 119.4 ms |
-| `versioned_hamt_get_current` (get, current version) | 239 ns | 465 ns | 692 ns |
-| `versioned_hamt_get_at_version` (get, mid-history) | 250 ns | 488 ns | 825 ns |
-| `versioned_hamt_checkout` (restore snapshot, O(1)) | 50.0 ns | 57.8 ns | 175.1 ns |
-| `versioned_hamt_prove` (Merkle inclusion proof) | 402 ns | 653 ns | 1.10 µs |
-| `versioned_hamt_clone` (O(1) structural share) | 40.6 ns | 40.6 ns | 40.7 ns |
-
-### Key observations
-
-- **Insert is dominated by Merkle root recomputation.** Each `insert` iterates all
-  N entries to compute the BLAKE3 root hash — O(N) per mutation, giving O(N²) total
-  for an N-insert build. At n=1 000 this costs 119 ms vs 7.4 ms for a plain `HamtMap`
-  insert benchmark (pds-folio post-optimisation baseline), a ~16× overhead from the
-  Merkle pass.
-- **Get is slightly slower than plain HamtMap** due to the additional Mutex acquire
-  for `get_at_version`. At n=1 000: `get_current` costs 692 ns vs 749 ns for HamtMap
-  (within noise); `get_at_version` costs 825 ns (the extra ~133 ns is Mutex + history
-  lookup).
-- **Checkout is O(1) regardless of history depth.** The 50–175 ns range is dominated
-  by Mutex acquisition and Arc clone, not by any data traversal.
-- **Clone is O(1) at 40 ns for all sizes** — pure refcount increment, no data copied.
-- **Prove is O(log N)** for the key lookup, plus two BLAKE3 hash calls. The growth from
-  402 ns to 1.10 µs across 10×–1000× entries matches the expected HAMT depth increase.
-
-### Overhead vs pds-folio HamtMap (n=1 000)
-
-| Operation | pds-folio HamtMap | VersionedHamt | Overhead |
-|-----------|------------------:|--------------:|---------:|
-| insert (build from empty) | 7.4 ms | 119.4 ms | **~16×** (Merkle O(N²) build cost) |
-| get (current) | 749 ns | 692 ns | ≈0% (within noise) |
-| clone (O(1) snapshot) | 42 ns | 40.7 ns | ≈0% (within noise) |
-
-The insert overhead is structural: the current Merkle implementation performs a full
-O(N) iteration on every mutation to recompute the root hash. A future incremental
-Merkle tree would reduce this to O(log N) per insert. See `docs/impl-plan.md` for
-the planned sparse-sync-quality proof improvement.
-
----
-
-## pds-folio — Collection comparison {#sec:folio-compare}
-
-**Date:** 2026-07-01
-**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
-**Backend:** MemBackend (in-memory, no disk I/O)
-**Keys/values:** u64 → u64 (sequential) for maps; u64 for vector (push_back)
-**Bench command:** `direnv exec . cargo bench -p pds-folio --bench compare 2>&1 | tee /private/tmp/bench_folio_compare_<ts>.txt`
-**Notes:** All median times from criterion. Insert benchmarks build each collection
-from scratch inside the timing loop. Get and clone benchmarks build once outside
-the loop. Store creation overhead is included in insert timings.
-
-### Insert (build from empty)
-
-| n | HamtMap | FolioOrdMap | FolioVector |
-|--:|--------:|------------:|------------:|
-| 10 | 24.1 µs | 48.5 µs | 20.1 µs |
-| 100 | 437 µs | 600 µs | 337 µs |
-| 1 000 | 6.95 ms | 9.84 ms | 4.47 ms |
-| 10 000 | 85.7 ms | 123.6 ms | 66.9 ms |
-
-### Get (single element read at key/index n/2)
-
-| n | HamtMap | FolioOrdMap | FolioVector |
-|--:|--------:|------------:|------------:|
-| 10 | 251 ns | 262 ns | 247 ns |
-| 100 | 487 ns | 512 ns | 493 ns |
-| 1 000 | 720 ns | 805 ns | 496 ns |
-| 10 000 | 722 ns | 1.04 µs | 745 ns |
-
-### Clone/snapshot (O(1) structural sharing)
-
-| n | HamtMap | FolioOrdMap | FolioVector |
-|--:|--------:|------------:|------------:|
-| 10 | 40 ns | 40 ns | 41 ns |
-| 100 | 40 ns | 40 ns | 41 ns |
-| 1 000 | 40 ns | 40 ns | 41 ns |
-| 10 000 | 40 ns | 40 ns | 41 ns |
-
-### Notes
-
-**Insert order:** FolioVector < HamtMap < FolioOrdMap at all sizes.
-- `FolioVector` (trie append): O(log N) new pages per push_back, cheapest per-element
-  cost because no key encoding or comparison is needed.
-- `HamtMap` (HAMT): O(log N) new pages, requires key hashing and postcard codec.
-- `FolioOrdMap` (B+ tree path-copy): O(log N) new pages, but each insert may trigger a
-  node split that writes multiple internal pages; 16× page headroom used vs 4× for HAMT.
-
-**Get order:** FolioVector ≤ HamtMap < FolioOrdMap at large sizes.
-- `FolioVector.get(idx)` decodes via index arithmetic (O(log N) trie descent), no
-  comparison needed — fastest at n=1 000+ where HAMT depth and B+ tree binary-search
-  cost become significant.
-- `HamtMap.get(key)` hashes the key (O(1)) then walks the HAMT trie; plateau near
-  720 ns at n ≥ 1 000 as trie depth saturates.
-- `FolioOrdMap.get(key)` descends the B+ tree with binary search per node; cost grows
-  logarithmically and exceeds HamtMap at n=1 000 (805 ns vs 720 ns).
-
-**Clone:** all three types deliver O(1) structural-sharing clones at ≈40 ns
-regardless of collection size. This is a pure refcount increment on the folio root
-node — no data is copied.
-
----
-
-## pds-durable — WAL durability benchmarks {#sec:pds-durable}
-
-**Date:** 2026-07-01
-**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
-**Backend:** File-backed WAL on macOS tmpfs (`tempfile::tempdir()`)
-**Bench command:** `direnv exec . cargo bench -p pds-durable 2>&1 | tee /private/tmp/bench_durable_<ts>.txt`
-**Notes:** `strict_insert` issues one `sync_data()` call per entry; macOS tmpfs fsync
-latency is approximately 4.86 ms per call, making this benchmark I/O-bound.
-`strict_insert_batch` coalesces all 1 000 entries into a single `write_all` call
-followed by a single `sync_data()` — one fsync for the entire batch.
-All times are criterion medians; N = 1 000 entries per benchmark iteration.
-
-### Baseline (2026-07-01) — before group commit
-
-| Benchmark | Time (N=1 000) | Notes |
-|-----------|---------------:|-------|
-| `durable_map_strict_insert` | 4 860 ms | 4.86 ms/fsync × 1 000 fsyncs |
-| `durable_map_relaxed_insert` | 389 µs | No fsync; write-only |
-
-### After WAL group commit (PERF-001)
-
-| Benchmark | Time (N=1 000) | vs baseline | Notes |
-|-----------|---------------:|:-----------:|-------|
-| `durable_map_strict_insert` | 4 860 ms | baseline | Unchanged — 1 fsync/entry |
-| `durable_map_strict_insert_batch` | 15.3 ms | **317×** | 1 fsync for 1 000 entries |
-| `durable_map_relaxed_insert` | 389 µs | baseline | No fsync — unchanged |
-
-### Key observation
-
-The 317× improvement is entirely fsync-dominated: macOS tmpfs costs ≈4.86 ms per
-`sync_data()` call. Reducing from 1 000 fsyncs to 1 fsync per batch yields
-4 860 ms → 15.3 ms. The residual 15.3 ms is the time to serialise and write 1 000
-entries to the file plus one fsync.
-
-The `insert_batch` API is a new public method on `DurableMap<K, V, Strict>` —
-callers that can provide entries as a batch should prefer it over repeated
-`insert` calls.

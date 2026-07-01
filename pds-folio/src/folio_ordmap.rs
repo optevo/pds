@@ -25,11 +25,11 @@
 //! See [`crate::codec`] for built-in options.
 
 use std::{
-    collections::HashMap,
     ops::RangeBounds,
     sync::{Arc, Mutex},
 };
 
+use folio_collections::refcount::PageRefcount;
 use folio_core::{
     backend::{Backend, MemBackend},
     error::BackendError,
@@ -80,7 +80,7 @@ pub(crate) struct OrdMapNodeStore<B> {
     /// The underlying folio page store.
     store: FolioStore<B>,
     /// Shared-page refcount table.  Absent = implicit refcount 1.
-    refcounts: HashMap<u64, u32>,
+    refcounts: PageRefcount,
 }
 
 impl<B: Backend<Error = BackendError>> OrdMapNodeStore<B> {
@@ -104,24 +104,12 @@ impl<B: Backend<Error = BackendError>> OrdMapNodeStore<B> {
     }
 
     fn increment_refcount(&mut self, page_id: u64) {
-        let entry = self.refcounts.entry(page_id).or_insert(1);
-        *entry += 1;
+        self.refcounts.inc(page_id);
     }
 
     /// Decrements the refcount.  Returns `true` if the page should be freed.
     fn decrement_refcount(&mut self, page_id: u64) -> bool {
-        match self.refcounts.get_mut(&page_id) {
-            None => true,
-            Some(count) => {
-                *count -= 1;
-                if *count <= 1 {
-                    self.refcounts.remove(&page_id);
-                    false
-                } else {
-                    false
-                }
-            }
-        }
+        self.refcounts.dec(page_id) == 0
     }
 }
 
@@ -171,7 +159,7 @@ where
         Self {
             store: Arc::new(Mutex::new(OrdMapNodeStore {
                 store,
-                refcounts: HashMap::new(),
+                refcounts: PageRefcount::new(),
             })),
             root: None,
             height: 0,

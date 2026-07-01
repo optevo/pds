@@ -48,6 +48,8 @@ use folio_core::{
 };
 use serde::{Deserialize, Serialize};
 
+use folio_collections::refcount::PageRefcount;
+
 use crate::{
     codec::{Codec, CodecError, PostcardCodec},
     node::{
@@ -105,7 +107,7 @@ pub(crate) struct NodeStore<B> {
     /// The underlying folio page store.
     pub(crate) store: FolioStore<B>,
     /// Shared-page refcount table.  Absent = refcount 1 (unique).
-    pub(crate) refcounts: HashMap<u64, u32>,
+    pub(crate) refcounts: PageRefcount,
     /// Decoded page cache: page_id → decoded HamtNodePage.
     page_cache: HashMap<u64, HamtNodePage>,
     /// FIFO eviction queue: page IDs in insertion order.
@@ -202,33 +204,14 @@ impl<B: Backend<Error = BackendError>> NodeStore<B> {
     /// If `page_id` was at refcount 1 (implicit — absent from the table),
     /// it is inserted with refcount 2.
     pub(crate) fn increment_refcount(&mut self, page_id: u64) {
-        let entry = self.refcounts.entry(page_id).or_insert(1);
-        *entry += 1;
+        self.refcounts.inc(page_id);
     }
 
     /// Decrements the reference count for `page_id`.
     ///
     /// Returns `true` if the page should be freed (refcount reached 0).
-    /// After decrementing from 2 → 1 the entry is removed (refcount 1 is implicit).
     pub(crate) fn decrement_refcount(&mut self, page_id: u64) -> bool {
-        match self.refcounts.get_mut(&page_id) {
-            None => {
-                // Implicit refcount 1 — dropping the last reference.
-                true
-            }
-            Some(count) => {
-                *count -= 1;
-                if *count <= 1 {
-                    self.refcounts.remove(&page_id);
-                    // If it hit 1, the page is still live (held by one owner).
-                    // If it hit 0 that would be a bug — we decrement from ≥2.
-                    // We only free when decrementing from implicit 1.
-                    false
-                } else {
-                    false
-                }
-            }
-        }
+        self.refcounts.dec(page_id) == 0
     }
 }
 
@@ -294,7 +277,7 @@ where
         Self {
             node_store: Arc::new(Mutex::new(NodeStore {
                 store,
-                refcounts: HashMap::new(),
+                refcounts: PageRefcount::new(),
                 page_cache: HashMap::new(),
                 cache_order: VecDeque::new(),
             })),
@@ -1294,9 +1277,9 @@ mod tests {
         {
             let store = m1.node_store.lock().unwrap();
             // refcount for root should be 3 (1 implicit + 2 increments = stored as 3).
-            // The stored value is `Some(3)` since it is > 1.
+            // The stored value is 3 since it is > 1.
             if let Some(root_id) = m1.root {
-                assert_eq!(store.refcounts.get(&root_id), Some(&3u32));
+                assert_eq!(store.refcounts.get(root_id), 3u32);
             }
         }
 
@@ -1306,7 +1289,7 @@ mod tests {
         {
             let store = clone1.node_store.lock().unwrap();
             if let Some(root_id) = clone1.root {
-                assert_eq!(store.refcounts.get(&root_id), Some(&2u32));
+                assert_eq!(store.refcounts.get(root_id), 2u32);
             }
         }
 
@@ -1316,7 +1299,7 @@ mod tests {
         {
             let store = clone2.node_store.lock().unwrap();
             if let Some(root_id) = clone2.root {
-                assert_eq!(store.refcounts.get(&root_id), None);
+                assert_eq!(store.refcounts.get(root_id), 1u32);
             }
         }
 
