@@ -832,3 +832,43 @@ the loop. Store creation overhead is included in insert timings.
 **Clone:** all three types deliver O(1) structural-sharing clones at ≈40 ns
 regardless of collection size. This is a pure refcount increment on the folio root
 node — no data is copied.
+
+---
+
+## pds-durable — WAL durability benchmarks {#sec:pds-durable}
+
+**Date:** 2026-07-01
+**Machine:** MacBook Pro M5 Max (18-core CPU, 128 GB unified RAM)
+**Backend:** File-backed WAL on macOS tmpfs (`tempfile::tempdir()`)
+**Bench command:** `direnv exec . cargo bench -p pds-durable 2>&1 | tee /private/tmp/bench_durable_<ts>.txt`
+**Notes:** `strict_insert` issues one `sync_data()` call per entry; macOS tmpfs fsync
+latency is approximately 4.86 ms per call, making this benchmark I/O-bound.
+`strict_insert_batch` coalesces all 1 000 entries into a single `write_all` call
+followed by a single `sync_data()` — one fsync for the entire batch.
+All times are criterion medians; N = 1 000 entries per benchmark iteration.
+
+### Baseline (2026-07-01) — before group commit
+
+| Benchmark | Time (N=1 000) | Notes |
+|-----------|---------------:|-------|
+| `durable_map_strict_insert` | 4 860 ms | 4.86 ms/fsync × 1 000 fsyncs |
+| `durable_map_relaxed_insert` | 389 µs | No fsync; write-only |
+
+### After WAL group commit (PERF-001)
+
+| Benchmark | Time (N=1 000) | vs baseline | Notes |
+|-----------|---------------:|:-----------:|-------|
+| `durable_map_strict_insert` | 4 860 ms | baseline | Unchanged — 1 fsync/entry |
+| `durable_map_strict_insert_batch` | 15.3 ms | **317×** | 1 fsync for 1 000 entries |
+| `durable_map_relaxed_insert` | 389 µs | baseline | No fsync — unchanged |
+
+### Key observation
+
+The 317× improvement is entirely fsync-dominated: macOS tmpfs costs ≈4.86 ms per
+`sync_data()` call. Reducing from 1 000 fsyncs to 1 fsync per batch yields
+4 860 ms → 15.3 ms. The residual 15.3 ms is the time to serialise and write 1 000
+entries to the file plus one fsync.
+
+The `insert_batch` API is a new public method on `DurableMap<K, V, Strict>` —
+callers that can provide entries as a batch should prefer it over repeated
+`insert` calls.

@@ -70,6 +70,18 @@ fn bench_relaxed_insert_flush(c: &mut Criterion) {
     });
 }
 
+fn bench_strict_insert_batch(c: &mut Criterion) {
+    c.bench_function("durable_map_strict_insert_batch", |b| {
+        b.iter(|| {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("bench.wal");
+            let mut map = StrictMap::open(&path, DurableConfig::default()).unwrap();
+            let pairs: Vec<(String, i64)> = (0..N).map(make_kv).collect();
+            map.insert_batch(black_box(pairs)).unwrap();
+        });
+    });
+}
+
 fn bench_get(c: &mut Criterion) {
     let dir = tempdir().unwrap();
     let path = dir.path().join("bench.wal");
@@ -415,6 +427,7 @@ mod tiered_benches {
 criterion_group!(
     benches,
     bench_strict_insert,
+    bench_strict_insert_batch,
     bench_relaxed_insert,
     bench_relaxed_insert_flush,
     bench_get,
@@ -427,6 +440,7 @@ criterion_group!(
 criterion_group!(
     benches,
     bench_strict_insert,
+    bench_strict_insert_batch,
     bench_relaxed_insert,
     bench_relaxed_insert_flush,
     bench_get,

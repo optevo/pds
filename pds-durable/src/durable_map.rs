@@ -152,6 +152,59 @@ where
         Ok(prev)
     }
 
+    /// Inserts multiple key–value pairs atomically, with a single fsync for the batch.
+    ///
+    /// This is the **group-commit** API for Strict mode.  All entries are serialised
+    /// into one in-memory buffer, written to disk in a single `write_all`, then
+    /// fsynced once — giving `O(|batch|)` I/O cost plus **one** fsync regardless of
+    /// batch size.  Compare to N separate `insert` calls, which each pay one fsync.
+    ///
+    /// Returns a `Vec` of previous values (one `Option<V>` per pair, in order).
+    ///
+    /// Time: O(N log M) heap + O(Σ|entry|) WAL write + 1 fsync, where N = batch
+    /// length and M = current map size.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DurableError::Io`] if the write or fsync fails, or
+    /// [`DurableError::Serde`] if any key or value fails to serialise.
+    #[tracing::instrument(skip(self, pairs))]
+    pub fn insert_batch(
+        &mut self,
+        pairs: impl IntoIterator<Item = (K, V)>,
+    ) -> Result<Vec<Option<V>>, DurableError> {
+        let pairs: Vec<(K, V)> = pairs.into_iter().collect();
+        if pairs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build WAL entries first; fail before touching disk if serialisation fails.
+        let mut wal_entries = Vec::with_capacity(pairs.len());
+        for (k, v) in &pairs {
+            let key_bytes =
+                postcard::to_allocvec(k).map_err(|e| DurableError::Serde(e.to_string()))?;
+            let value_bytes =
+                postcard::to_allocvec(v).map_err(|e| DurableError::Serde(e.to_string()))?;
+            wal_entries.push(WalEntry::Insert {
+                key_bytes,
+                value_bytes,
+            });
+        }
+
+        // Single write + single fsync for the entire batch.
+        self.wal.append_batch(&wal_entries, true)?;
+
+        // Apply all heap mutations after the WAL write is durable.
+        let mut prev_values = Vec::with_capacity(pairs.len());
+        for (k, v) in pairs {
+            let prev = self.inner.insert(k, v);
+            prev_values.push(prev);
+            self.checkpoint_counter += 1;
+        }
+        self.maybe_checkpoint()?;
+        Ok(prev_values)
+    }
+
     /// Removes a key, fsyncing the WAL before returning.
     ///
     /// Returns the previous value if the key was present.
@@ -419,6 +472,58 @@ mod tests {
     type RelaxedMap = DurableMap<String, i64, Relaxed>;
 
     // ── Strict tests ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn strict_insert_batch_reopen_all_present() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("map.wal");
+
+        {
+            let mut map = StrictMap::open(&path, DurableConfig::default()).unwrap();
+            let pairs: Vec<(String, i64)> =
+                (0..10i64).map(|i| (format!("batch{}", i), i)).collect();
+            let prev = map.insert_batch(pairs).unwrap();
+            // First insert: all previous values should be None.
+            assert!(prev.iter().all(|v| v.is_none()));
+            assert_eq!(map.len(), 10);
+        }
+
+        // Reopen: WAL replay must reconstruct all 10 entries.
+        let map = StrictMap::open(&path, DurableConfig::default()).unwrap();
+        assert_eq!(map.len(), 10);
+        for i in 0..10i64 {
+            assert_eq!(map.get(&format!("batch{}", i)), Some(&i));
+        }
+    }
+
+    #[test]
+    fn strict_insert_batch_empty_is_noop() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("map.wal");
+
+        let mut map = StrictMap::open(&path, DurableConfig::default()).unwrap();
+        let prev = map.insert_batch(Vec::<(String, i64)>::new()).unwrap();
+        assert!(prev.is_empty());
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn strict_insert_batch_returns_previous_values() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("map.wal");
+
+        let mut map = StrictMap::open(&path, DurableConfig::default()).unwrap();
+        // Insert "a" = 1 individually first.
+        map.insert("a".to_owned(), 1).unwrap();
+
+        // Batch insert overwriting "a" and adding "b".
+        let pairs = vec![("a".to_owned(), 99i64), ("b".to_owned(), 2)];
+        let prev = map.insert_batch(pairs).unwrap();
+        assert_eq!(prev[0], Some(1)); // "a" was 1
+        assert_eq!(prev[1], None); // "b" was absent
+        assert_eq!(map.get(&"a".to_owned()), Some(&99));
+        assert_eq!(map.get(&"b".to_owned()), Some(&2));
+    }
 
     #[test]
     fn strict_open_empty_insert_reopen_all_present() {

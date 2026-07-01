@@ -42,6 +42,58 @@ new entry explaining why the earlier reasoning no longer holds.
 
 ## Decisions {#sec:decision-entries}
 
+### PERF-001 — WAL group commit for `DurableMap<K, V, Strict>` {#sec:perf-001}
+
+**Date:** 2026-07-01
+**Status:** Accepted — implemented and benchmarked
+
+**Context:**
+`DurableMap<K, V, Strict>` calls `wal.write_entry(entry)` followed by
+`file.sync_data()` for every individual insert. On macOS tmpfs, `sync_data()` costs
+approximately 4.86 ms per call. Inserting 1 000 entries therefore takes 4.86 s —
+entirely fsync-bound, not computation-bound. This makes `Strict` mode unusable for
+any workload requiring bulk ingestion.
+
+**Decision:**
+Added two new items:
+1. `encode_entry_into(entry: &WalEntry, out: &mut Vec<u8>)` — serialises a WAL entry
+   into an in-memory buffer using the same wire format as `write_entry` (length prefix,
+   tag byte, postcard payload, CRC32C).
+2. `Wal::append_batch(entries: &[WalEntry], fsync: bool)` — encodes all entries into a
+   single `Vec<u8>`, calls `file.write_all(&buf)` once, then optionally calls
+   `file.sync_data()` once.
+3. `DurableMap<K, V, Strict>::insert_batch(pairs: impl IntoIterator<Item=(K,V)>)` —
+   public API that serialises all key-value pairs, calls `wal.append_batch`, then applies
+   all mutations to the in-memory map.
+
+**Measured improvement:**
+- Before: `durable_map_strict_insert` (N=1 000) = 4 860 ms
+- After: `durable_map_strict_insert_batch` (N=1 000) = 15.3 ms
+- Speedup: **317×** — reducing 1 000 fsyncs to 1 fsync per batch
+
+The residual 15.3 ms is dominated by the single `sync_data()` call; the serialisation
+and `write_all` of 1 000 entries is negligible by comparison.
+
+**Alternatives considered:**
+- *Background fsync thread with shared buffer (RocksDB-style)* — would also amortise
+  fsyncs, but adds concurrency complexity (mutex, condvar, background thread). The batch
+  API is simpler and sufficient for the targeted use case (bulk ingestion by a single
+  caller).
+- *Removing fsync from individual inserts* — equivalent to Relaxed mode; loses the
+  durability guarantee. Not acceptable.
+- *Larger WAL write buffer (OS page cache coalescing)* — does not help on macOS tmpfs
+  because the OS already buffers writes; the bottleneck is `sync_data()` itself.
+
+**Consequences:**
+- `insert_batch` API is additive; `insert` is unchanged. Callers that cannot batch
+  still pay 1 fsync per entry.
+- On real disk (NVMe SSD), fsync latency is lower but group commit still provides a
+  significant improvement when inserting many entries.
+- WAL format is unchanged — recovery (`open`) and `append_batch` produce identical byte
+  streams; existing WAL files remain readable.
+
+---
+
 ## DEC-039: `*Range` view types — design principles {#sec:dec-039}
 
 **Date:** 2026-04-27

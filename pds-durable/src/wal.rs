@@ -252,6 +252,35 @@ impl Wal {
         Ok(())
     }
 
+    /// Appends multiple entries to the WAL with a single `sync_data` at the end
+    /// (group commit).
+    ///
+    /// All entries are serialised into a single in-memory buffer, then written
+    /// to disk in one `write_all` call, then fsynced once.  This is the key
+    /// optimisation for Strict-mode batch writes: N entries → 1 fsync instead of
+    /// N fsyncs.
+    ///
+    /// If `fsync` is false, the entries are written but not synced (useful when
+    /// the caller will fsync later, e.g. after a checkpoint write).
+    ///
+    /// Time: O(Σ|entries|) + fsync latency once when `fsync = true`.
+    pub(crate) fn append_batch(
+        &mut self,
+        entries: &[WalEntry],
+        fsync: bool,
+    ) -> Result<(), DurableError> {
+        // Estimate buffer size: each entry is roughly 32 bytes on average.
+        let mut buf: Vec<u8> = Vec::with_capacity(entries.len() * 32);
+        for entry in entries {
+            encode_entry_into(entry, &mut buf)?;
+        }
+        self.file.write_all(&buf)?;
+        if fsync {
+            self.file.sync_data()?;
+        }
+        Ok(())
+    }
+
     /// Writes all pending entries (Relaxed mode buffer) to disk.
     ///
     /// Drains `self.pending`.  Does **not** fsync; the caller is responsible
@@ -355,10 +384,10 @@ fn write_entry(file: &mut File, entry: &WalEntry) -> Result<(), DurableError> {
 
     // CRC covers the tag byte followed by the payload bytes.
     let crc = {
-        let mut buf = Vec::with_capacity(1 + payload.len());
-        buf.push(tag);
-        buf.extend_from_slice(&payload);
-        crc32c::crc32c(&buf)
+        let mut crc_buf = Vec::with_capacity(1 + payload.len());
+        crc_buf.push(tag);
+        crc_buf.extend_from_slice(&payload);
+        crc32c::crc32c(&crc_buf)
     };
 
     // entry_len = tag(1) + payload(N) + crc(4)
@@ -367,6 +396,33 @@ fn write_entry(file: &mut File, entry: &WalEntry) -> Result<(), DurableError> {
     file.write_all(&[tag])?;
     file.write_all(&payload)?;
     file.write_all(&crc.to_le_bytes())?;
+    Ok(())
+}
+
+/// Serialises `entry` and appends the framed record bytes to `out`.
+///
+/// Same on-disk format as [`write_entry`] but appends to a `Vec<u8>` buffer
+/// instead of writing directly to a file.  Used by [`Wal::append_batch`] to
+/// coalesce multiple entries into a single `write_all` call.
+///
+/// Record layout: `entry_len (u64 LE) | tag (u8) | payload (N bytes) | crc32c (u32 LE)`
+fn encode_entry_into(entry: &WalEntry, out: &mut Vec<u8>) -> Result<(), DurableError> {
+    let (tag, payload) = encode_entry(entry)?;
+
+    // CRC covers the tag byte followed by the payload bytes.
+    let crc = {
+        let mut crc_buf = Vec::with_capacity(1 + payload.len());
+        crc_buf.push(tag);
+        crc_buf.extend_from_slice(&payload);
+        crc32c::crc32c(&crc_buf)
+    };
+
+    // entry_len = tag(1) + payload(N) + crc(4)
+    let entry_len: u64 = 1 + payload.len() as u64 + 4;
+    out.extend_from_slice(&entry_len.to_le_bytes());
+    out.push(tag);
+    out.extend_from_slice(&payload);
+    out.extend_from_slice(&crc.to_le_bytes());
     Ok(())
 }
 

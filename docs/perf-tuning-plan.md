@@ -202,7 +202,39 @@ interruptions (>10×) can throw off the outlier detector too.
 
 *Entries appended as the tuning loop runs. Newest first.*
 
-*(empty — begin with baseline capture)*
+### 2026-07-01 — Area #1: WAL group commit (PERF-001)
+
+**Crate:** pds-durable
+**Baseline:** `durable_map_strict_insert` (N=1 000) = 4 860 ms (4.86 ms/fsync × 1 000 fsyncs)
+**After:** `durable_map_strict_insert_batch` (N=1 000) = 15.3 ms (**317× improvement**)
+
+**What changed:**
+- Added `encode_entry_into(entry, &mut Vec<u8>)` helper in `wal.rs` — same wire format
+  as `write_entry` but targets an in-memory buffer instead of the file.
+- Added `Wal::append_batch(&[WalEntry], fsync: bool)` — coalesces all entries into one
+  `write_all` then one `sync_data()`.
+- Added `DurableMap<K, V, Strict>::insert_batch(pairs)` public API — serialises all
+  key-value pairs to `WalEntry::Insert` variants, calls `wal.append_batch`, then applies
+  all mutations to the in-memory map and runs `maybe_checkpoint`.
+- Added 3 unit tests: `strict_insert_batch_reopen_all_present`,
+  `strict_insert_batch_empty_is_noop`, `strict_insert_batch_returns_previous_values`.
+- Added `bench_strict_insert_batch` criterion benchmark.
+
+**Root cause of original cost:** macOS tmpfs `sync_data()` latency ≈4.86 ms. With one
+fsync per entry, 1 000 inserts cost 4.86 s. Group commit amortises the fsync across all
+entries in the batch.
+
+**Decision:** see `docs/decisions.md` → PERF-001.
+
+### 2026-07-01 — Step 0: Baseline capture
+
+Baselines captured across all three pds-* crates. See `docs/baselines.md`.
+
+- **pds-folio:** xxhash one-shot optimisation (PERF-FOLIO-001) already applied;
+  6–8% write improvement across HamtMap, FolioVector, FolioOrdSet.
+- **pds-merkle-spine:** H.9 lazy Merkle root already applied; insert benchmark
+  (119.4 ms/1 000) no longer includes BLAKE3 cost during the insert loop.
+- **pds-durable:** `strict_insert` baseline = 4.86 s/1 000; `relaxed_insert` = 389 µs/1 000.
 
 ---
 
