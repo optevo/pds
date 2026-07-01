@@ -100,11 +100,7 @@ where
     ///
     /// Time: O(n).
     fn drain(&mut self) -> Vec<(A, usize)> {
-        let pairs: Vec<(A, usize)> = self
-            .inner
-            .iter()
-            .map(|(a, c)| (a.clone(), c))
-            .collect();
+        let pairs: Vec<(A, usize)> = self.inner.iter().map(|(a, c)| (a.clone(), c)).collect();
         self.inner = crate::Bag::new();
         pairs
     }
@@ -203,11 +199,7 @@ where
     ///
     /// Time: O(n).
     fn drain(&mut self) -> Vec<(A, usize)> {
-        let pairs: Vec<(A, usize)> = self
-            .inner
-            .iter()
-            .map(|(a, c)| (a.clone(), c))
-            .collect();
+        let pairs: Vec<(A, usize)> = self.inner.iter().map(|(a, c)| (a.clone(), c)).collect();
         self.inner = crate::OrdBag::new();
         pairs
     }

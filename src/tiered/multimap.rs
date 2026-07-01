@@ -158,7 +158,9 @@ where
     pub fn insert(&self, key: K, value: V) {
         let mut guard = self.state.lock().expect("TieredMultiMap mutex poisoned");
         guard.pending_key_removes.remove(&key);
-        guard.pending_entry_removes.remove(&(key.clone(), value.clone()));
+        guard
+            .pending_entry_removes
+            .remove(&(key.clone(), value.clone()));
         guard.hot.insert(key, value);
         guard.record_write();
     }
@@ -173,7 +175,9 @@ where
         let mut guard = self.state.lock().expect("TieredMultiMap mutex poisoned");
         let in_hot = guard.hot.contains(key, value);
         let key_removed = guard.pending_key_removes.contains(key);
-        let entry_removed = guard.pending_entry_removes.contains(&(key.clone(), value.clone()));
+        let entry_removed = guard
+            .pending_entry_removes
+            .contains(&(key.clone(), value.clone()));
         let in_cold = !key_removed && !entry_removed && guard.cold.contains(key, value);
         let was_present = in_hot || in_cold;
         if was_present {
@@ -204,9 +208,7 @@ where
             guard.hot.remove_key(key);
             guard.pending_key_removes.insert(key.clone());
             // Remove any pending entry removes for this key (superseded by key remove).
-            guard
-                .pending_entry_removes
-                .retain(|(k, _)| k != key);
+            guard.pending_entry_removes.retain(|(k, _)| k != key);
             guard.record_write();
         }
         was_present
@@ -324,8 +326,7 @@ where
                     break;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    let mut guard =
-                        state_clone.lock().expect("TieredMultiMap mutex poisoned");
+                    let mut guard = state_clone.lock().expect("TieredMultiMap mutex poisoned");
                     guard.flush();
                 }
             }

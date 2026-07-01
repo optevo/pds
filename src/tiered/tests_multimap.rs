@@ -14,12 +14,16 @@ mod tests {
     /// Inserting multiple values for the same key and reading them back.
     #[test]
     fn insert_multiple_values_per_key() {
-        let tm: TieredMultiMap<String, i32, PdsHashMultiMapBackend<String, i32>, PdsHashMultiMapBackend<String, i32>> =
-            TieredMultiMap::new(
-                PdsHashMultiMapBackend::new(),
-                PdsHashMultiMapBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tm: TieredMultiMap<
+            String,
+            i32,
+            PdsHashMultiMapBackend<String, i32>,
+            PdsHashMultiMapBackend<String, i32>,
+        > = TieredMultiMap::new(
+            PdsHashMultiMapBackend::new(),
+            PdsHashMultiMapBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tm.insert("fruits".to_string(), 1);
         tm.insert("fruits".to_string(), 2);
@@ -36,12 +40,16 @@ mod tests {
     /// merge hot and cold.
     #[test]
     fn get_all_spanning_tiers() {
-        let tm: TieredMultiMap<String, i32, PdsHashMultiMapBackend<String, i32>, PdsHashMultiMapBackend<String, i32>> =
-            TieredMultiMap::new(
-                PdsHashMultiMapBackend::new(),
-                PdsHashMultiMapBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tm: TieredMultiMap<
+            String,
+            i32,
+            PdsHashMultiMapBackend<String, i32>,
+            PdsHashMultiMapBackend<String, i32>,
+        > = TieredMultiMap::new(
+            PdsHashMultiMapBackend::new(),
+            PdsHashMultiMapBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tm.insert("k".to_string(), 10);
         tm.insert("k".to_string(), 20);
@@ -59,12 +67,16 @@ mod tests {
     /// Remove a specific (key, value) pair.
     #[test]
     fn remove_entry_works() {
-        let tm: TieredMultiMap<String, i32, PdsHashMultiMapBackend<String, i32>, PdsHashMultiMapBackend<String, i32>> =
-            TieredMultiMap::new(
-                PdsHashMultiMapBackend::new(),
-                PdsHashMultiMapBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tm: TieredMultiMap<
+            String,
+            i32,
+            PdsHashMultiMapBackend<String, i32>,
+            PdsHashMultiMapBackend<String, i32>,
+        > = TieredMultiMap::new(
+            PdsHashMultiMapBackend::new(),
+            PdsHashMultiMapBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tm.insert("k".to_string(), 1);
         tm.insert("k".to_string(), 2);
@@ -90,12 +102,16 @@ mod tests {
     /// Remove all values for a key.
     #[test]
     fn remove_key_works() {
-        let tm: TieredMultiMap<String, i32, PdsHashMultiMapBackend<String, i32>, PdsHashMultiMapBackend<String, i32>> =
-            TieredMultiMap::new(
-                PdsHashMultiMapBackend::new(),
-                PdsHashMultiMapBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tm: TieredMultiMap<
+            String,
+            i32,
+            PdsHashMultiMapBackend<String, i32>,
+            PdsHashMultiMapBackend<String, i32>,
+        > = TieredMultiMap::new(
+            PdsHashMultiMapBackend::new(),
+            PdsHashMultiMapBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tm.insert("a".to_string(), 1);
         tm.insert("a".to_string(), 2);
@@ -120,12 +136,16 @@ mod tests {
     /// Hot values are unioned into cold on flush, not replacing cold.
     #[test]
     fn flush_unions_values() {
-        let tm: TieredMultiMap<String, i32, PdsHashMultiMapBackend<String, i32>, PdsHashMultiMapBackend<String, i32>> =
-            TieredMultiMap::new(
-                PdsHashMultiMapBackend::new(),
-                PdsHashMultiMapBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tm: TieredMultiMap<
+            String,
+            i32,
+            PdsHashMultiMapBackend<String, i32>,
+            PdsHashMultiMapBackend<String, i32>,
+        > = TieredMultiMap::new(
+            PdsHashMultiMapBackend::new(),
+            PdsHashMultiMapBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tm.insert("k".to_string(), 1);
         tm.flush(); // cold: k→{1}
@@ -144,12 +164,16 @@ mod tests {
     /// OrdMultiMap backend works for ordered key iteration.
     #[test]
     fn ord_multimap_backend() {
-        let tm: TieredMultiMap<i32, i32, PdsOrdMultiMapBackend<i32, i32>, PdsOrdMultiMapBackend<i32, i32>> =
-            TieredMultiMap::new(
-                PdsOrdMultiMapBackend::new(),
-                PdsOrdMultiMapBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tm: TieredMultiMap<
+            i32,
+            i32,
+            PdsOrdMultiMapBackend<i32, i32>,
+            PdsOrdMultiMapBackend<i32, i32>,
+        > = TieredMultiMap::new(
+            PdsOrdMultiMapBackend::new(),
+            PdsOrdMultiMapBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tm.insert(3, 30);
         tm.insert(1, 10);

@@ -799,36 +799,41 @@ pub use tiered::backends::{
     PdsHashMapBackend, PdsOrdMapBackend, StdBTreeMapBackend, StdHashMapBackend,
 };
 #[cfg(feature = "tiered")]
+pub use tiered::bag_backends::{PdsBagBackend, PdsOrdBagBackend};
+#[cfg(feature = "tiered")]
+pub use tiered::multimap_backends::{PdsHashMultiMapBackend, PdsOrdMultiMapBackend};
+#[cfg(feature = "tiered")]
 pub use tiered::sequence_backend::SequenceBackend;
 #[cfg(feature = "tiered")]
 pub use tiered::sequence_backends::{PdsVectorBackend, StdVecBackend};
 #[cfg(feature = "tiered")]
+pub use tiered::set_backends::{
+    PdsHashSetBackend, PdsOrdSetBackend, StdBTreeSetBackend, StdHashSetBackend,
+};
+#[cfg(feature = "tiered")]
+pub use tiered::MultiMapBackend;
+#[cfg(feature = "tiered")]
 pub use tiered::TieredCollectionOrdExt;
+#[cfg(feature = "tiered")]
+pub use tiered::TieredMultiMap;
+#[cfg(feature = "tiered")]
+pub use tiered::{BagBackend, OrderedBagBackend};
+#[cfg(feature = "tiered")]
+pub use tiered::{OrderedSetBackend, SetBackend};
 #[cfg(feature = "tiered")]
 pub use tiered::{
     PropagationHandle, PropagationPolicy, TieredCollection, TieredOrdMap, TieredSequence,
     TieredVector,
 };
 #[cfg(feature = "tiered")]
-pub use tiered::{OrderedSetBackend, SetBackend};
-#[cfg(feature = "tiered")]
-pub use tiered::set_backends::{
-    PdsHashSetBackend, PdsOrdSetBackend, StdBTreeSetBackend, StdHashSetBackend,
-};
-#[cfg(feature = "tiered")]
-pub use tiered::{TieredOrdSet, TieredSet, TieredSetOrdExt};
-#[cfg(feature = "tiered")]
-pub use tiered::{BagBackend, OrderedBagBackend};
-#[cfg(feature = "tiered")]
-pub use tiered::bag_backends::{PdsBagBackend, PdsOrdBagBackend};
-#[cfg(feature = "tiered")]
 pub use tiered::{TieredBag, TieredOrdBag};
 #[cfg(feature = "tiered")]
-pub use tiered::MultiMapBackend;
+pub use tiered::{TieredOrdSet, TieredSet, TieredSetOrdExt};
+
 #[cfg(feature = "tiered")]
-pub use tiered::multimap_backends::{PdsHashMultiMapBackend, PdsOrdMultiMapBackend};
+pub use tiered::bimap_backends::{PdsBiMapBackend, PdsOrdBiMapBackend};
 #[cfg(feature = "tiered")]
-pub use tiered::TieredMultiMap;
+pub use tiered::{BiMapBackend, TieredBiMap, TieredOrdBiMap};
 
 #[cfg(test)]
 mod test;

@@ -427,11 +427,7 @@ where
 ///
 /// Both slices must be in ascending element order. The output is in ascending
 /// order.
-fn merge_ordered_set_results<A>(
-    hot: Vec<A>,
-    cold: Vec<A>,
-    pending_removes: &HashSet<A>,
-) -> Vec<A>
+fn merge_ordered_set_results<A>(hot: Vec<A>, cold: Vec<A>, pending_removes: &HashSet<A>) -> Vec<A>
 where
     A: Clone + Ord + Eq + std::hash::Hash,
 {

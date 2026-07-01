@@ -6,20 +6,17 @@ mod tests {
         policy::PropagationPolicy,
         set::TieredSet,
         set_backend::SetBackend,
-        set_backends::{PdsHashSetBackend, PdsOrdSetBackend, StdBTreeSetBackend, StdHashSetBackend},
+        set_backends::{
+            PdsHashSetBackend, PdsOrdSetBackend, StdBTreeSetBackend, StdHashSetBackend,
+        },
     };
 
     // --- Type aliases ---
 
-    type StdPdsSet =
-        TieredSet<String, StdHashSetBackend<String>, PdsHashSetBackend<String>>;
+    type StdPdsSet = TieredSet<String, StdHashSetBackend<String>, PdsHashSetBackend<String>>;
 
     fn std_pds_set(policy: PropagationPolicy) -> StdPdsSet {
-        TieredSet::new(
-            StdHashSetBackend::new(),
-            PdsHashSetBackend::new(),
-            policy,
-        )
+        TieredSet::new(StdHashSetBackend::new(), PdsHashSetBackend::new(), policy)
     }
 
     // --- Test 1: insert_contains_from_hot ---
@@ -50,7 +47,10 @@ mod tests {
         assert!(ts.contains(&"beta".to_string()));
         // Remove it — pending_removes should mask the cold value.
         let removed = ts.remove(&"beta".to_string());
-        assert!(removed, "remove should return true when element was present");
+        assert!(
+            removed,
+            "remove should return true when element was present"
+        );
         assert!(
             !ts.contains(&"beta".to_string()),
             "element still visible after remove"
@@ -114,12 +114,11 @@ mod tests {
     /// and an explicit flush, all 100 elements must be in the cold snapshot.
     #[test]
     fn concurrent_inserts() {
-        let ts: TieredSet<i32, StdHashSetBackend<i32>, PdsHashSetBackend<i32>> =
-            TieredSet::new(
-                StdHashSetBackend::new(),
-                PdsHashSetBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let ts: TieredSet<i32, StdHashSetBackend<i32>, PdsHashSetBackend<i32>> = TieredSet::new(
+            StdHashSetBackend::new(),
+            PdsHashSetBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         let ts_a = ts.clone();
         let ts_b = ts.clone();
@@ -152,12 +151,11 @@ mod tests {
     fn ordered_iter_ordered() {
         use super::super::set::TieredSetOrdExt;
 
-        let ts: TieredSet<i32, StdBTreeSetBackend<i32>, PdsOrdSetBackend<i32>> =
-            TieredSet::new(
-                StdBTreeSetBackend::new(),
-                PdsOrdSetBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let ts: TieredSet<i32, StdBTreeSetBackend<i32>, PdsOrdSetBackend<i32>> = TieredSet::new(
+            StdBTreeSetBackend::new(),
+            PdsOrdSetBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         // Insert into hot, then flush some to cold.
         ts.insert(3);
@@ -177,12 +175,11 @@ mod tests {
     fn ordered_range() {
         use super::super::set::TieredSetOrdExt;
 
-        let ts: TieredSet<i32, StdBTreeSetBackend<i32>, PdsOrdSetBackend<i32>> =
-            TieredSet::new(
-                StdBTreeSetBackend::new(),
-                PdsOrdSetBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let ts: TieredSet<i32, StdBTreeSetBackend<i32>, PdsOrdSetBackend<i32>> = TieredSet::new(
+            StdBTreeSetBackend::new(),
+            PdsOrdSetBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         // Insert 1..=10, flush, then insert 11..=20.
         for i in 1..=10_i32 {

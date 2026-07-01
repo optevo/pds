@@ -14,12 +14,11 @@ mod tests {
     /// Inserting the same element 3 times gives a count of 3.
     #[test]
     fn insert_and_count() {
-        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> =
-            TieredBag::new(
-                PdsBagBackend::new(),
-                PdsBagBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> = TieredBag::new(
+            PdsBagBackend::new(),
+            PdsBagBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tb.insert("apple".to_string());
         tb.insert("apple".to_string());
@@ -33,17 +32,19 @@ mod tests {
     /// Inserting 2, then removing 1 gives a count of 1.
     #[test]
     fn remove_decrements() {
-        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> =
-            TieredBag::new(
-                PdsBagBackend::new(),
-                PdsBagBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> = TieredBag::new(
+            PdsBagBackend::new(),
+            PdsBagBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tb.insert("banana".to_string());
         tb.insert("banana".to_string());
         let removed = tb.remove(&"banana".to_string());
-        assert!(removed, "remove should return true when element was present");
+        assert!(
+            removed,
+            "remove should return true when element was present"
+        );
         assert_eq!(tb.count(&"banana".to_string()), 1);
         assert_eq!(tb.len(), 1);
     }
@@ -54,12 +55,11 @@ mod tests {
     /// Total count should be 3.
     #[test]
     fn count_spans_tiers() {
-        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> =
-            TieredBag::new(
-                PdsBagBackend::new(),
-                PdsBagBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> = TieredBag::new(
+            PdsBagBackend::new(),
+            PdsBagBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tb.insert("cherry".to_string());
         tb.insert("cherry".to_string());
@@ -76,12 +76,11 @@ mod tests {
     /// Flushing twice accumulates counts in cold rather than replacing.
     #[test]
     fn flush_adds_counts() {
-        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> =
-            TieredBag::new(
-                PdsBagBackend::new(),
-                PdsBagBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> = TieredBag::new(
+            PdsBagBackend::new(),
+            PdsBagBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tb.insert("date".to_string());
         tb.insert("date".to_string());
@@ -101,12 +100,11 @@ mod tests {
     /// one cancels a hot insert), then flush again. Cold count should be 1.
     #[test]
     fn pending_remove_applied_on_flush() {
-        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> =
-            TieredBag::new(
-                PdsBagBackend::new(),
-                PdsBagBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> = TieredBag::new(
+            PdsBagBackend::new(),
+            PdsBagBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         tb.insert("elderberry".to_string());
         tb.insert("elderberry".to_string());
@@ -145,12 +143,11 @@ mod tests {
     /// Removing an element that was never inserted returns `false`.
     #[test]
     fn remove_absent_returns_false() {
-        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> =
-            TieredBag::new(
-                PdsBagBackend::new(),
-                PdsBagBackend::new(),
-                PropagationPolicy::Manual,
-            );
+        let tb: TieredBag<String, PdsBagBackend<String>, PdsBagBackend<String>> = TieredBag::new(
+            PdsBagBackend::new(),
+            PdsBagBackend::new(),
+            PropagationPolicy::Manual,
+        );
 
         let result = tb.remove(&"fig".to_string());
         assert!(!result, "remove on absent element should return false");
