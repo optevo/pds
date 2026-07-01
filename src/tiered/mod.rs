@@ -51,18 +51,18 @@
 pub mod backend;
 pub mod backends;
 pub mod policy;
+pub mod sequence;
 pub mod sequence_backend;
 pub mod sequence_backends;
-pub mod sequence;
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_compose;
+#[cfg(test)]
 mod tests_ord;
 #[cfg(test)]
 mod tests_seq;
-#[cfg(test)]
-mod tests_compose;
 
 pub use backend::{CollectionBackend, OrderedCollectionBackend};
 pub use policy::PropagationPolicy;
@@ -541,7 +541,10 @@ where
     let mut result: Vec<(K, V)> = cold
         .into_iter()
         .filter(|(k, _)| !hot_keys.contains(k) && !pending_deletes.contains(k))
-        .chain(hot.into_iter().filter(|(k, _)| !pending_deletes.contains(k)))
+        .chain(
+            hot.into_iter()
+                .filter(|(k, _)| !pending_deletes.contains(k)),
+        )
         .collect();
 
     result.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));

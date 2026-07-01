@@ -19,11 +19,7 @@ mod tests {
     >;
 
     fn btree_pds(policy: PropagationPolicy) -> BTreePds {
-        TieredCollection::new(
-            StdBTreeMapBackend::new(),
-            PdsOrdMapBackend::new(),
-            policy,
-        )
+        TieredCollection::new(StdBTreeMapBackend::new(), PdsOrdMapBackend::new(), policy)
     }
 
     // --- Test 1: StdBTreeMapBackend basic CollectionBackend ops ---
@@ -171,7 +167,10 @@ mod tests {
 
         let ordered = tc.iter_ordered();
         let keys_o: Vec<i32> = ordered.into_iter().map(|(k, _)| k).collect();
-        assert!(!keys_o.contains(&2), "deleted key 2 must not appear in iter_ordered");
+        assert!(
+            !keys_o.contains(&2),
+            "deleted key 2 must not appear in iter_ordered"
+        );
     }
 
     // --- Test 6: Three-tier composition (StdBTreeMap → PdsOrdMap → PdsOrdMap) ---
@@ -185,23 +184,15 @@ mod tests {
             StdBTreeMapBackend<i32, &'static str>,
             PdsOrdMapBackend<i32, &'static str>,
         >;
-        type Outer = TieredOrdMap<
-            i32,
-            &'static str,
-            StdBTreeMapBackend<i32, &'static str>,
-            Mid,
-        >;
+        type Outer = TieredOrdMap<i32, &'static str, StdBTreeMapBackend<i32, &'static str>, Mid>;
 
         let mid: Mid = TieredCollection::new(
             StdBTreeMapBackend::new(),
             PdsOrdMapBackend::new(),
             PropagationPolicy::Manual,
         );
-        let outer: Outer = TieredCollection::new(
-            StdBTreeMapBackend::new(),
-            mid,
-            PropagationPolicy::Manual,
-        );
+        let outer: Outer =
+            TieredCollection::new(StdBTreeMapBackend::new(), mid, PropagationPolicy::Manual);
 
         // Insert into outer hot, flush to mid hot, flush mid to mid cold.
         for i in 0..5i32 {
@@ -217,7 +208,8 @@ mod tests {
         let mid_snap = outer.cold_snapshot();
         let mid_cold = mid_snap.cold_snapshot();
 
-        let pairs: Vec<(i32, &'static str)> = mid_cold.inner().iter().map(|(k, v)| (*k, *v)).collect();
+        let pairs: Vec<(i32, &'static str)> =
+            mid_cold.inner().iter().map(|(k, v)| (*k, *v)).collect();
         assert_eq!(pairs.len(), 5);
         let keys: Vec<i32> = pairs.iter().map(|(k, _)| *k).collect();
         // OrdMap iterates in sorted order.

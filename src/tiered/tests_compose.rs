@@ -99,12 +99,8 @@ mod tests {
     #[test]
     fn compose_std_hash_to_tiered_pds_merkle() {
         use crate::tiered::backends::MerkleWrapperBackend;
-        type Mid = TieredCollection<
-            i32,
-            i32,
-            PdsHashMapBackend<i32, i32>,
-            MerkleWrapperBackend<i32, i32>,
-        >;
+        type Mid =
+            TieredCollection<i32, i32, PdsHashMapBackend<i32, i32>, MerkleWrapperBackend<i32, i32>>;
         type Outer = TieredCollection<i32, i32, StdHashMapBackend<i32, i32>, Mid>;
 
         let mid: Mid = TieredCollection::new(
@@ -112,11 +108,8 @@ mod tests {
             MerkleWrapperBackend::new(),
             PropagationPolicy::Manual,
         );
-        let outer: Outer = TieredCollection::new(
-            StdHashMapBackend::new(),
-            mid,
-            PropagationPolicy::Manual,
-        );
+        let outer: Outer =
+            TieredCollection::new(StdHashMapBackend::new(), mid, PropagationPolicy::Manual);
 
         for i in 0..4i32 {
             outer.insert(i, i * 7);
@@ -129,7 +122,11 @@ mod tests {
         let mid_snap = outer.cold_snapshot();
         let merkle_snap = mid_snap.cold_snapshot();
         for i in 0..4i32 {
-            assert_eq!(merkle_snap.get(&i), Some(i * 7), "missing key {i} in merkle cold");
+            assert_eq!(
+                merkle_snap.get(&i),
+                Some(i * 7),
+                "missing key {i} in merkle cold"
+            );
         }
     }
 
@@ -163,16 +160,12 @@ mod tests {
     /// `PdsOrdMapBackend` → `PdsOrdMapBackend`.
     #[test]
     fn compose_pds_ord_to_pds_ord() {
-        let tc: TieredOrdMap<
-            i32,
-            i32,
-            PdsOrdMapBackend<i32, i32>,
-            PdsOrdMapBackend<i32, i32>,
-        > = TieredCollection::new(
-            PdsOrdMapBackend::new(),
-            PdsOrdMapBackend::new(),
-            PropagationPolicy::Manual,
-        );
+        let tc: TieredOrdMap<i32, i32, PdsOrdMapBackend<i32, i32>, PdsOrdMapBackend<i32, i32>> =
+            TieredCollection::new(
+                PdsOrdMapBackend::new(),
+                PdsOrdMapBackend::new(),
+                PropagationPolicy::Manual,
+            );
         for i in 0..5i32 {
             tc.insert(i, i * 3);
         }
@@ -186,25 +179,16 @@ mod tests {
     /// Three-tier: `StdBTreeMap` → `TieredOrdMap<PdsOrd, PdsOrd>`.
     #[test]
     fn compose_btree_to_tiered_pds_ord_pds_ord() {
-        type Mid = TieredOrdMap<
-            i32,
-            i32,
-            StdBTreeMapBackend<i32, i32>,
-            PdsOrdMapBackend<i32, i32>,
-        >;
-        type Outer =
-            TieredOrdMap<i32, i32, StdBTreeMapBackend<i32, i32>, Mid>;
+        type Mid = TieredOrdMap<i32, i32, StdBTreeMapBackend<i32, i32>, PdsOrdMapBackend<i32, i32>>;
+        type Outer = TieredOrdMap<i32, i32, StdBTreeMapBackend<i32, i32>, Mid>;
 
         let mid: Mid = TieredCollection::new(
             StdBTreeMapBackend::new(),
             PdsOrdMapBackend::new(),
             PropagationPolicy::Manual,
         );
-        let outer: Outer = TieredCollection::new(
-            StdBTreeMapBackend::new(),
-            mid,
-            PropagationPolicy::Manual,
-        );
+        let outer: Outer =
+            TieredCollection::new(StdBTreeMapBackend::new(), mid, PropagationPolicy::Manual);
 
         for i in 0..5i32 {
             outer.insert(i, i * 11);
@@ -228,8 +212,11 @@ mod tests {
     /// `StdVecBackend` → `PdsVectorBackend` (canonical two-tier vector).
     #[test]
     fn compose_std_vec_to_pds_vec() {
-        let ts: TieredVector<i32, StdVecBackend<i32>, PdsVectorBackend<i32>> =
-            TieredSequence::new(StdVecBackend::new(), PdsVectorBackend::new(), PropagationPolicy::Manual);
+        let ts: TieredVector<i32, StdVecBackend<i32>, PdsVectorBackend<i32>> = TieredSequence::new(
+            StdVecBackend::new(),
+            PdsVectorBackend::new(),
+            PropagationPolicy::Manual,
+        );
         for i in 0..5i32 {
             ts.push_back(i);
         }
@@ -245,7 +232,11 @@ mod tests {
     #[test]
     fn compose_pds_vec_to_pds_vec() {
         let ts: TieredVector<i32, PdsVectorBackend<i32>, PdsVectorBackend<i32>> =
-            TieredSequence::new(PdsVectorBackend::new(), PdsVectorBackend::new(), PropagationPolicy::Manual);
+            TieredSequence::new(
+                PdsVectorBackend::new(),
+                PdsVectorBackend::new(),
+                PropagationPolicy::Manual,
+            );
         for i in 0..5i32 {
             ts.push_back(i);
         }
@@ -265,11 +256,8 @@ mod tests {
             PdsVectorBackend::new(),
             PropagationPolicy::Manual,
         );
-        let outer: Outer = TieredSequence::new(
-            StdVecBackend::new(),
-            inner,
-            PropagationPolicy::Manual,
-        );
+        let outer: Outer =
+            TieredSequence::new(StdVecBackend::new(), inner, PropagationPolicy::Manual);
 
         for i in 0..5i32 {
             outer.push_back(i);

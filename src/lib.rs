@@ -790,23 +790,25 @@ pub use merkle_wrapper::MerkleWrapper;
 
 #[cfg(feature = "tiered")]
 pub mod tiered;
+#[cfg(feature = "tiered")]
+pub use tiered::backend::OrderedCollectionBackend;
 #[cfg(all(feature = "tiered", feature = "traits"))]
 pub use tiered::backends::MerkleWrapperBackend;
 #[cfg(feature = "tiered")]
-pub use tiered::backends::{PdsHashMapBackend, PdsOrdMapBackend, StdBTreeMapBackend, StdHashMapBackend};
+pub use tiered::backends::{
+    PdsHashMapBackend, PdsOrdMapBackend, StdBTreeMapBackend, StdHashMapBackend,
+};
+#[cfg(feature = "tiered")]
+pub use tiered::sequence_backend::SequenceBackend;
 #[cfg(feature = "tiered")]
 pub use tiered::sequence_backends::{PdsVectorBackend, StdVecBackend};
+#[cfg(feature = "tiered")]
+pub use tiered::TieredCollectionOrdExt;
 #[cfg(feature = "tiered")]
 pub use tiered::{
     PropagationHandle, PropagationPolicy, TieredCollection, TieredOrdMap, TieredSequence,
     TieredVector,
 };
-#[cfg(feature = "tiered")]
-pub use tiered::backend::OrderedCollectionBackend;
-#[cfg(feature = "tiered")]
-pub use tiered::sequence_backend::SequenceBackend;
-#[cfg(feature = "tiered")]
-pub use tiered::TieredCollectionOrdExt;
 
 #[cfg(test)]
 mod test;

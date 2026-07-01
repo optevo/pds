@@ -20,6 +20,9 @@
 /// - `load_from` must append the iterator's elements to the backend.
 ///   It does **not** clear first — the append-log semantics of `TieredSequence`
 ///   rely on `load_from` extending cold rather than replacing it.
+/// - There is no `push_front` or `pop_front`. `TieredSequence` uses cold as an
+///   append-only committed log; prepend operations are semantically undefined
+///   in this model.
 pub trait SequenceBackend<A>: Send + 'static
 where
     A: Clone,
@@ -36,27 +39,11 @@ where
     /// `PdsVectorBackend`.
     fn push_back(&mut self, value: A);
 
-    /// Prepends `value` to the front of the sequence.
-    ///
-    /// # Performance note
-    ///
-    /// `StdVecBackend` implements this as `Vec::insert(0, …)` which is O(n).
-    /// `PdsVectorBackend` implements this in O(1) amortised.
-    fn push_front(&mut self, value: A);
-
     /// Removes and returns the last element, or `None` if empty.
     ///
     /// Time: O(1) amortised for `StdVecBackend`; O(1) amortised for
     /// `PdsVectorBackend`.
     fn pop_back(&mut self) -> Option<A>;
-
-    /// Removes and returns the first element, or `None` if empty.
-    ///
-    /// # Performance note
-    ///
-    /// `StdVecBackend` implements this as `Vec::remove(0)` which is O(n).
-    /// `PdsVectorBackend` implements this in O(1) amortised.
-    fn pop_front(&mut self) -> Option<A>;
 
     /// Returns the number of elements currently stored.
     ///

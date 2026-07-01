@@ -5,10 +5,17 @@
 //! committed append log: flushing appends hot's elements to cold (in order) and
 //! then clears hot. Index `i` addresses cold for `0..cold.len()` and hot for
 //! indices beyond that.
+//!
+//! # Append-only constraint
+//!
+//! `TieredSequence` does not expose `push_front` or `pop_front`. The cold tier
+//! is an append-only committed log — prepending to hot would produce indices that
+//! are inconsistent with cold's committed prefix, so these operations are
+//! intentionally omitted from the public API and from `SequenceBackend`.
 
-use std::marker::PhantomData;
 use super::policy::PropagationPolicy;
 use super::sequence_backend::SequenceBackend;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 // --- Internal state ---
@@ -139,20 +146,6 @@ where
         guard.record_write();
     }
 
-    /// Prepends `value` to the front of the hot tier.
-    ///
-    /// # Performance note
-    ///
-    /// For `StdVecBackend`, this is O(n) — see
-    /// [`StdVecBackend::push_front`][super::sequence_backends::StdVecBackend].
-    ///
-    /// Time: O(1) amortised for `PdsVectorBackend`; O(n) for `StdVecBackend`.
-    pub fn push_front(&self, value: A) {
-        let mut guard = self.state.lock().expect("TieredSequence mutex poisoned");
-        guard.hot.push_front(value);
-        guard.record_write();
-    }
-
     /// Removes and returns the last element.
     ///
     /// Pops from hot first. If hot is empty, pops from cold.
@@ -267,8 +260,7 @@ where
                     break;
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    let mut guard =
-                        state_clone.lock().expect("TieredSequence mutex poisoned");
+                    let mut guard = state_clone.lock().expect("TieredSequence mutex poisoned");
                     guard.flush();
                 }
             }
@@ -300,20 +292,8 @@ where
         TieredSequence::push_back(self, value);
     }
 
-    fn push_front(&mut self, value: A) {
-        TieredSequence::push_front(self, value);
-    }
-
     fn pop_back(&mut self) -> Option<A> {
         TieredSequence::pop_back(self)
-    }
-
-    fn pop_front(&mut self) -> Option<A> {
-        let mut guard = self.state.lock().expect("TieredSequence mutex poisoned");
-        if let Some(v) = guard.hot.pop_front() {
-            return Some(v);
-        }
-        guard.cold.pop_front()
     }
 
     fn len(&self) -> usize {

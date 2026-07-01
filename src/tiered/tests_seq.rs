@@ -70,9 +70,9 @@ mod tests {
 
         // Boundary: cold[4] and hot[0].
         assert_eq!(ts.get(cold_len - 1), Some(4)); // last cold entry
-        assert_eq!(ts.get(cold_len), Some(5));     // first hot entry
-        assert_eq!(ts.get(7), Some(7));             // last hot entry
-        assert_eq!(ts.get(8), None);               // out of bounds
+        assert_eq!(ts.get(cold_len), Some(5)); // first hot entry
+        assert_eq!(ts.get(7), Some(7)); // last hot entry
+        assert_eq!(ts.get(8), None); // out of bounds
     }
 
     // --- Test 4: pop_back from hot; when hot empty drains cold ---
@@ -159,8 +159,11 @@ mod tests {
         type Inner = TieredVector<i32, StdVecBackend<i32>, PdsVectorBackend<i32>>;
         type Outer = TieredVector<i32, StdVecBackend<i32>, Inner>;
 
-        let inner: Inner =
-            TieredSequence::new(StdVecBackend::new(), PdsVectorBackend::new(), PropagationPolicy::Manual);
+        let inner: Inner = TieredSequence::new(
+            StdVecBackend::new(),
+            PdsVectorBackend::new(),
+            PropagationPolicy::Manual,
+        );
         let mut outer: Outer =
             TieredSequence::new(StdVecBackend::new(), inner, PropagationPolicy::Manual);
 

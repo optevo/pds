@@ -14,12 +14,6 @@ use super::sequence_backend::SequenceBackend;
 /// A [`SequenceBackend`] backed by [`std::vec::Vec`].
 ///
 /// Most operations are O(1) amortised. `Clone` is O(n) — a full deep copy.
-///
-/// # Performance note
-///
-/// `push_front` and `pop_front` are both O(n) because `Vec` is optimised for
-/// back operations only. Use [`PdsVectorBackend`] when front operations are
-/// on the hot path.
 #[derive(Clone, Default)]
 pub struct StdVecBackend<A> {
     /// Inner standard-library vector.
@@ -47,27 +41,8 @@ where
         self.inner.push(value);
     }
 
-    /// Prepends `value` to the front.
-    ///
-    /// Time: O(n) — `Vec::insert(0, …)` shifts all existing elements right.
-    /// For front-heavy workloads, prefer [`PdsVectorBackend`].
-    fn push_front(&mut self, value: A) {
-        self.inner.insert(0, value);
-    }
-
     fn pop_back(&mut self) -> Option<A> {
         self.inner.pop()
-    }
-
-    /// Removes and returns the first element.
-    ///
-    /// Time: O(n) — `Vec::remove(0)` shifts all remaining elements left.
-    fn pop_front(&mut self) -> Option<A> {
-        if self.inner.is_empty() {
-            None
-        } else {
-            Some(self.inner.remove(0))
-        }
     }
 
     fn len(&self) -> usize {
@@ -102,8 +77,7 @@ where
 /// in place. `Clone` is O(1) via reference-count increment.
 ///
 /// Use this backend as a cold tier when O(1) snapshots or structural sharing
-/// between tiers matter, or as a hot tier when front-side operations are needed
-/// (both `push_front` and `pop_front` are O(1) amortised).
+/// between tiers matter.
 #[derive(Clone, Default)]
 pub struct PdsVectorBackend<A>
 where
@@ -152,25 +126,11 @@ where
         self.inner.push_back(value);
     }
 
-    /// Prepends `value` to the front using the pds functional API.
-    ///
-    /// Time: O(1) amortised.
-    fn push_front(&mut self, value: A) {
-        self.inner.push_front(value);
-    }
-
     /// Removes and returns the last element.
     ///
     /// Time: O(1) amortised.
     fn pop_back(&mut self) -> Option<A> {
         self.inner.pop_back()
-    }
-
-    /// Removes and returns the first element.
-    ///
-    /// Time: O(1) amortised.
-    fn pop_front(&mut self) -> Option<A> {
-        self.inner.pop_front()
     }
 
     fn len(&self) -> usize {

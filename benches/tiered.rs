@@ -357,11 +357,8 @@ fn bench_3tier_hash_insert(c: &mut Criterion) {
                     MerkleWrapperBackend::new(),
                     PropagationPolicy::Manual,
                 );
-                let outer: Outer = TieredCollection::new(
-                    StdHashMapBackend::new(),
-                    mid,
-                    PropagationPolicy::Manual,
-                );
+                let outer: Outer =
+                    TieredCollection::new(StdHashMapBackend::new(), mid, PropagationPolicy::Manual);
                 for i in 0..n {
                     outer.insert(std::hint::black_box(i), i);
                 }
@@ -389,11 +386,8 @@ fn bench_3tier_hash_get_hit(c: &mut Criterion) {
         MerkleWrapperBackend::new(),
         PropagationPolicy::Manual,
     );
-    let outer: Outer = TieredCollection::new(
-        StdHashMapBackend::new(),
-        mid,
-        PropagationPolicy::Manual,
-    );
+    let outer: Outer =
+        TieredCollection::new(StdHashMapBackend::new(), mid, PropagationPolicy::Manual);
     for i in 0..1_000usize {
         outer.insert(i, i);
     }
@@ -421,11 +415,8 @@ fn bench_3tier_hash_flush(c: &mut Criterion) {
                 MerkleWrapperBackend::new(),
                 PropagationPolicy::Manual,
             );
-            let outer: Outer = TieredCollection::new(
-                StdHashMapBackend::new(),
-                mid,
-                PropagationPolicy::Manual,
-            );
+            let outer: Outer =
+                TieredCollection::new(StdHashMapBackend::new(), mid, PropagationPolicy::Manual);
             for i in 0..1_000usize {
                 outer.insert(std::hint::black_box(i), i);
             }
@@ -452,11 +443,8 @@ fn bench_3tier_cold_snapshot(c: &mut Criterion) {
         MerkleWrapperBackend::new(),
         PropagationPolicy::Manual,
     );
-    let outer: Outer = TieredCollection::new(
-        StdHashMapBackend::new(),
-        mid,
-        PropagationPolicy::Manual,
-    );
+    let outer: Outer =
+        TieredCollection::new(StdHashMapBackend::new(), mid, PropagationPolicy::Manual);
     for i in 0..1_000usize {
         outer.insert(i, i);
     }
@@ -556,4 +544,10 @@ criterion_group!(
 #[cfg(not(feature = "traits"))]
 criterion_group!(three_tier_benches,);
 
-criterion_main!(hash_benches, ord_benches, vec_benches, policy_benches, three_tier_benches,);
+criterion_main!(
+    hash_benches,
+    ord_benches,
+    vec_benches,
+    policy_benches,
+    three_tier_benches,
+);
