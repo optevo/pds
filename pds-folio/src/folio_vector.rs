@@ -23,24 +23,24 @@
 //!
 //! # Codec
 //!
-//! The `C: Codec` type parameter controls how elements are serialised into leaf
+//! The `C: ValueCodec<A>` type parameter controls how elements are serialised into leaf
 //! node byte arrays.  See [`crate::codec`] for built-in options.
 
 use std::sync::{Arc, Mutex};
 
-use folio_collections::refcount::PageRefcount;
-use folio_core::{
-    backend::{Backend, MemBackend},
-    error::BackendError,
-    page::PageType,
-    store::FolioStore,
-};
 use crate::{
     codec::{CodecError, PodCodec, ValueCodec},
     vector::{
         build_internal, InternalReader, LeafBuilder, LeafReader, VectorNodePage, BRANCHING_FACTOR,
         DISCRIMINANT_INTERNAL, DISCRIMINANT_LEAF,
     },
+};
+use folio_collections::refcount::PageRefcount;
+use folio_core::{
+    backend::{Backend, MemBackend},
+    error::BackendError,
+    page::PageType,
+    store::FolioStore,
 };
 
 // ---------------------------------------------------------------------------
@@ -132,8 +132,8 @@ impl<B: Backend<Error = BackendError>> VectorNodeStore<B> {
 ///
 /// # Type parameters
 ///
-/// - `A` — element type; must be `Serialize + DeserializeOwned + Clone`
-/// - `C` — codec; defaults to [`PostcardCodec`]
+/// - `A` — element type; must implement `Clone`
+/// - `C` — codec; defaults to [`crate::codec::PodCodec`]
 /// - `B` — folio backend; defaults to [`MemBackend`]
 #[derive(Debug)]
 pub struct FolioVector<A = u64, C = PodCodec, B = MemBackend>
@@ -312,7 +312,7 @@ where
                         builder.push_encoded::<A, C>(value)?;
                     } else {
                         let bytes = reader.entry_bytes(i);
-                        let elem = C::decode::<A>(bytes)?;
+                        let elem = <C as ValueCodec<A>>::decode(bytes)?;
                         builder.push_encoded::<A, C>(&elem)?;
                     }
                 }
@@ -414,7 +414,7 @@ where
                 let mut builder = LeafBuilder::new();
                 for i in 0..count {
                     let bytes = reader.entry_bytes(i);
-                    let elem = C::decode::<A>(bytes)?;
+                    let elem = <C as ValueCodec<A>>::decode(bytes)?;
                     builder.push_encoded::<A, C>(&elem)?;
                 }
                 builder.push_encoded::<A, C>(value)?;
@@ -558,7 +558,7 @@ where
                 let mut builder = LeafBuilder::new();
                 for i in 0..count - 1 {
                     let bytes = reader.entry_bytes(i);
-                    let elem = C::decode::<A>(bytes)?;
+                    let elem = <C as ValueCodec<A>>::decode(bytes)?;
                     builder.push_encoded::<A, C>(&elem)?;
                 }
                 let new_page = builder.finish();
@@ -762,8 +762,8 @@ where
 
 impl<A, C, B> Clone for FolioVector<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    A: Clone,
+    C: ValueCodec<A>,
     B: Backend<Error = BackendError>,
 {
     fn clone(&self) -> Self {
@@ -786,8 +786,8 @@ where
 
 impl<A, C, B> Drop for FolioVector<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    A: Clone,
+    C: ValueCodec<A>,
     B: Backend<Error = BackendError>,
 {
     fn drop(&mut self) {
@@ -827,8 +827,8 @@ where
 /// An iterator over cloned elements of a [`FolioVector`].
 pub struct FolioVectorIter<'a, A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    A: Clone,
+    C: ValueCodec<A>,
     B: Backend<Error = BackendError>,
 {
     /// Reference to the vector being iterated.
@@ -839,8 +839,8 @@ where
 
 impl<'a, A, C, B> Iterator for FolioVectorIter<'a, A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    A: Clone,
+    C: ValueCodec<A>,
     B: Backend<Error = BackendError>,
 {
     type Item = A;
@@ -866,16 +866,16 @@ where
 
 impl<A, C, B> pds::traits::PersistentCollection for FolioVector<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    A: Clone,
+    C: ValueCodec<A>,
     B: Backend<Error = BackendError>,
 {
 }
 
 impl<A, C, B> pds::traits::PersistentVector<A> for FolioVector<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    A: Clone,
+    C: ValueCodec<A>,
     B: Backend<Error = BackendError>,
 {
     fn get(&self, index: usize) -> Option<A> {
@@ -929,7 +929,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{PodCodec, PostcardCodec};
+    use crate::codec::PodCodec;
     use folio_core::{backend::MemBackend, checksum::ChecksumKind, store::FolioStore};
 
     fn make_store() -> FolioStore<MemBackend> {
@@ -975,7 +975,7 @@ mod tests {
     #[test]
     fn push_back_across_leaf_boundary() {
         // Push BRANCHING_FACTOR + 1 elements to exercise leaf splitting.
-        let mut v: FolioVector<u32, PostcardCodec, MemBackend> = FolioVector::new(make_store());
+        let mut v: FolioVector<u32, PodCodec, MemBackend> = FolioVector::new(make_store());
         let n = BRANCHING_FACTOR + 5;
         for i in 0..n {
             v = v.push_back(i as u32).unwrap();
@@ -1191,23 +1191,17 @@ mod tests {
 
     #[test]
     fn persistent_vector_trait_push_get() {
-        pv_push_get(FolioVector::<i32, PostcardCodec, MemBackend>::new(
-            make_store(),
-        ));
+        pv_push_get(FolioVector::<i32, PodCodec, MemBackend>::new(make_store()));
     }
 
     #[test]
     fn persistent_vector_trait_pop_back() {
-        pv_pop_back(FolioVector::<i32, PostcardCodec, MemBackend>::new(
-            make_store(),
-        ));
+        pv_pop_back(FolioVector::<i32, PodCodec, MemBackend>::new(make_store()));
     }
 
     #[test]
     fn persistent_vector_trait_split_concat() {
-        pv_split_concat(FolioVector::<i32, PostcardCodec, MemBackend>::new(
-            make_store(),
-        ));
+        pv_split_concat(FolioVector::<i32, PodCodec, MemBackend>::new(make_store()));
     }
 
     // --- Push across multiple tree levels ---
@@ -1216,7 +1210,7 @@ mod tests {
     fn push_back_large_n() {
         // Push enough elements to force multiple tree levels.
         let n = BRANCHING_FACTOR * BRANCHING_FACTOR + 10;
-        let mut v: FolioVector<u32, PostcardCodec, MemBackend> = FolioVector::new(make_store());
+        let mut v: FolioVector<u32, PodCodec, MemBackend> = FolioVector::new(make_store());
         for i in 0..n {
             v = v.push_back(i as u32).unwrap();
         }
@@ -1229,7 +1223,7 @@ mod tests {
     #[test]
     fn pop_back_large_n() {
         let n = BRANCHING_FACTOR + 5;
-        let mut v: FolioVector<u32, PostcardCodec, MemBackend> = FolioVector::new(make_store());
+        let mut v: FolioVector<u32, PodCodec, MemBackend> = FolioVector::new(make_store());
         for i in 0..n {
             v = v.push_back(i as u32).unwrap();
         }
@@ -1302,7 +1296,7 @@ mod tests {
     /// more to trigger tree growth.
     #[test]
     fn push_back_exactly_at_branching_factor_then_split() {
-        let mut v: FolioVector<u32, PostcardCodec, MemBackend> = FolioVector::new(make_store());
+        let mut v: FolioVector<u32, PodCodec, MemBackend> = FolioVector::new(make_store());
         for i in 0..BRANCHING_FACTOR {
             v = v.push_back(i as u32).unwrap();
         }

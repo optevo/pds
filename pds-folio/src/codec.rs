@@ -147,7 +147,8 @@ impl<T: bytemuck::Pod + Copy> ValueCodec<T> for PodCodec {
                 bytes.len()
             )));
         }
-        Ok(*bytemuck::from_bytes(bytes))
+        // Use pod_read_unaligned because page data has no alignment guarantees.
+        Ok(bytemuck::pod_read_unaligned(bytes))
     }
 
     fn take(bytes: &[u8]) -> Result<(T, &[u8]), CodecError> {
@@ -159,7 +160,8 @@ impl<T: bytemuck::Pod + Copy> ValueCodec<T> for PodCodec {
                 bytes.len()
             )));
         }
-        let value = *bytemuck::from_bytes(&bytes[..size]);
+        // Use pod_read_unaligned because page data has no alignment guarantees.
+        let value = bytemuck::pod_read_unaligned(&bytes[..size]);
         Ok((value, &bytes[size..]))
     }
 }
@@ -200,7 +202,7 @@ impl PodCodec {
     /// assert_eq!(decoded, 42u64);
     /// ```
     pub fn decode_pod<T: bytemuck::Pod + Copy>(bytes: &[u8]) -> T {
-        *bytemuck::from_bytes(bytes)
+        bytemuck::pod_read_unaligned(bytes)
     }
 }
 
@@ -273,8 +275,8 @@ mod tests {
         let mut buf = Vec::new();
         PodCodec::encode(&10u64, &mut buf).unwrap();
         PodCodec::encode(&20u64, &mut buf).unwrap();
-        let (a, rest) = PodCodec::take::<u64>(&buf).unwrap();
-        let (b, leftover) = PodCodec::take::<u64>(rest).unwrap();
+        let (a, rest) = <PodCodec as ValueCodec<u64>>::take(&buf).unwrap();
+        let (b, leftover) = <PodCodec as ValueCodec<u64>>::take(rest).unwrap();
         assert_eq!(a, 10u64);
         assert_eq!(b, 20u64);
         assert!(leftover.is_empty());

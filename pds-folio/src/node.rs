@@ -584,7 +584,11 @@ mod tests {
     fn leaf_postcard_single_entry_round_trip() {
         let mut builder = LeafBuilder::new();
         builder
-            .push_framed::<_, _, PostcardCodec>(0xDEAD_BEEF_1234_5678u64, &"hello", &"world")
+            .push_framed::<_, _, PostcardCodec>(
+                0xDEAD_BEEF_1234_5678u64,
+                &"hello".to_string(),
+                &"world".to_string(),
+            )
             .expect("push must succeed");
         let page = builder.finish();
 
@@ -656,8 +660,7 @@ mod tests {
                 .expect("entry must fit");
         }
         // LEAF_CAP + 1 must be rejected (leaf is full at LEAF_CAP entries).
-        let result =
-            builder.push_framed::<u64, u64, PodCodec>(LEAF_CAP as u64, &0u64, &0u64);
+        let result = builder.push_framed::<u64, u64, PodCodec>(LEAF_CAP as u64, &0u64, &0u64);
         assert!(result.is_err(), "push beyond LEAF_CAP must fail");
     }
 

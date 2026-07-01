@@ -29,19 +29,19 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use folio_collections::refcount::PageRefcount;
-use folio_core::{
-    backend::{Backend, MemBackend},
-    error::BackendError,
-    page::PageType,
-    store::FolioStore,
-};
 use crate::{
     btree::{
         build_internal_node, BTreeNodePage, InternalReader, LeafBuilder, LeafReader, BTREE_ORDER,
         DISCRIMINANT_INTERNAL, DISCRIMINANT_LEAF,
     },
     codec::{CodecError, PodCodec, ValueCodec},
+};
+use folio_collections::refcount::PageRefcount;
+use folio_core::{
+    backend::{Backend, MemBackend},
+    error::BackendError,
+    page::PageType,
+    store::FolioStore,
 };
 
 // ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ impl<B: Backend<Error = BackendError>> OrdMapNodeStore<B> {
 ///
 /// - `K` — key type; must be `Serialize + DeserializeOwned + Ord + Clone`
 /// - `V` — value type; must be `Serialize + DeserializeOwned + Clone`
-/// - `C` — codec; defaults to [`PostcardCodec`]
+/// - `C` — codec; defaults to [`crate::codec::PodCodec`]
 /// - `B` — folio backend; defaults to [`MemBackend`]
 #[derive(Debug)]
 pub struct FolioOrdMap<K = u64, V = u64, C = PodCodec, B = MemBackend>
@@ -1149,7 +1149,7 @@ mod tests {
         // internal node fills (BTREE_ORDER=32 separator keys, 33 children).  A layout bug
         // previously caused child[32] to overlap the key_offsets region, corrupting the
         // rightmost child page ID and panicking at insert #530.
-        let mut m: FolioOrdMap<u32, u32, PostcardCodec, MemBackend> =
+        let mut m: FolioOrdMap<u32, u32, PodCodec, MemBackend> =
             FolioOrdMap::new(make_store_n(16256));
         for i in 0..600u32 {
             m = m.insert(i, i * 3).unwrap_or_else(|e| {

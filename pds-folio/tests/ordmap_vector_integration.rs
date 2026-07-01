@@ -9,7 +9,7 @@
 
 use folio_core::{backend::MemBackend, checksum::ChecksumKind, store::FolioStore};
 use pds_folio::{
-    btree::BTREE_ORDER, codec::PostcardCodec, folio_ordmap::FolioOrdMap, folio_ordset::FolioOrdSet,
+    btree::BTREE_ORDER, codec::PodCodec, folio_ordmap::FolioOrdMap, folio_ordset::FolioOrdSet,
     folio_vector::FolioVector, vector::BRANCHING_FACTOR,
 };
 use proptest::prelude::*;
@@ -24,9 +24,9 @@ fn make_store() -> FolioStore<MemBackend> {
         .expect("store creation must succeed")
 }
 
-type TMap = FolioOrdMap<u32, u32, PostcardCodec, MemBackend>;
-type TSet = FolioOrdSet<u32, PostcardCodec, MemBackend>;
-type TVec = FolioVector<u32, PostcardCodec, MemBackend>;
+type TMap = FolioOrdMap<u32, u32, PodCodec, MemBackend>;
+type TSet = FolioOrdSet<u32, PodCodec, MemBackend>;
+type TVec = FolioVector<u32, PodCodec, MemBackend>;
 
 fn empty_map() -> TMap {
     FolioOrdMap::new(make_store())

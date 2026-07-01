@@ -24,17 +24,15 @@
 
 use std::collections::HashMap;
 
+use crate::{
+    codec::PodCodec,
+    hamt::{HamtError, HamtMap},
+};
 use folio_core::{backend::Backend, error::BackendError, store::FolioStore};
 use merkle_spine::{
     error::{Error as SpineError, RegionId},
     hash::{hash_hamt_node, Hash, ZERO_HASH},
     index::{PageEntry, PageIndexBackend},
-};
-use serde::{Deserialize, Serialize};
-
-use crate::{
-    codec::PodCodec,
-    hamt::{HamtError, HamtMap},
 };
 
 // ---------------------------------------------------------------------------
@@ -46,18 +44,7 @@ use crate::{
 /// Uses big-endian byte order inside `PodCodec` so that the byte representation
 /// matches the logical ordering — not strictly required for correctness here, but
 /// keeps the on-disk format consistent with numerically ordered key comparisons.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    bytemuck::Pod,
-    bytemuck::Zeroable,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub(crate) struct IndexKey {
     /// Region identifier (little-endian in memory; serialised as-is by PodCodec).
@@ -76,7 +63,7 @@ pub(crate) struct IndexKey {
 /// 41   1  chain_depth   u8
 /// 42   6  _pad          zero
 /// ```
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub(crate) struct IndexValue {
     /// BLAKE3 content hash of the logical page.

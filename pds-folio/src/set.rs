@@ -6,18 +6,17 @@
 //!
 //! # Type parameters
 //!
-//! - `A` — element type; must be `Serialize + Hash + Eq + Clone`
-//! - `C` — codec; defaults to [`crate::codec::PostcardCodec`]
+//! - `A` — element type; must be `Hash + Eq + Clone`
+//! - `C` — codec; defaults to [`crate::codec::PodCodec`]
 //! - `B` — folio backend; defaults to [`folio_core::backend::MemBackend`]
 
 use folio_core::{backend::MemBackend, error::BackendError, store::FolioStore};
-use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 
 use folio_core::backend::Backend;
 
 use crate::{
-    codec::{Codec, PostcardCodec},
+    codec::{PodCodec, ValueCodec},
     hamt::{HamtError, HamtMap},
 };
 
@@ -38,17 +37,17 @@ use crate::{
 ///
 /// let backend = MemBackend::new(4096, 64);
 /// let store = FolioStore::create(backend, 4096, 64, ChecksumKind::Xxh3, true).unwrap();
-/// let s: HamtSet = HamtSet::new(store);
-/// let s2 = s.insert("hello".to_string()).unwrap();
+/// let s: HamtSet<u32> = HamtSet::new(store);
+/// let s2 = s.insert(42u32).unwrap();
 /// assert!(!s2.is_empty());
-/// assert!(s2.contains(&"hello".to_string()).unwrap());
-/// assert!(!s2.contains(&"world".to_string()).unwrap());
+/// assert!(s2.contains(&42u32).unwrap());
+/// assert!(!s2.contains(&99u32).unwrap());
 /// ```
 #[derive(Debug)]
-pub struct HamtSet<A = String, C = PostcardCodec, B = MemBackend>
+pub struct HamtSet<A = u32, C = PodCodec, B = MemBackend>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    C: Codec,
+    A: Hash + Eq + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
     /// Inner map with unit values.
@@ -57,8 +56,8 @@ where
 
 impl<A, C, B> HamtSet<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    C: Codec,
+    A: Hash + Eq + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
     // -----------------------------------------------------------------------
@@ -247,8 +246,8 @@ where
 
 impl<A, C, B> Clone for HamtSet<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    C: Codec,
+    A: Hash + Eq + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
     fn clone(&self) -> Self {
@@ -265,8 +264,8 @@ where
 /// An iterator over the elements of a [`HamtSet`].
 pub struct HamtSetIter<'a, A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    C: Codec,
+    A: Hash + Eq + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
     /// Underlying map iterator (key=A, value=()).
@@ -275,8 +274,8 @@ where
 
 impl<A, C, B> Iterator for HamtSetIter<'_, A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    C: Codec,
+    A: Hash + Eq + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
     type Item = Result<A, HamtError>;
@@ -304,59 +303,59 @@ mod tests {
 
     #[test]
     fn empty_set_is_empty() {
-        let s: HamtSet<String> = HamtSet::new(make_store());
+        let s: HamtSet<u32, PodCodec> = HamtSet::new(make_store());
         assert!(s.is_empty());
         assert_eq!(s.len(), 0);
-        assert!(!s.contains(&"foo".to_string()).unwrap());
+        assert!(!s.contains(&42u32).unwrap());
     }
 
     #[test]
     fn single_insert_and_contains() {
-        let s: HamtSet<String> = HamtSet::new(make_store());
-        let s2 = s.insert("hello".to_string()).unwrap();
+        let s: HamtSet<u32, PodCodec> = HamtSet::new(make_store());
+        let s2 = s.insert(1u32).unwrap();
         assert_eq!(s2.len(), 1);
         assert!(!s2.is_empty());
-        assert!(s2.contains(&"hello".to_string()).unwrap());
-        assert!(!s2.contains(&"world".to_string()).unwrap());
+        assert!(s2.contains(&1u32).unwrap());
+        assert!(!s2.contains(&2u32).unwrap());
         // Original unchanged.
         assert!(s.is_empty());
     }
 
     #[test]
     fn insert_duplicate_does_not_grow_set() {
-        let s: HamtSet<String> = HamtSet::new(make_store());
-        let s1 = s.insert("a".to_string()).unwrap();
-        let s2 = s1.insert("a".to_string()).unwrap();
+        let s: HamtSet<u32, PodCodec> = HamtSet::new(make_store());
+        let s1 = s.insert(1u32).unwrap();
+        let s2 = s1.insert(1u32).unwrap();
         assert_eq!(s1.len(), 1);
         assert_eq!(s2.len(), 1); // No duplicate.
     }
 
     #[test]
     fn remove_present_element() {
-        let s: HamtSet<String> = HamtSet::new(make_store());
-        let s1 = s.insert("a".to_string()).unwrap();
-        let s2 = s1.insert("b".to_string()).unwrap();
-        let (s3, removed) = s2.remove(&"a".to_string()).unwrap();
+        let s: HamtSet<u32, PodCodec> = HamtSet::new(make_store());
+        let s1 = s.insert(1u32).unwrap();
+        let s2 = s1.insert(2u32).unwrap();
+        let (s3, removed) = s2.remove(&1u32).unwrap();
         assert!(removed);
         assert_eq!(s3.len(), 1);
-        assert!(!s3.contains(&"a".to_string()).unwrap());
-        assert!(s3.contains(&"b".to_string()).unwrap());
+        assert!(!s3.contains(&1u32).unwrap());
+        assert!(s3.contains(&2u32).unwrap());
     }
 
     #[test]
     fn remove_absent_element() {
-        let s: HamtSet<String> = HamtSet::new(make_store());
-        let s1 = s.insert("x".to_string()).unwrap();
-        let (s2, removed) = s1.remove(&"y".to_string()).unwrap();
+        let s: HamtSet<u32, PodCodec> = HamtSet::new(make_store());
+        let s1 = s.insert(10u32).unwrap();
+        let (s2, removed) = s1.remove(&99u32).unwrap();
         assert!(!removed);
         assert_eq!(s2.len(), 1);
     }
 
     #[test]
     fn remove_all_produces_empty_set() {
-        let s: HamtSet<String> = HamtSet::new(make_store());
-        let s1 = s.insert("only".to_string()).unwrap();
-        let (s2, removed) = s1.remove(&"only".to_string()).unwrap();
+        let s: HamtSet<u32, PodCodec> = HamtSet::new(make_store());
+        let s1 = s.insert(7u32).unwrap();
+        let (s2, removed) = s1.remove(&7u32).unwrap();
         assert!(removed);
         assert!(s2.is_empty());
     }
@@ -375,82 +374,88 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Set operations
+    // Set operations (String keys require the serde feature for PostcardCodec)
     // -----------------------------------------------------------------------
 
-    fn make_string_set(elems: &[&str]) -> HamtSet<String> {
-        let s: HamtSet<String> = HamtSet::new(make_store());
-        let mut current = s;
-        for &e in elems {
-            current = current.insert(e.to_string()).unwrap();
+    #[cfg(feature = "serde")]
+    mod serde_tests {
+        use super::*;
+        use crate::codec::PostcardCodec;
+
+        fn make_string_set(elems: &[&str]) -> HamtSet<String, PostcardCodec> {
+            let s: HamtSet<String, PostcardCodec> = HamtSet::new(make_store());
+            let mut current = s;
+            for &e in elems {
+                current = current.insert(e.to_string()).unwrap();
+            }
+            current
         }
-        current
-    }
 
-    /// Collects a `HamtSet<String>` into a sorted `Vec<String>` for comparison.
-    fn collect_sorted(s: &HamtSet<String>) -> Vec<String> {
-        let mut v: Vec<String> = s.iter().unwrap().map(|r| r.unwrap()).collect();
-        v.sort();
-        v
-    }
+        /// Collects a `HamtSet<String, PostcardCodec>` into a sorted `Vec<String>` for comparison.
+        fn collect_sorted(s: &HamtSet<String, PostcardCodec>) -> Vec<String> {
+            let mut v: Vec<String> = s.iter().unwrap().map(|r| r.unwrap()).collect();
+            v.sort();
+            v
+        }
 
-    #[test]
-    fn union_is_superset() {
-        let a = make_string_set(&["a", "b", "c"]);
-        let b = make_string_set(&["b", "c", "d"]);
-        let u = a.union(&b).unwrap();
-        let mut got = collect_sorted(&u);
-        got.sort();
-        assert_eq!(got, vec!["a", "b", "c", "d"]);
-    }
+        #[test]
+        fn union_is_superset() {
+            let a = make_string_set(&["a", "b", "c"]);
+            let b = make_string_set(&["b", "c", "d"]);
+            let u = a.union(&b).unwrap();
+            let mut got = collect_sorted(&u);
+            got.sort();
+            assert_eq!(got, vec!["a", "b", "c", "d"]);
+        }
 
-    #[test]
-    fn union_with_empty_is_identity() {
-        let a = make_string_set(&["x", "y"]);
-        let empty: HamtSet<String> = HamtSet::new(make_store());
-        let u = a.union(&empty).unwrap();
-        assert_eq!(collect_sorted(&u), vec!["x", "y"]);
-    }
+        #[test]
+        fn union_with_empty_is_identity() {
+            let a = make_string_set(&["x", "y"]);
+            let empty: HamtSet<String, PostcardCodec> = HamtSet::new(make_store());
+            let u = a.union(&empty).unwrap();
+            assert_eq!(collect_sorted(&u), vec!["x", "y"]);
+        }
 
-    #[test]
-    fn intersection_gives_common_elements() {
-        let a = make_string_set(&["a", "b", "c"]);
-        let b = make_string_set(&["b", "c", "d"]);
-        let i = a.intersection(&b).unwrap();
-        assert_eq!(collect_sorted(&i), vec!["b", "c"]);
-    }
+        #[test]
+        fn intersection_gives_common_elements() {
+            let a = make_string_set(&["a", "b", "c"]);
+            let b = make_string_set(&["b", "c", "d"]);
+            let i = a.intersection(&b).unwrap();
+            assert_eq!(collect_sorted(&i), vec!["b", "c"]);
+        }
 
-    #[test]
-    fn intersection_with_disjoint_is_empty() {
-        let a = make_string_set(&["a", "b"]);
-        let b = make_string_set(&["c", "d"]);
-        let i = a.intersection(&b).unwrap();
-        assert!(i.is_empty());
-    }
+        #[test]
+        fn intersection_with_disjoint_is_empty() {
+            let a = make_string_set(&["a", "b"]);
+            let b = make_string_set(&["c", "d"]);
+            let i = a.intersection(&b).unwrap();
+            assert!(i.is_empty());
+        }
 
-    #[test]
-    fn difference_removes_common() {
-        let a = make_string_set(&["a", "b", "c"]);
-        let b = make_string_set(&["b", "c", "d"]);
-        let d = a.difference(&b).unwrap();
-        assert_eq!(collect_sorted(&d), vec!["a"]);
-    }
+        #[test]
+        fn difference_removes_common() {
+            let a = make_string_set(&["a", "b", "c"]);
+            let b = make_string_set(&["b", "c", "d"]);
+            let d = a.difference(&b).unwrap();
+            assert_eq!(collect_sorted(&d), vec!["a"]);
+        }
 
-    #[test]
-    fn symmetric_difference_is_exclusive_elements() {
-        let a = make_string_set(&["a", "b", "c"]);
-        let b = make_string_set(&["b", "c", "d"]);
-        let sd = a.symmetric_difference(&b).unwrap();
-        assert_eq!(collect_sorted(&sd), vec!["a", "d"]);
-    }
+        #[test]
+        fn symmetric_difference_is_exclusive_elements() {
+            let a = make_string_set(&["a", "b", "c"]);
+            let b = make_string_set(&["b", "c", "d"]);
+            let sd = a.symmetric_difference(&b).unwrap();
+            assert_eq!(collect_sorted(&sd), vec!["a", "d"]);
+        }
 
-    #[test]
-    fn clone_and_drop_refcounting() {
-        let s = make_string_set(&["x", "y"]);
-        let s_clone = s.clone();
-        drop(s);
-        // Clone must still work after original is dropped.
-        assert!(s_clone.contains(&"x".to_string()).unwrap());
-        assert!(s_clone.contains(&"y".to_string()).unwrap());
+        #[test]
+        fn clone_and_drop_refcounting() {
+            let s = make_string_set(&["x", "y"]);
+            let s_clone = s.clone();
+            drop(s);
+            // Clone must still work after original is dropped.
+            assert!(s_clone.contains(&"x".to_string()).unwrap());
+            assert!(s_clone.contains(&"y".to_string()).unwrap());
+        }
     }
 }

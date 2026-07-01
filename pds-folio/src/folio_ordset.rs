@@ -1,22 +1,20 @@
 //! Folio-backed persistent ordered set — a thin newtype over [`FolioOrdMap`].
 //!
 //! [`FolioOrdSet<A, C, B>`] wraps `FolioOrdMap<A, (), C, B>`, delegating all
-//! operations to the underlying map.  The unit value `()` is zero-sized after
-//! postcard encoding (one byte: `0x00`), so the space overhead over a plain
-//! key store is minimal.
+//! operations to the underlying map.  The unit value `()` is zero-sized and
+//! encodes to zero bytes with [`crate::codec::PodCodec`], so there is no space
+//! overhead over a plain key store.
 
 use std::ops::RangeBounds;
 
+use crate::{
+    codec::{PodCodec, ValueCodec},
+    folio_ordmap::{FolioOrdMap, OrdMapError},
+};
 use folio_core::{
     backend::{Backend, MemBackend},
     error::BackendError,
     store::FolioStore,
-};
-use serde::{Deserialize, Serialize};
-
-use crate::{
-    codec::{Codec, PostcardCodec},
-    folio_ordmap::{FolioOrdMap, OrdMapError},
 };
 
 /// A persistent, folio-backed ordered set.
@@ -26,14 +24,14 @@ use crate::{
 ///
 /// # Type parameters
 ///
-/// - `A` — element type; must be `Serialize + DeserializeOwned + Ord + Clone`
-/// - `C` — codec; defaults to [`PostcardCodec`]
+/// - `A` — element type; must be `Ord + Clone`
+/// - `C` — codec; defaults to [`PodCodec`]
 /// - `B` — folio backend; defaults to [`MemBackend`]
 #[derive(Debug)]
-pub struct FolioOrdSet<A = (), C = PostcardCodec, B = MemBackend>
+pub struct FolioOrdSet<A = (), C = PodCodec, B = MemBackend>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    C: Codec,
+    A: Ord + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
     inner: FolioOrdMap<A, (), C, B>,
@@ -41,8 +39,8 @@ where
 
 impl<A, C, B> FolioOrdSet<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    C: Codec,
+    A: Ord + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
     /// Creates a new, empty `FolioOrdSet` backed by `store`.
@@ -154,8 +152,8 @@ where
 
 impl<A, C, B> Clone for FolioOrdSet<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    C: Codec,
+    A: Ord + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
     fn clone(&self) -> Self {
@@ -171,16 +169,16 @@ where
 
 impl<A, C, B> pds::traits::PersistentCollection for FolioOrdSet<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    C: Codec,
+    A: Ord + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
 }
 
 impl<A, C, B> pds::traits::PersistentOrdSet<A> for FolioOrdSet<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Ord + Clone,
-    C: Codec,
+    A: Ord + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
     fn contains(&self, value: &A) -> bool {
@@ -224,7 +222,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::PostcardCodec;
+    use crate::codec::PodCodec;
     use folio_core::{backend::MemBackend, checksum::ChecksumKind};
 
     fn make_store() -> FolioStore<MemBackend> {
@@ -233,7 +231,7 @@ mod tests {
             .expect("store creation must succeed")
     }
 
-    type TestSet = FolioOrdSet<u32, PostcardCodec, MemBackend>;
+    type TestSet = FolioOrdSet<u32, PodCodec, MemBackend>;
 
     fn empty_set() -> TestSet {
         FolioOrdSet::new(make_store())

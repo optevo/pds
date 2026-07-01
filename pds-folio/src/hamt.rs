@@ -41,13 +41,13 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
+use folio_collections::refcount::PageRefcount;
 use folio_core::{
     backend::{Backend, MemBackend},
     error::BackendError,
     page::PageType,
     store::FolioStore,
 };
-use folio_collections::refcount::PageRefcount;
 
 use crate::{
     codec::{CodecError, PodCodec, ValueCodec},
@@ -1108,9 +1108,9 @@ fn hash_key<K: Hash>(key: &K) -> u64 {
 mod tests {
     use super::*;
     use crate::codec::PodCodec;
-    use folio_core::{checksum::ChecksumKind, store::FolioStore};
     #[cfg(feature = "serde")]
     use crate::codec::PostcardCodec;
+    use folio_core::{checksum::ChecksumKind, store::FolioStore};
 
     fn make_store() -> FolioStore<MemBackend> {
         let backend = MemBackend::new(4096, 256);

@@ -131,30 +131,27 @@ where
         self.inner.get(key).cloned()
     }
 
-    /// Inserts using the pds functional API.
+    /// Inserts using the pds mutable (CoW) API.
     ///
-    /// Each call creates a new map with the entry added (path-copy), storing it in
-    /// place. Returns the previous value if present.
+    /// Uses the mutable `insert` method which performs a single HAMT traversal
+    /// and returns the previous value atomically. If the inner map is shared
+    /// (e.g. after a `cold_snapshot`), the affected path is copied on write;
+    /// if exclusively owned, the mutation happens in place.
     ///
     /// Time: O(log N).
     fn insert(&mut self, key: K, value: V) -> Option<V> {
-        let prev = self.inner.get(&key).cloned();
-        self.inner = self.inner.update(key, value);
-        prev
+        self.inner.insert(key, value)
     }
 
-    /// Removes using the pds functional API.
+    /// Removes using the pds mutable (CoW) API.
     ///
-    /// Each call creates a new map with the entry removed, storing it in place.
-    /// Returns the evicted value if present.
+    /// Uses the mutable `remove` method which performs a single HAMT traversal
+    /// and returns the evicted value atomically. CoW semantics apply: the path
+    /// is copied only if the map is shared.
     ///
     /// Time: O(log N).
     fn remove(&mut self, key: &K) -> Option<V> {
-        let prev = self.inner.get(key).cloned();
-        if prev.is_some() {
-            self.inner = self.inner.without(key);
-        }
-        prev
+        self.inner.remove(key)
     }
 
     fn len(&self) -> usize {
@@ -184,11 +181,8 @@ where
     ///
     /// Time: O(n).
     fn drain(&mut self) -> Vec<(K, V)> {
-        let pairs: Vec<(K, V)> = self
-            .inner
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut pairs = Vec::with_capacity(self.inner.len());
+        pairs.extend(self.inner.iter().map(|(k, v)| (k.clone(), v.clone())));
         self.inner = crate::HashMap::new();
         pairs
     }
@@ -319,12 +313,9 @@ where
     ///
     /// Time: O(n).
     fn drain(&mut self) -> Vec<(K, V)> {
-        let pairs: Vec<(K, V)> = self
-            .inner
-            .inner()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let inner_map = self.inner.inner();
+        let mut pairs = Vec::with_capacity(inner_map.len());
+        pairs.extend(inner_map.iter().map(|(k, v)| (k.clone(), v.clone())));
         self.inner = crate::MerkleWrapper::new(crate::HashMap::new());
         pairs
     }
@@ -493,28 +484,26 @@ where
         self.inner.get(key).cloned()
     }
 
-    /// Inserts using the pds functional API.
+    /// Inserts using the pds mutable (CoW) API.
     ///
-    /// Each call creates a new map with the entry added (path-copy).
+    /// A single B+ tree traversal inserts the key and returns the previous value
+    /// atomically. CoW semantics apply: the affected path is copied only when
+    /// the inner map is shared (e.g. after `cold_snapshot`).
     ///
     /// Time: O(log N).
     fn insert(&mut self, key: K, value: V) -> Option<V> {
-        let prev = self.inner.get(&key).cloned();
-        self.inner = self.inner.update(key, value);
-        prev
+        self.inner.insert(key, value)
     }
 
-    /// Removes using the pds functional API.
+    /// Removes using the pds mutable (CoW) API.
     ///
-    /// Each call creates a new map with the entry removed.
+    /// A single B+ tree traversal removes the key and returns its value
+    /// atomically. CoW semantics apply: the affected path is copied only when
+    /// the inner map is shared.
     ///
     /// Time: O(log N).
     fn remove(&mut self, key: &K) -> Option<V> {
-        let prev = self.inner.get(key).cloned();
-        if prev.is_some() {
-            self.inner = self.inner.without(key);
-        }
-        prev
+        self.inner.remove(key)
     }
 
     fn len(&self) -> usize {
@@ -542,11 +531,8 @@ where
     ///
     /// Time: O(n).
     fn drain(&mut self) -> Vec<(K, V)> {
-        let pairs: Vec<(K, V)> = self
-            .inner
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut pairs = Vec::with_capacity(self.inner.len());
+        pairs.extend(self.inner.iter().map(|(k, v)| (k.clone(), v.clone())));
         self.inner = crate::OrdMap::new();
         pairs
     }

@@ -9,11 +9,9 @@
 
 use folio_core::{backend::MemBackend, checksum::ChecksumKind, store::FolioStore};
 use pds::traits::{PersistentMap, PersistentSet};
-use pds_folio::{
-    codec::{PodCodec, PostcardCodec},
-    hamt::HamtMap,
-    set::HamtSet,
-};
+#[cfg(feature = "serde")]
+use pds_folio::codec::PostcardCodec;
+use pds_folio::{codec::PodCodec, hamt::HamtMap, set::HamtSet};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -30,6 +28,7 @@ fn make_store() -> FolioStore<MemBackend> {
 // Deterministic integration: HamtMap
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "serde")]
 #[test]
 fn insert_many_and_verify_all_via_trait() {
     let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
@@ -44,6 +43,7 @@ fn insert_many_and_verify_all_via_trait() {
     }
 }
 
+#[cfg(feature = "serde")]
 #[test]
 fn insert_remove_half_and_verify_remaining() {
     let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
@@ -70,6 +70,7 @@ fn insert_remove_half_and_verify_remaining() {
     }
 }
 
+#[cfg(feature = "serde")]
 #[test]
 fn snapshot_isolation_insert_does_not_affect_sibling() {
     let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
@@ -90,6 +91,7 @@ fn snapshot_isolation_insert_does_not_affect_sibling() {
     assert_eq!(base.get_cloned(&"shared".to_string()), Some(0));
 }
 
+#[cfg(feature = "serde")]
 #[test]
 fn snapshot_isolation_remove_does_not_affect_original() {
     let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
@@ -107,6 +109,7 @@ fn snapshot_isolation_remove_does_not_affect_original() {
     assert_eq!(m3.get_cloned(&"b".to_string()), Some(2));
 }
 
+#[cfg(feature = "serde")]
 #[test]
 fn overwrite_updates_without_growing_map() {
     let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
@@ -136,6 +139,7 @@ fn pod_codec_u64_keys_large_insertion() {
 // Deterministic integration: HamtSet
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "serde")]
 #[test]
 fn set_insert_many_and_verify() {
     let s: HamtSet<String, PostcardCodec, MemBackend> = HamtSet::new(make_store());
@@ -153,6 +157,7 @@ fn set_insert_many_and_verify() {
     }
 }
 
+#[cfg(feature = "serde")]
 #[test]
 fn set_snapshot_isolation() {
     let s: HamtSet<String, PostcardCodec, MemBackend> = HamtSet::new(make_store());

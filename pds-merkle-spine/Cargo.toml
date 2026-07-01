@@ -17,7 +17,7 @@ path = "./src/lib.rs"
 
 [dependencies]
 # pds-folio — provides HamtMap (HAMT with structural sharing) and HamtIndex (PageIndexBackend).
-pds-folio = { path = "../pds-folio" }
+pds-folio = { path = "../pds-folio", features = ["serde"] }
 # merkle-spine — provides PageIndexBackend trait and BLAKE3 hash primitives.
 merkle-spine = { path = "../../merkle-spine" }
 # pds cross-variant traits — PersistentMap, VersionedPersistentMap, MerklePersistentMap.

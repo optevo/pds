@@ -26,11 +26,10 @@
 use std::hash::Hash;
 
 use folio_core::{backend::Backend, error::BackendError};
-use serde::{Deserialize, Serialize};
 
 use pds::traits::{PersistentCollection, PersistentMap, PersistentSet};
 
-use crate::{codec::Codec, hamt::HamtMap, set::HamtSet};
+use crate::{codec::ValueCodec, hamt::HamtMap, set::HamtSet};
 
 // ---------------------------------------------------------------------------
 // PersistentCollection
@@ -38,17 +37,17 @@ use crate::{codec::Codec, hamt::HamtMap, set::HamtSet};
 
 impl<K, V, C, B> PersistentCollection for HamtMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Hash + Eq + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
 }
 
 impl<A, C, B> PersistentCollection for HamtSet<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    C: Codec,
+    A: Hash + Eq + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
 }
@@ -59,9 +58,9 @@ where
 
 impl<K, V, C, B> PersistentMap<K, V> for HamtMap<K, V, C, B>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    K: Hash + Eq + Clone,
+    V: Clone,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Returns a clone of the value associated with `key`, or `None` if absent.
@@ -125,8 +124,8 @@ where
 
 impl<A, C, B> PersistentSet<A> for HamtSet<A, C, B>
 where
-    A: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
-    C: Codec,
+    A: Hash + Eq + Clone,
+    C: ValueCodec<A> + ValueCodec<()>,
     B: Backend<Error = BackendError>,
 {
     /// Tests whether `value` is a member of the set.
@@ -179,7 +178,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::PostcardCodec;
+    use crate::codec::PodCodec;
     use folio_core::{backend::MemBackend, checksum::ChecksumKind, store::FolioStore};
     use pds::traits::{PersistentMap, PersistentSet};
 
@@ -189,231 +188,286 @@ mod tests {
             .expect("store creation must succeed")
     }
 
-    fn make_store2() -> FolioStore<MemBackend> {
-        let backend = MemBackend::new(4096, 256);
-        FolioStore::create(backend, 4096, 256, ChecksumKind::Xxh3, true)
-            .expect("store creation must succeed")
-    }
-
     // -----------------------------------------------------------------------
-    // Generic helper functions that accept the trait (same pattern as pds tests)
+    // Unconditional tests using PodCodec (u32 keys, no serde feature required)
     // -----------------------------------------------------------------------
 
-    /// Verifies basic get/insert/contains_key on any PersistentMap.
-    fn pm_get_insert_contains<M: PersistentMap<String, u64>>(empty: M) {
-        let m = empty.insert("hello".to_string(), 42u64);
-        assert_eq!(m.get_cloned(&"hello".to_string()), Some(42u64));
-        assert_eq!(m.get_cloned(&"world".to_string()), None);
-        assert!(m.contains_key(&"hello".to_string()));
-        assert!(!m.contains_key(&"absent".to_string()));
+    #[test]
+    fn hamt_map_pod_get_insert_contains() {
+        let m: HamtMap<u32, u64, PodCodec, MemBackend> = HamtMap::new(make_store());
+        let m = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&m, 1u32, 100u64);
+        assert_eq!(m.get_cloned(&1u32), Some(100u64));
+        assert_eq!(m.get_cloned(&2u32), None);
+        assert!(<HamtMap<_, _, _, _> as PersistentMap<_, _>>::contains_key(
+            &m, &1u32
+        ));
+        assert!(!<HamtMap<_, _, _, _> as PersistentMap<_, _>>::contains_key(
+            &m, &99u32
+        ));
         assert_eq!(m.len(), 1);
         assert!(!m.is_empty());
     }
 
-    /// Verifies remove returns the evicted value and leaves original unchanged.
-    fn pm_remove<M: PersistentMap<String, u64>>(empty: M) {
-        let m = empty
-            .insert("a".to_string(), 1u64)
-            .insert("b".to_string(), 2u64);
-        let (m2, removed) = m.remove(&"a".to_string());
-        assert_eq!(removed, Some(1u64));
-        assert!(!m2.contains_key(&"a".to_string()));
-        assert!(m2.contains_key(&"b".to_string()));
-        // Original unchanged.
-        assert!(m.contains_key(&"a".to_string()));
-    }
-
-    /// Verifies is_empty on empty and non-empty maps.
-    fn pm_is_empty<M: PersistentMap<String, u64>>(empty: M) {
-        assert!(empty.is_empty());
-        let m = empty.insert("x".to_string(), 0u64);
-        assert!(!m.is_empty());
-    }
-
-    /// Verifies remove-absent returns (clone, None).
-    fn pm_remove_absent<M: PersistentMap<String, u64>>(empty: M) {
-        let m = empty.insert("a".to_string(), 1u64);
-        let (m2, removed) = m.remove(&"missing".to_string());
-        assert_eq!(removed, None);
-        assert_eq!(m2.len(), 1);
-        assert_eq!(m2.get_cloned(&"a".to_string()), Some(1u64));
-    }
-
-    // -----------------------------------------------------------------------
-    // PersistentMap via HamtMap
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn hamt_map_persistent_map_get_insert_contains() {
-        let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
-        pm_get_insert_contains(map);
-    }
-
-    #[test]
-    fn hamt_map_persistent_map_remove() {
-        let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
-        pm_remove(map);
-    }
-
-    #[test]
-    fn hamt_map_persistent_map_is_empty() {
-        let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
-        pm_is_empty(map);
-    }
-
-    #[test]
-    fn hamt_map_persistent_map_remove_absent() {
-        let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
-        pm_remove_absent(map);
-    }
-
-    /// Snapshot isolation: inserting into clone A does not affect clone B.
-    #[test]
-    fn hamt_map_snapshot_isolation() {
-        // Use a generic function so all calls route through the PersistentMap trait.
-        fn check_isolation<M: PersistentMap<String, u64>>(
-            a: &M,
-            b: &M,
-            only_a: &String,
-            only_b: &String,
-            base_key: &String,
-        ) {
-            assert!(a.contains_key(only_a));
-            assert!(!a.contains_key(only_b));
-            assert!(b.contains_key(only_b));
-            assert!(!b.contains_key(only_a));
-            assert!(a.contains_key(base_key));
-            assert!(b.contains_key(base_key));
-        }
-
-        let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
-        let base =
-            <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&map, "base".to_string(), 0u64);
-        let a =
-            <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&base, "only_a".to_string(), 1u64);
-        let b =
-            <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&base, "only_b".to_string(), 2u64);
-
-        check_isolation(
-            &a,
-            &b,
-            &"only_a".to_string(),
-            &"only_b".to_string(),
-            &"base".to_string(),
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Generic helper functions for PersistentSet
-    // -----------------------------------------------------------------------
-
-    fn ps_insert_contains<S: PersistentSet<String>>(empty: S) {
-        let s = empty.insert("a".to_string()).insert("b".to_string());
-        assert!(s.contains(&"a".to_string()));
-        assert!(s.contains(&"b".to_string()));
-        assert!(!s.contains(&"c".to_string()));
-        assert_eq!(s.len(), 2);
+    fn hamt_set_pod_insert_contains() {
+        let s: HamtSet<u32, PodCodec, MemBackend> = HamtSet::new(make_store());
+        let s = <HamtSet<_, _, _> as PersistentSet<_>>::insert(&s, 42u32);
+        assert!(<HamtSet<_, _, _> as PersistentSet<_>>::contains(&s, &42u32));
+        assert!(!<HamtSet<_, _, _> as PersistentSet<_>>::contains(
+            &s, &99u32
+        ));
+        assert_eq!(s.len(), 1);
         assert!(!s.is_empty());
     }
 
-    fn ps_remove<S: PersistentSet<String>>(empty: S) {
-        let s = empty.insert("a".to_string()).insert("b".to_string());
-        let s2 = PersistentSet::remove(&s, &"a".to_string());
-        assert!(!s2.contains(&"a".to_string()));
-        assert!(s2.contains(&"b".to_string()));
-        // Original unchanged.
-        assert!(s.contains(&"a".to_string()));
-    }
-
-    fn ps_is_empty<S: PersistentSet<String>>(empty: S) {
-        assert!(empty.is_empty());
-        assert!(!empty.insert("x".to_string()).is_empty());
-    }
-
     // -----------------------------------------------------------------------
-    // PersistentSet via HamtSet
+    // Tests requiring the serde feature (String keys via PostcardCodec)
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn hamt_set_persistent_set_insert_contains() {
-        let s: HamtSet<String, PostcardCodec, MemBackend> = HamtSet::new(make_store());
-        ps_insert_contains(s);
-    }
+    #[cfg(feature = "serde")]
+    mod serde_tests {
+        use super::*;
+        use crate::codec::PostcardCodec;
 
-    #[test]
-    fn hamt_set_persistent_set_remove() {
-        let s: HamtSet<String, PostcardCodec, MemBackend> = HamtSet::new(make_store());
-        ps_remove(s);
-    }
-
-    #[test]
-    fn hamt_set_persistent_set_is_empty() {
-        let s: HamtSet<String, PostcardCodec, MemBackend> = HamtSet::new(make_store());
-        ps_is_empty(s);
-    }
-
-    /// Snapshot isolation for HamtSet: modifying clone A does not affect clone B.
-    #[test]
-    fn hamt_set_snapshot_isolation() {
-        // Use a generic function so all calls go through the PersistentSet trait.
-        fn check_isolation<S: PersistentSet<String>>(
-            a: &S,
-            b: &S,
-            only_a: &String,
-            only_b: &String,
-            shared: &String,
-        ) {
-            assert!(a.contains(only_a));
-            assert!(!a.contains(only_b));
-            assert!(b.contains(only_b));
-            assert!(!b.contains(only_a));
-            assert!(a.contains(shared));
-            assert!(b.contains(shared));
+        fn make_store2() -> FolioStore<MemBackend> {
+            let backend = MemBackend::new(4096, 256);
+            FolioStore::create(backend, 4096, 256, ChecksumKind::Xxh3, true)
+                .expect("store creation must succeed")
         }
 
-        let base: HamtSet<String, PostcardCodec, MemBackend> = HamtSet::new(make_store());
-        let base = <HamtSet<_, _, _> as PersistentSet<_>>::insert(&base, "shared".to_string());
-        let a = <HamtSet<_, _, _> as PersistentSet<_>>::insert(&base, "only_a".to_string());
-        let b = <HamtSet<_, _, _> as PersistentSet<_>>::insert(&base, "only_b".to_string());
+        // -----------------------------------------------------------------------
+        // Generic helper functions that accept the trait (same pattern as pds tests)
+        // -----------------------------------------------------------------------
 
-        check_isolation(
-            &a,
-            &b,
-            &"only_a".to_string(),
-            &"only_b".to_string(),
-            &"shared".to_string(),
-        );
-    }
-
-    /// Round-trip key lookup: insert N keys, look them all up via the trait.
-    #[test]
-    fn hamt_map_round_trip_key_lookup() {
-        let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
-        let mut m: HamtMap<String, u64, PostcardCodec, MemBackend> = map;
-        let n = 64u64;
-        for i in 0..n {
-            m = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&m, format!("k{i}"), i * 10);
+        /// Verifies basic get/insert/contains_key on any PersistentMap.
+        fn pm_get_insert_contains<M: PersistentMap<String, u64>>(empty: M) {
+            let m = empty.insert("hello".to_string(), 42u64);
+            assert_eq!(m.get_cloned(&"hello".to_string()), Some(42u64));
+            assert_eq!(m.get_cloned(&"world".to_string()), None);
+            assert!(m.contains_key(&"hello".to_string()));
+            assert!(!m.contains_key(&"absent".to_string()));
+            assert_eq!(m.len(), 1);
+            assert!(!m.is_empty());
         }
-        assert_eq!(m.len(), n as usize);
-        for i in 0..n {
-            assert_eq!(m.get_cloned(&format!("k{i}")), Some(i * 10));
+
+        /// Verifies remove returns the evicted value and leaves original unchanged.
+        fn pm_remove<M: PersistentMap<String, u64>>(empty: M) {
+            let m = empty
+                .insert("a".to_string(), 1u64)
+                .insert("b".to_string(), 2u64);
+            let (m2, removed) = m.remove(&"a".to_string());
+            assert_eq!(removed, Some(1u64));
+            assert!(!m2.contains_key(&"a".to_string()));
+            assert!(m2.contains_key(&"b".to_string()));
+            // Original unchanged.
+            assert!(m.contains_key(&"a".to_string()));
         }
-    }
 
-    /// Verify that PersistentMap works the same regardless of which store
-    /// the two maps are backed by (type-compatibility check).
-    #[test]
-    fn two_hamt_maps_same_type_different_stores() {
-        let m1: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
-        let m2: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store2());
+        /// Verifies is_empty on empty and non-empty maps.
+        fn pm_is_empty<M: PersistentMap<String, u64>>(empty: M) {
+            assert!(empty.is_empty());
+            let m = empty.insert("x".to_string(), 0u64);
+            assert!(!m.is_empty());
+        }
 
-        let m1 = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&m1, "a".to_string(), 1u64);
-        let m2 = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&m2, "b".to_string(), 2u64);
+        /// Verifies remove-absent returns (clone, None).
+        fn pm_remove_absent<M: PersistentMap<String, u64>>(empty: M) {
+            let m = empty.insert("a".to_string(), 1u64);
+            let (m2, removed) = m.remove(&"missing".to_string());
+            assert_eq!(removed, None);
+            assert_eq!(m2.len(), 1);
+            assert_eq!(m2.get_cloned(&"a".to_string()), Some(1u64));
+        }
 
-        // Each only sees its own keys.
-        assert_eq!(m1.get_cloned(&"a".to_string()), Some(1u64));
-        assert_eq!(m1.get_cloned(&"b".to_string()), None);
-        assert_eq!(m2.get_cloned(&"b".to_string()), Some(2u64));
-        assert_eq!(m2.get_cloned(&"a".to_string()), None);
+        // -----------------------------------------------------------------------
+        // PersistentMap via HamtMap
+        // -----------------------------------------------------------------------
+
+        #[test]
+        fn hamt_map_persistent_map_get_insert_contains() {
+            let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
+            pm_get_insert_contains(map);
+        }
+
+        #[test]
+        fn hamt_map_persistent_map_remove() {
+            let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
+            pm_remove(map);
+        }
+
+        #[test]
+        fn hamt_map_persistent_map_is_empty() {
+            let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
+            pm_is_empty(map);
+        }
+
+        #[test]
+        fn hamt_map_persistent_map_remove_absent() {
+            let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
+            pm_remove_absent(map);
+        }
+
+        /// Snapshot isolation: inserting into clone A does not affect clone B.
+        #[test]
+        fn hamt_map_snapshot_isolation() {
+            fn check_isolation<M: PersistentMap<String, u64>>(
+                a: &M,
+                b: &M,
+                only_a: &String,
+                only_b: &String,
+                base_key: &String,
+            ) {
+                assert!(a.contains_key(only_a));
+                assert!(!a.contains_key(only_b));
+                assert!(b.contains_key(only_b));
+                assert!(!b.contains_key(only_a));
+                assert!(a.contains_key(base_key));
+                assert!(b.contains_key(base_key));
+            }
+
+            let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
+            let base = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(
+                &map,
+                "base".to_string(),
+                0u64,
+            );
+            let a = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(
+                &base,
+                "only_a".to_string(),
+                1u64,
+            );
+            let b = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(
+                &base,
+                "only_b".to_string(),
+                2u64,
+            );
+
+            check_isolation(
+                &a,
+                &b,
+                &"only_a".to_string(),
+                &"only_b".to_string(),
+                &"base".to_string(),
+            );
+        }
+
+        // -----------------------------------------------------------------------
+        // Generic helper functions for PersistentSet
+        // -----------------------------------------------------------------------
+
+        fn ps_insert_contains<S: PersistentSet<String>>(empty: S) {
+            let s = empty.insert("a".to_string()).insert("b".to_string());
+            assert!(s.contains(&"a".to_string()));
+            assert!(s.contains(&"b".to_string()));
+            assert!(!s.contains(&"c".to_string()));
+            assert_eq!(s.len(), 2);
+            assert!(!s.is_empty());
+        }
+
+        fn ps_remove<S: PersistentSet<String>>(empty: S) {
+            let s = empty.insert("a".to_string()).insert("b".to_string());
+            let s2 = PersistentSet::remove(&s, &"a".to_string());
+            assert!(!s2.contains(&"a".to_string()));
+            assert!(s2.contains(&"b".to_string()));
+            // Original unchanged.
+            assert!(s.contains(&"a".to_string()));
+        }
+
+        fn ps_is_empty<S: PersistentSet<String>>(empty: S) {
+            assert!(empty.is_empty());
+            assert!(!empty.insert("x".to_string()).is_empty());
+        }
+
+        // -----------------------------------------------------------------------
+        // PersistentSet via HamtSet
+        // -----------------------------------------------------------------------
+
+        #[test]
+        fn hamt_set_persistent_set_insert_contains() {
+            let s: HamtSet<String, PostcardCodec, MemBackend> = HamtSet::new(make_store());
+            ps_insert_contains(s);
+        }
+
+        #[test]
+        fn hamt_set_persistent_set_remove() {
+            let s: HamtSet<String, PostcardCodec, MemBackend> = HamtSet::new(make_store());
+            ps_remove(s);
+        }
+
+        #[test]
+        fn hamt_set_persistent_set_is_empty() {
+            let s: HamtSet<String, PostcardCodec, MemBackend> = HamtSet::new(make_store());
+            ps_is_empty(s);
+        }
+
+        /// Snapshot isolation for HamtSet: modifying clone A does not affect clone B.
+        #[test]
+        fn hamt_set_snapshot_isolation() {
+            fn check_isolation<S: PersistentSet<String>>(
+                a: &S,
+                b: &S,
+                only_a: &String,
+                only_b: &String,
+                shared: &String,
+            ) {
+                assert!(a.contains(only_a));
+                assert!(!a.contains(only_b));
+                assert!(b.contains(only_b));
+                assert!(!b.contains(only_a));
+                assert!(a.contains(shared));
+                assert!(b.contains(shared));
+            }
+
+            let base: HamtSet<String, PostcardCodec, MemBackend> = HamtSet::new(make_store());
+            let base = <HamtSet<_, _, _> as PersistentSet<_>>::insert(&base, "shared".to_string());
+            let a = <HamtSet<_, _, _> as PersistentSet<_>>::insert(&base, "only_a".to_string());
+            let b = <HamtSet<_, _, _> as PersistentSet<_>>::insert(&base, "only_b".to_string());
+
+            check_isolation(
+                &a,
+                &b,
+                &"only_a".to_string(),
+                &"only_b".to_string(),
+                &"shared".to_string(),
+            );
+        }
+
+        /// Round-trip key lookup: insert N keys, look them all up via the trait.
+        #[test]
+        fn hamt_map_round_trip_key_lookup() {
+            let map: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
+            let mut m: HamtMap<String, u64, PostcardCodec, MemBackend> = map;
+            let n = 64u64;
+            for i in 0..n {
+                m = <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(
+                    &m,
+                    format!("k{i}"),
+                    i * 10,
+                );
+            }
+            assert_eq!(m.len(), n as usize);
+            for i in 0..n {
+                assert_eq!(m.get_cloned(&format!("k{i}")), Some(i * 10));
+            }
+        }
+
+        /// Verify that PersistentMap works the same regardless of which store
+        /// the two maps are backed by (type-compatibility check).
+        #[test]
+        fn two_hamt_maps_same_type_different_stores() {
+            let m1: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store());
+            let m2: HamtMap<String, u64, PostcardCodec, MemBackend> = HamtMap::new(make_store2());
+
+            let m1 =
+                <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&m1, "a".to_string(), 1u64);
+            let m2 =
+                <HamtMap<_, _, _, _> as PersistentMap<_, _>>::insert(&m2, "b".to_string(), 2u64);
+
+            // Each only sees its own keys.
+            assert_eq!(m1.get_cloned(&"a".to_string()), Some(1u64));
+            assert_eq!(m1.get_cloned(&"b".to_string()), None);
+            assert_eq!(m2.get_cloned(&"b".to_string()), Some(2u64));
+            assert_eq!(m2.get_cloned(&"a".to_string()), None);
+        }
     }
 }

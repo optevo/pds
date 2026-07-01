@@ -38,7 +38,7 @@ use merkle_spine::hash::{hash_hamt_node, Hash as SpineHash};
 use serde::{Deserialize, Serialize};
 
 use pds_folio::{
-    codec::{Codec, PostcardCodec},
+    codec::{PostcardCodec, ValueCodec},
     hamt::{HamtError, HamtMap, HamtMapIter},
 };
 
@@ -108,7 +108,7 @@ struct VersionEntry<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// The stable version identifier.  `id.root_hash` is a placeholder until
@@ -134,7 +134,7 @@ struct VersionHistory<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     entries: Vec<VersionEntry<K, V, C, B>>,
@@ -144,7 +144,7 @@ impl<K, V, C, B> VersionHistory<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Creates a new history with the genesis version (v0 = empty map).
@@ -305,7 +305,7 @@ pub struct VersionedHamt<
 > where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// The current version's map data.
@@ -320,7 +320,7 @@ impl<K, V, C, B> std::fmt::Debug for VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -345,7 +345,7 @@ fn compute_merkle_root<K, V, C, B>(
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     let entries_iter = hamt.iter()?;
@@ -391,7 +391,7 @@ impl<K, V, C, B> VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Creates a new empty `VersionedHamt` backed by `store`.
@@ -420,7 +420,7 @@ impl<K, V, C, B> VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Returns the number of entries in the current version.
@@ -541,7 +541,7 @@ impl<K, V, C, B> VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Returns the current version's identifier.
@@ -577,7 +577,7 @@ impl<K, V, C, B> VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Returns a clone of the value for `key` at the given historical version.
@@ -667,7 +667,7 @@ impl<K, V, C, B> VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone + PartialEq,
     V: Serialize + for<'de> Deserialize<'de> + Clone + PartialEq,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Returns all entries that differ between version `from` and version `to`.
@@ -779,7 +779,7 @@ impl<K, V, C, B> VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Generates a Merkle inclusion proof for `key` in the current version.
@@ -887,7 +887,7 @@ impl<K, V, C, B> Clone for VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Clones the `VersionedHamt`, sharing the underlying HAMT storage.
@@ -910,7 +910,7 @@ impl<K, V, C, B> PartialEq for VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     /// Tests equality by comparing Merkle root hashes.
@@ -942,7 +942,7 @@ impl<K, V, C, B> Eq for VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
 }
@@ -955,7 +955,7 @@ impl<K, V, C, B> pds::traits::PersistentCollection for VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
 }
@@ -964,7 +964,7 @@ impl<K, V, C, B> pds::traits::PersistentMap<K, V> for VersionedHamt<K, V, C, B>
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone + PartialEq,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     fn get_cloned(&self, key: &K) -> Option<V> {
@@ -996,7 +996,7 @@ impl<K, V, C, B> pds::traits::VersionedPersistentMap<K, V> for VersionedHamt<K, 
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone + PartialEq,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     type VersionId = VersionId;
@@ -1047,7 +1047,7 @@ impl<K, V, C, B> pds::traits::MerklePersistentMap<K, V> for VersionedHamt<K, V, 
 where
     K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + Clone,
     V: Serialize + for<'de> Deserialize<'de> + Clone + PartialEq,
-    C: Codec,
+    C: ValueCodec<K> + ValueCodec<V>,
     B: Backend<Error = BackendError>,
 {
     type Proof = MerkleProof;

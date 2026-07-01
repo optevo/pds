@@ -154,7 +154,8 @@ where
     ///
     /// Time: O(n).
     fn drain(&mut self) -> Vec<A> {
-        let elems: Vec<A> = self.inner.iter().cloned().collect();
+        let mut elems = Vec::with_capacity(self.inner.len());
+        elems.extend(self.inner.iter().cloned());
         self.inner = crate::Vector::new();
         elems
     }

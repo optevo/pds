@@ -47,7 +47,7 @@
 
 use bytemuck::{Pod, Zeroable};
 
-use crate::codec::{Codec, CodecError};
+use crate::codec::{CodecError, ValueCodec};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -172,10 +172,7 @@ impl LeafBuilder {
     /// Returns [`CodecError`] if:
     /// - The leaf already has [`BRANCHING_FACTOR`] entries, or
     /// - The encoded value would overflow the data section.
-    pub fn push_encoded<T: serde::Serialize, C: Codec>(
-        &mut self,
-        value: &T,
-    ) -> Result<(), CodecError> {
+    pub fn push_encoded<T, C: ValueCodec<T>>(&mut self, value: &T) -> Result<(), CodecError> {
         if self.count >= BRANCHING_FACTOR {
             return Err(CodecError::EncodeTooLarge);
         }
@@ -285,10 +282,7 @@ impl<'a> LeafReader<'a> {
     /// # Errors
     ///
     /// Returns [`CodecError`] if decoding fails.
-    pub fn get_entry<T: for<'de> serde::Deserialize<'de>, C: Codec>(
-        &self,
-        i: usize,
-    ) -> Result<T, CodecError> {
+    pub fn get_entry<T, C: ValueCodec<T>>(&self, i: usize) -> Result<T, CodecError> {
         C::decode(self.entry_bytes(i))
     }
 }
@@ -443,7 +437,9 @@ impl<'a> InternalReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{PodCodec, PostcardCodec};
+    use crate::codec::PodCodec;
+    #[cfg(feature = "serde")]
+    use crate::codec::PostcardCodec;
 
     // --- Size assertions ---
 
@@ -492,6 +488,7 @@ mod tests {
         assert_eq!(reader.count(), 0);
     }
 
+    #[cfg(feature = "serde")]
     #[test]
     fn leaf_single_entry_postcard_u32() {
         let mut builder = LeafBuilder::new();
@@ -504,6 +501,7 @@ mod tests {
         assert_eq!(val, 42u32);
     }
 
+    #[cfg(feature = "serde")]
     #[test]
     fn leaf_multiple_entries_postcard_string() {
         let mut builder = LeafBuilder::new();

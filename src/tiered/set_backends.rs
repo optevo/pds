@@ -120,28 +120,28 @@ where
         self.inner.contains(value)
     }
 
-    /// Inserts using the pds functional API.
+    /// Inserts using the pds mutable (CoW) API.
+    ///
+    /// A single HAMT traversal inserts the element and returns whether it was
+    /// newly added. CoW semantics apply: the affected path is copied only when
+    /// the inner set is shared (e.g. after `cold_snapshot`).
     ///
     /// Returns `true` if the element was newly inserted.
     ///
     /// Time: O(log n).
     fn insert(&mut self, value: A) -> bool {
-        let was_absent = !self.inner.contains(&value);
-        self.inner = self.inner.update(value);
-        was_absent
+        self.inner.insert(value).is_none()
     }
 
-    /// Removes using the pds functional API.
+    /// Removes using the pds mutable (CoW) API.
+    ///
+    /// A single HAMT traversal removes the element. CoW semantics apply.
     ///
     /// Returns `true` if the element was present.
     ///
     /// Time: O(log n).
     fn remove(&mut self, value: &A) -> bool {
-        let was_present = self.inner.contains(value);
-        if was_present {
-            self.inner = self.inner.without(value);
-        }
-        was_present
+        self.inner.remove(value).is_some()
     }
 
     fn len(&self) -> usize {
@@ -167,7 +167,8 @@ where
     ///
     /// Time: O(n).
     fn drain(&mut self) -> Vec<A> {
-        let elems: Vec<A> = self.inner.iter().cloned().collect();
+        let mut elems = Vec::with_capacity(self.inner.len());
+        elems.extend(self.inner.iter().cloned());
         self.inner = crate::HashSet::new();
         elems
     }
@@ -321,24 +322,24 @@ where
         self.inner.contains(value)
     }
 
-    /// Inserts using the pds functional API.
+    /// Inserts using the pds mutable (CoW) API.
+    ///
+    /// A single B+ tree traversal inserts the element and returns whether it was
+    /// newly added. CoW semantics apply: the affected path is copied only when
+    /// the inner set is shared (e.g. after `cold_snapshot`).
     ///
     /// Time: O(log n).
     fn insert(&mut self, value: A) -> bool {
-        let was_absent = !self.inner.contains(&value);
-        self.inner = self.inner.update(value);
-        was_absent
+        self.inner.insert(value).is_none()
     }
 
-    /// Removes using the pds functional API.
+    /// Removes using the pds mutable (CoW) API.
+    ///
+    /// A single B+ tree traversal removes the element. CoW semantics apply.
     ///
     /// Time: O(log n).
     fn remove(&mut self, value: &A) -> bool {
-        let was_present = self.inner.contains(value);
-        if was_present {
-            self.inner = self.inner.without(value);
-        }
-        was_present
+        self.inner.remove(value).is_some()
     }
 
     fn len(&self) -> usize {
@@ -364,7 +365,8 @@ where
     ///
     /// Time: O(n).
     fn drain(&mut self) -> Vec<A> {
-        let elems: Vec<A> = self.inner.iter().cloned().collect();
+        let mut elems = Vec::with_capacity(self.inner.len());
+        elems.extend(self.inner.iter().cloned());
         self.inner = crate::OrdSet::new();
         elems
     }

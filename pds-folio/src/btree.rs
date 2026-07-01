@@ -569,8 +569,7 @@ mod tests {
     fn leaf_multiple_entries_in_order() {
         let mut b = LeafBuilder::new();
         for i in 0u32..10 {
-            b.push_encoded::<u32, u32, PodCodec>(&i, &(i * 2))
-                .unwrap();
+            b.push_encoded::<u32, u32, PodCodec>(&i, &(i * 2)).unwrap();
         }
         let page = b.finish();
         let reader = LeafReader::new(&page);
