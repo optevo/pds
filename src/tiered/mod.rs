@@ -441,7 +441,7 @@ where
 ///
 /// `TieredOrdMap<K, V, Hot, Cold>` is a type alias for
 /// `TieredCollection<K, V, Hot, Cold>` with the constraint that both `Hot` and
-/// `Cold` implement [`OrderedCollectionBackend`][backend::OrderedCollectionBackend].
+/// `Cold` implement [`OrderedCollectionBackend`].
 /// This enables the extension methods on [`TieredCollectionOrdExt`].
 ///
 /// # Example
@@ -457,7 +457,7 @@ pub type TieredOrdMap<K, V, Hot, Cold> = TieredCollection<K, V, Hot, Cold>;
 // --- Extension trait: TieredCollectionOrdExt ---
 
 /// Extension methods for [`TieredCollection`] when both tiers implement
-/// [`OrderedCollectionBackend`][backend::OrderedCollectionBackend].
+/// [`OrderedCollectionBackend`].
 ///
 /// These methods merge hot and cold tier results in key order, with hot entries
 /// winning on duplicate keys. Pending deletes are excluded from the results.
@@ -479,6 +479,9 @@ pub trait TieredCollectionOrdExt<K, V> {
     /// Time: O(n) where n is the total number of entries in both tiers.
     fn iter_ordered(&self) -> Vec<(K, V)>;
 }
+// Note: `TieredCollectionOrdExt` is intentionally separate from
+// [`OrderedCollectionBackend`] — it is an extension on `TieredCollection`
+// itself, not a trait required of its tier backends individually.
 
 impl<K, V, Hot, Cold> TieredCollectionOrdExt<K, V> for TieredCollection<K, V, Hot, Cold>
 where

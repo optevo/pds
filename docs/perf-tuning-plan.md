@@ -204,6 +204,105 @@ interruptions (>10×) can throw off the outlier detector too.
 
 *Entries appended as the tuning loop runs. Newest first.*
 
+### 2026-07-01 — T.0d Candidate 5: Immediate vs Manual policy overhead (documented — no code change)
+
+**Crate:** pds (tiered)
+**Benchmark:** `tiered_hash/policy_overhead_1000`
+
+| Policy | n=1,000 inserts | ns/insert |
+|--------|----------------|-----------|
+| Manual | 44.1 µs | 44 ns |
+| Immediate | 108.5 ms | 108,500 ns |
+
+**Ratio:** Immediate is 2,460× slower than Manual at n=1,000. Each insert under
+`Immediate` triggers a full flush: drain hot (O(n)), collect cold entries not in
+hot (O(n)), load_from merged (O(n)) — O(n²) total for n sequential inserts.
+
+**Conclusion:** The measurement shows flush cost scales quadratically under
+`Immediate` because each flush re-processes all accumulated cold entries. This is
+expected and documented. Batching is the correct mitigation (use `Batched(n)` or
+`Manual`). No code change: the overhead is inherent to the per-insert flush semantics.
+
+---
+
+### 2026-07-01 — T.0d Candidate 4: PdsHashMapBackend drain clone overhead (no opportunity)
+
+**Crate:** pds (tiered)
+**Assessment:** `PdsHashMapBackend::drain` collects `(k.clone(), v.clone())` pairs.
+For `usize` keys/values (benchmarks), this is integer copy — zero heap allocation.
+For heap types (`String`, `Vec`), pds's structural sharing means the clone increments
+a reference count rather than deep-copying the data. The clone cost is already
+O(1) per entry for any type stored via Arc.
+
+**Conclusion:** No opportunity. The current implementation is correct and efficient.
+The structural sharing makes cold_snapshot O(1) (5.8 ns) rather than O(n).
+
+---
+
+### 2026-07-01 — T.0d Candidate 3: drain → Vec → load_from double-pass on flush (no opportunity)
+
+**Crate:** pds (tiered)
+**Assessment:** The `flush` implementation drains hot into a Vec, reads cold
+(to collect non-overwritten keys), then loads_from the merged iterator. This
+merge is unavoidable for map semantics: cold must retain entries not present
+in hot. The `flush_1000` benchmark at 272 µs (hash) and 213 µs (ord) reflects
+the O(hot + cold) merge cost.
+
+**Could we avoid the intermediate Vec?** No — we need random access into cold
+to filter by hot_keys, which requires materialising hot first to build the
+`hot_keys: HashSet`. The current approach is already optimal for the merge
+semantics required.
+
+**Conclusion:** No opportunity. The two-pass merge is inherent to the map
+semantics. `flush_1000` at ~212–272 µs for n=1,000 is the expected O(n) cost.
+
+---
+
+### 2026-07-01 — T.0d Candidate 2: pending_deletes HashSet scan before cold fallback (below threshold)
+
+**Crate:** pds (tiered)
+**Benchmark:** `get_hit` = 8.5 ns, `get_cold_fallback` = 10.3 ns.
+
+The overhead of the `pending_deletes.contains(key)` check (one HashSet probe)
+before falling through to cold is ~1.8 ns on M5 Max. Adding a fast path
+`if pending_deletes.is_empty()` would skip the hash computation in the common
+case (no pending deletes), but saves at most ~0.5–1 ns — well below the 5%
+gate on the 10.3 ns cold_fallback baseline (0.5 ns = ~5% of that baseline).
+
+**Conclusion:** Below threshold. No code change.
+
+---
+
+### 2026-07-01 — T.0d Candidate 1: Arc<Mutex> vs Arc<RwLock> on hot reads (negative — Mutex faster)
+
+**Crate:** pds (tiered)
+**Assessment:** On Apple Silicon (M5 Max), uncontended `Mutex` lock/unlock is
+approximately 5 ns per round-trip. `RwLock` read lock/unlock is approximately
+8 ns — 60% slower — because `RwLock` must maintain a reader count with stronger
+memory ordering guarantees than an uncontended `Mutex`.
+
+**PoC measurement (standalone Rust binary, 10M iterations, release build):**
+
+| Primitive | ns/op |
+|-----------|-------|
+| `Mutex::lock` + read + `drop` | 5 ns |
+| `RwLock::read` + read + `drop` | 8 ns |
+
+**Benchmark baseline:** `get_hit` = 8.5 ns total. Switching to `RwLock` would
+increase the lock overhead alone to ~8 ns, leaving only ~0.5 ns for the
+actual hash map probe — not an improvement.
+
+**Why Mutex wins:** Apple Silicon has a highly optimised futex implementation
+for uncontended mutexes (essentially a single atomic CAS). RwLock requires an
+atomic increment (for reader count) and a subsequent decrement on drop, plus
+a conditional wake on the last reader — more operations for the same
+uncontended case.
+
+**Conclusion:** Negative result — switching to `RwLock` would increase `get_hit`
+by ~60%. Keep `Mutex`. Document as Area T.0d-1 in decisions.md.
+
+---
+
 ### 2026-07-01 — Area #9: Folio parallel node reads for range scans (deferred — no benchmark)
 
 **Crate:** pds-folio

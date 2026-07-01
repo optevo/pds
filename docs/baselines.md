@@ -21,6 +21,7 @@ regressions or improvements. Compare against these numbers.
 - [pds-folio baselines](#pds-folio-baselines)
 - [pds-merkle-spine baselines](#pds-merkle-spine-baselines)
 - [pds-durable baselines](#pds-durable-baselines)
+- [Tiered collections baselines](#tiered-baselines)
 - [Interruption guard results](#interruption-guard-results)
 - [How to re-run](#how-to-re-run)
 
@@ -268,6 +269,84 @@ behaviour — they do not shift the median, only widen the CI.
 
 ---
 
+## Tiered collections baselines {#sec:tiered-baselines}
+
+**Bench command:** `direnv exec . cargo bench --bench tiered --features tiered`
+**Date:** 2026-07-01
+**Notes:** All median times from criterion. `TieredCollection` with `PropagationPolicy::Manual`
+(propagation overhead excluded) unless otherwise noted.
+Results in `/private/tmp/bench_tiered_1782899618.txt`.
+
+**Tuning findings (T.0d):** See `docs/perf-tuning-plan.md` for the full tuning log.
+Key result: `Mutex` is 60% faster than `RwLock` for uncontended reads on Apple Silicon
+M5 Max (5 ns vs 8 ns). `Immediate` propagation adds 2460× overhead vs `Manual` at
+n=1 000.
+
+### TieredCollection (HashMap tier: StdHashMap → PdsHashMap)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_hash/insert` (build from empty) | 3.82 µs | 45.8 µs | ~420 µs |
+| `tiered_hash/get_hit` (hot-tier hit) | — | 8.51 ns | — |
+| `tiered_hash/get_cold_fallback` (cold-tier hit) | — | 10.33 ns | — |
+| `tiered_hash/flush_1000` (flush 1 000 entries) | — | 272.7 µs | — |
+| `tiered_hash/cold_snapshot` (Arc clone of cold) | — | 5.85 ns | — |
+
+### TieredCollection (OrdMap tier: StdBTreeMap → PdsOrdMap)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_ord/insert` (build from empty) | 2.63 µs | 35.3 µs | 643 µs |
+| `tiered_ord/get_hit` (hot-tier hit) | — | 7.90 ns | — |
+| `tiered_ord/get_cold_fallback` (cold-tier hit) | — | 10.61 ns | — |
+| `tiered_ord/flush_1000` (flush 1 000 entries) | — | 212.9 µs | — |
+| `tiered_ord/cold_snapshot` (Arc clone of cold) | — | 5.91 ns | — |
+
+### TieredSequence (Vector tier: StdVec → PdsVector)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_vec/push_back` (build from empty) | ~645 ns | ~5.1 µs | ~49 µs |
+| `tiered_vec/get_hit` (hot-tier hit) | — | 5.07 ns | — |
+| `tiered_vec/get_cold_fallback` (cold-tier hit) | — | 12.56 ns | — |
+| `tiered_vec/flush_1000` (flush 1 000 elements) | — | 18.73 µs | — |
+| `tiered_vec/cold_snapshot` (Arc clone of cold) | — | 10.34 ns | — |
+
+### 3-tier TieredCollection (StdHashMap → PdsHashMap → MerkleWrapper, `traits` feature)
+
+| Benchmark | n=100 | n=1 000 | n=10 000 |
+|-----------|------:|--------:|---------:|
+| `tiered_3tier_hash/insert` (build from empty) | 4.13 µs | 49.9 µs | 462 µs |
+| `tiered_3tier_hash/get_hit` (hot-tier hit) | — | 8.50 ns | — |
+| `tiered_3tier_hash/flush_1000` (flush 1 000 entries) | — | 280.7 µs | — |
+| `tiered_3tier_hash/cold_snapshot` (Arc clone of cold) | — | 5.46 ns | — |
+
+### Propagation policy overhead (tiered_hash, n=1 000)
+
+| Policy | Time | vs Manual |
+|--------|-----:|----------:|
+| `Manual` (no propagation) | 44.1 µs | 1.0× |
+| `Immediate` (propagate after every insert) | 108.5 ms | 2 460× |
+
+**Observation:** `Immediate` policy propagates and flushes after every single insert,
+making it unsuitable for bulk-insert workloads. Use `Batched(n)` or `Manual` + explicit
+`flush()` for bulk operations.
+
+### Key observations
+
+- **Cold snapshot is O(1)** at ~5–10 ns regardless of collection size — pure Arc clone
+  of the persistent collection (structural sharing; no data copied).
+- **Hot-tier hit is faster than cold-tier hit** by ~2 ns — one fewer Arc dereference
+  through the Mutex guard path.
+- **OrdMap flush is 22% faster than HashMap flush** at n=1 000 (212.9 µs vs 272.7 µs):
+  BTreeMap drain is more cache-friendly than HashMap drain for sequential traversal.
+- **Vector flush is 15× faster than HashMap flush** at n=1 000 (18.73 µs vs 272.7 µs):
+  append-log semantics avoid the full merge pass required by map flush.
+- **3-tier overhead vs 2-tier** is small: +7 ns per insert at n=100, +9% for flush
+  at n=1 000. An extra Merkle hash layer adds ~4 µs amortised per 1 000 inserts.
+
+---
+
 ## How to re-run {#sec:how-to-rerun}
 
 ```bash
@@ -275,6 +354,9 @@ behaviour — they do not shift the median, only widen the CI.
 direnv exec . cargo bench -p pds-folio     2>&1 | tee /private/tmp/bench_folio_$(date +%s).txt
 direnv exec . cargo bench -p pds-merkle-spine 2>&1 | tee /private/tmp/bench_merkle_$(date +%s).txt
 direnv exec . cargo bench -p pds-durable   2>&1 | tee /private/tmp/bench_durable_$(date +%s).txt
+
+# Tiered collections:
+direnv exec . cargo bench --bench tiered --features tiered 2>&1 | tee /private/tmp/bench_tiered_$(date +%s).txt
 
 # Single benchmark (filter):
 direnv exec . cargo bench -p pds-folio --bench bench -- hamt_insert

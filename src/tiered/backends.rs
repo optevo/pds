@@ -397,7 +397,7 @@ where
     ///
     /// Time: O(n).
     fn drain(&mut self) -> Vec<(K, V)> {
-        let old = std::mem::replace(&mut self.inner, std::collections::BTreeMap::new());
+        let old = std::mem::take(&mut self.inner);
         old.into_iter().collect()
     }
 }

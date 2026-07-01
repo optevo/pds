@@ -1166,7 +1166,7 @@ small-chunks). `cargo clippy --all-features -- -D warnings` clean.
 
 ---
 
-### T.0b — OrdMap tiered backends {#t0b}
+### T.0b — OrdMap tiered backends {#t0b} ✓ Done [2026-07-01]
 
 **Scope:** extend the `tiered` feature with ordered-map composition support.
 `CollectionBackend<K, V>` covers keyed access but has no ordered-iteration or
@@ -1238,7 +1238,7 @@ range-query methods. A sub-trait `OrderedCollectionBackend<K, V>` adds these, an
 
 ---
 
-### T.0c — Vector tiered backends {#t0c}
+### T.0c — Vector tiered backends {#t0c} ✓ Done [2026-07-01]
 
 **Scope:** extend the `tiered` feature with sequence composition support.
 Vectors are indexed sequences, not keyed maps — a separate `SequenceBackend<A>`
@@ -1338,7 +1338,7 @@ trait is needed. A `TieredVector<A, Hot, Cold>` type wraps a
 
 ---
 
-### T.0d — Composability verification and performance tuning loop {#t0d}
+### T.0d — Composability verification and performance tuning loop {#t0d} ✓ Done [2026-07-01]
 
 Once T.0b and T.0c are implemented, verify all combinations compile and run,
 then tune performance until no opportunity ≥ 5% remains.
