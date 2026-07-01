@@ -27,6 +27,22 @@ where
     /// Time: O(1) amortised for hash backends; O(log n) for tree backends.
     fn insert(&mut self, value: A);
 
+    /// Inserts `count` occurrences of `value` in a single operation.
+    ///
+    /// Equivalent to calling `insert(value.clone())` `count` times, but
+    /// backends that support a bulk-increment API (e.g. `pds::Bag::insert_many`)
+    /// should override this to avoid O(count) functional updates.
+    ///
+    /// A `count` of 0 is a no-op.
+    ///
+    /// Time: O(log n) for `PdsBagBackend` (one functional update regardless of
+    /// count); O(count × log n) for the default implementation.
+    fn insert_many(&mut self, value: A, count: usize) {
+        for _ in 0..count {
+            self.insert(value.clone());
+        }
+    }
+
     /// Removes one occurrence of `value`.
     ///
     /// Returns `false` if `value` was absent (no change made). Returns `true`

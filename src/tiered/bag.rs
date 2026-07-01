@@ -51,10 +51,10 @@ where
             }
         }
         // Merge hot into cold by adding counts.
+        // Use insert_many so each distinct element costs one functional update
+        // (one HAMT/B+ tree path-copy) instead of `count` separate updates.
         for (elem, count) in self.hot.drain() {
-            for _ in 0..count {
-                self.cold.insert(elem.clone());
-            }
+            self.cold.insert_many(elem, count);
         }
         self.write_count = 0;
     }

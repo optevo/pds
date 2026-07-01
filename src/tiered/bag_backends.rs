@@ -57,6 +57,20 @@ where
         self.inner.insert(value);
     }
 
+    /// Inserts `count` occurrences of `value` in a single functional update.
+    ///
+    /// Delegates to `pds::Bag::insert_many`, which increments the element's
+    /// count in one HAMT path-copy rather than making `count` separate updates.
+    ///
+    /// A `count` of 0 is a no-op.
+    ///
+    /// Time: O(log n) regardless of `count`.
+    fn insert_many(&mut self, value: A, count: usize) {
+        if count > 0 {
+            self.inner.insert_many(value, count);
+        }
+    }
+
     /// Removes one occurrence of `value`.
     ///
     /// Returns `false` if absent.
@@ -154,6 +168,20 @@ where
     /// Time: O(log n).
     fn insert(&mut self, value: A) {
         self.inner.insert(value);
+    }
+
+    /// Inserts `count` occurrences of `value` in a single functional update.
+    ///
+    /// Delegates to `pds::OrdBag::insert_many`, which increments the element's
+    /// count in one B+ tree path-copy rather than making `count` separate updates.
+    ///
+    /// A `count` of 0 is a no-op.
+    ///
+    /// Time: O(log n) regardless of `count`.
+    fn insert_many(&mut self, value: A, count: usize) {
+        if count > 0 {
+            self.inner.insert_many(value, count);
+        }
     }
 
     /// Removes one occurrence of `value`.
