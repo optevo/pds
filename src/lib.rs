@@ -835,6 +835,11 @@ pub use tiered::bimap_backends::{PdsBiMapBackend, PdsOrdBiMapBackend};
 #[cfg(feature = "tiered")]
 pub use tiered::{BiMapBackend, TieredBiMap, TieredOrdBiMap};
 
+#[cfg(feature = "tiered")]
+pub use tiered::symmap_backends::{PdsOrdSymMapBackend, PdsSymMapBackend};
+#[cfg(feature = "tiered")]
+pub use tiered::{SymMapBackend, SymMapDirection, TieredOrdSymMap, TieredSymMap};
+
 #[cfg(test)]
 mod test;
 

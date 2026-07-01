@@ -66,6 +66,9 @@ pub mod sequence_backends;
 pub mod set;
 pub mod set_backend;
 pub mod set_backends;
+pub mod symmap;
+pub mod symmap_backend;
+pub mod symmap_backends;
 
 #[cfg(test)]
 mod tests;
@@ -83,6 +86,8 @@ mod tests_ord;
 mod tests_seq;
 #[cfg(test)]
 mod tests_set;
+#[cfg(test)]
+mod tests_symmap;
 
 pub use backend::{CollectionBackend, OrderedCollectionBackend};
 pub use bag::{TieredBag, TieredOrdBag};
@@ -96,6 +101,8 @@ pub use sequence::TieredSequence;
 pub use sequence::TieredVector;
 pub use set::{TieredOrdSet, TieredSet, TieredSetOrdExt};
 pub use set_backend::{OrderedSetBackend, SetBackend};
+pub use symmap::{TieredOrdSymMap, TieredSymMap};
+pub use symmap_backend::{SymMapBackend, SymMapDirection};
 
 use std::collections::HashSet;
 use std::marker::PhantomData;
