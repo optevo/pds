@@ -72,6 +72,9 @@ pub mod set_backends;
 pub mod symmap;
 pub mod symmap_backend;
 pub mod symmap_backends;
+pub mod trie;
+pub mod trie_backend;
+pub mod trie_backends;
 
 #[cfg(test)]
 mod tests;
@@ -93,6 +96,8 @@ mod tests_seq;
 mod tests_set;
 #[cfg(test)]
 mod tests_symmap;
+#[cfg(test)]
+mod tests_trie;
 
 pub use backend::{CollectionBackend, OrderedCollectionBackend};
 pub use bag::{TieredBag, TieredOrdBag};
@@ -110,6 +115,8 @@ pub use set::{TieredOrdSet, TieredSet, TieredSetOrdExt};
 pub use set_backend::{OrderedSetBackend, SetBackend};
 pub use symmap::{TieredOrdSymMap, TieredSymMap};
 pub use symmap_backend::{SymMapBackend, SymMapDirection};
+pub use trie::{TieredOrdTrie, TieredTrie};
+pub use trie_backend::TrieBackend;
 
 use std::collections::HashSet;
 use std::marker::PhantomData;

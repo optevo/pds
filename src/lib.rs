@@ -851,6 +851,11 @@ pub use tiered::{
     TieredInsertionOrderSet,
 };
 
+#[cfg(feature = "tiered")]
+pub use tiered::trie_backends::{PdsOrdTrieBackend, PdsTrieBackend};
+#[cfg(feature = "tiered")]
+pub use tiered::{TieredOrdTrie, TieredTrie, TrieBackend};
+
 #[cfg(test)]
 mod test;
 
