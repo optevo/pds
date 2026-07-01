@@ -823,6 +823,12 @@ pub use tiered::{BagBackend, OrderedBagBackend};
 pub use tiered::bag_backends::{PdsBagBackend, PdsOrdBagBackend};
 #[cfg(feature = "tiered")]
 pub use tiered::{TieredBag, TieredOrdBag};
+#[cfg(feature = "tiered")]
+pub use tiered::MultiMapBackend;
+#[cfg(feature = "tiered")]
+pub use tiered::multimap_backends::{PdsHashMultiMapBackend, PdsOrdMultiMapBackend};
+#[cfg(feature = "tiered")]
+pub use tiered::TieredMultiMap;
 
 #[cfg(test)]
 mod test;

@@ -53,6 +53,9 @@ pub mod backends;
 pub mod bag;
 pub mod bag_backend;
 pub mod bag_backends;
+pub mod multimap;
+pub mod multimap_backend;
+pub mod multimap_backends;
 pub mod policy;
 pub mod sequence;
 pub mod sequence_backend;
@@ -68,6 +71,8 @@ mod tests_bag;
 #[cfg(test)]
 mod tests_compose;
 #[cfg(test)]
+mod tests_multimap;
+#[cfg(test)]
 mod tests_ord;
 #[cfg(test)]
 mod tests_seq;
@@ -77,6 +82,8 @@ mod tests_set;
 pub use backend::{CollectionBackend, OrderedCollectionBackend};
 pub use bag::{TieredBag, TieredOrdBag};
 pub use bag_backend::{BagBackend, OrderedBagBackend};
+pub use multimap::TieredMultiMap;
+pub use multimap_backend::MultiMapBackend;
 pub use policy::PropagationPolicy;
 pub use sequence::TieredSequence;
 pub use sequence::TieredVector;
