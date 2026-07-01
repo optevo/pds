@@ -66,6 +66,9 @@ ord-hash = ["std"]
 # impls planned (pds-folio, pds-merkle-spine workspace members). Requires std.
 # blake3 and postcard are required by MerkleWrapper.
 traits = ["std", "dep:blake3", "dep:postcard", "dep:serde_core"]
+# Tiered write-behind collections: TieredCollection, PropagationPolicy, CollectionBackend,
+# StdHashMapBackend, PdsHashMapBackend. MerkleWrapperBackend also requires `traits`.
+tiered = ["std"]
 
 [dependencies]
 bitmaps = { version = "3", default-features = false }

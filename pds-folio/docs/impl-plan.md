@@ -19,6 +19,14 @@ See `../docs/pds-folio-spec.md` for the full design specification.
 
 *Newest first.*
 
+- **[2026-07-01] G.17 — Shared rope store: `FolioRope::new_in` and `FolioRope::store()`.**
+  - `folio-rope/src/lib.rs`: added crate-root re-exports for `ChunkStore`, `FolioRope`,
+    `RopeSnapshot`, `RopeError`.
+  - `folio-rope/src/rope.rs`: added `FolioRope::new_in(chunk_store)` and
+    `FolioRope::store()` methods; doc-tested both; added
+    `shared_store_two_independent_ropes` unit test.
+  - folio test.sh green; pds test.sh green (pds-folio still builds correctly).
+
 - **[2026-07-01] G.16 — Add folio-rope dependency and module re-export.**
   - `pds-folio/Cargo.toml`: added `folio-rope = { path = "../../folio/folio-rope" }`.
   - `src/lib.rs`: added `pub mod rope;`; updated crate-level doc table with Rope row.
