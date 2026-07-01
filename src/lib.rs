@@ -790,12 +790,12 @@ pub use merkle_wrapper::MerkleWrapper;
 
 #[cfg(feature = "tiered")]
 pub mod tiered;
-#[cfg(feature = "tiered")]
-pub use tiered::{PropagationPolicy, PropagationHandle, TieredCollection};
-#[cfg(feature = "tiered")]
-pub use tiered::backends::{StdHashMapBackend, PdsHashMapBackend};
 #[cfg(all(feature = "tiered", feature = "traits"))]
 pub use tiered::backends::MerkleWrapperBackend;
+#[cfg(feature = "tiered")]
+pub use tiered::backends::{PdsHashMapBackend, StdHashMapBackend};
+#[cfg(feature = "tiered")]
+pub use tiered::{PropagationHandle, PropagationPolicy, TieredCollection};
 
 #[cfg(test)]
 mod test;

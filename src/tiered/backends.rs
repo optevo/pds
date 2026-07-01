@@ -1,4 +1,4 @@
-//! Concrete [`CollectionBackend`][super::backend::CollectionBackend] implementations.
+//! Concrete [`CollectionBackend`] implementations.
 //!
 //! Three backends are provided:
 //!

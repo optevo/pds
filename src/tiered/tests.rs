@@ -22,11 +22,7 @@ mod tests {
     >;
 
     fn std_pds(policy: PropagationPolicy) -> StdPds {
-        TieredCollection::new(
-            StdHashMapBackend::new(),
-            PdsHashMapBackend::new(),
-            policy,
-        )
+        TieredCollection::new(StdHashMapBackend::new(), PdsHashMapBackend::new(), policy)
     }
 
     // --- Test 1: Basic insert + get from hot ---
@@ -216,12 +212,7 @@ mod tests {
             PdsHashMapBackend<String, i32>,
             MerkleWrapperBackend<String, i32>,
         >;
-        type Outer = TieredCollection<
-            String,
-            i32,
-            StdHashMapBackend<String, i32>,
-            Inner,
-        >;
+        type Outer = TieredCollection<String, i32, StdHashMapBackend<String, i32>, Inner>;
 
         let inner: Inner = TieredCollection::new(
             PdsHashMapBackend::new(),
@@ -229,11 +220,8 @@ mod tests {
             PropagationPolicy::Manual,
         );
 
-        let outer: Outer = TieredCollection::new(
-            StdHashMapBackend::new(),
-            inner,
-            PropagationPolicy::Manual,
-        );
+        let outer: Outer =
+            TieredCollection::new(StdHashMapBackend::new(), inner, PropagationPolicy::Manual);
 
         // Record merkle root before any data.
         let root_before = {
@@ -355,12 +343,16 @@ mod tests {
     /// flush cycle, then verify the cold tier has the key.
     #[test]
     fn timed_policy_background_propagation() {
-        let tc: TieredCollection<String, i32, StdHashMapBackend<String, i32>, PdsHashMapBackend<String, i32>> =
-            TieredCollection::new(
-                StdHashMapBackend::new(),
-                PdsHashMapBackend::new(),
-                PropagationPolicy::Timed(std::time::Duration::from_millis(50)),
-            );
+        let tc: TieredCollection<
+            String,
+            i32,
+            StdHashMapBackend<String, i32>,
+            PdsHashMapBackend<String, i32>,
+        > = TieredCollection::new(
+            StdHashMapBackend::new(),
+            PdsHashMapBackend::new(),
+            PropagationPolicy::Timed(std::time::Duration::from_millis(50)),
+        );
 
         let _handle = tc.start_background_propagation();
         tc.insert("timed_key".to_string(), 42);

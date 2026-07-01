@@ -124,7 +124,7 @@ where
                 .collect();
 
             // Merge: cold survivors + hot entries.
-            let merged = cold_entries.into_iter().chain(hot_entries.into_iter());
+            let merged = cold_entries.into_iter().chain(hot_entries);
             self.cold.load_from(merged);
         }
 

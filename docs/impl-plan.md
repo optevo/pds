@@ -59,6 +59,52 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-07-01] Phase T.0 — Core tiered write-behind infrastructure.**
+  New `tiered` feature in the pds root crate. No folio or merkle-spine dependency.
+
+  Deliverables:
+
+  1. `src/tiered/backend.rs` — `CollectionBackend<K, V>` trait: `get`, `insert`,
+     `remove`, `len`, `is_empty`, `load_from`, `drain`, `snapshot` (default).
+     `Send + 'static` required; `drain` leaves backend empty; `load_from` clears
+     before inserting.
+
+  2. `src/tiered/backends.rs` — three concrete backends:
+     - `StdHashMapBackend<K, V>` — wraps `std::collections::HashMap`. O(1) amortised
+       ops; O(n) clone. Recommended hot-tier backend.
+     - `PdsHashMapBackend<K, V>` — wraps `pds::HashMap` (HAMT). Functional API:
+       each insert/remove stores a new map in place. O(1) clone via structural sharing.
+     - `MerkleWrapperBackend<K, V>` — wraps `MerkleWrapper<pds::HashMap<K,V>>`. BLAKE3
+       Merkle root changes with every mutation. Gated on `#[cfg(feature = "traits")]`.
+
+  3. `src/tiered/policy.rs` — `PropagationPolicy` enum: `Immediate`, `Batched(usize)`,
+     `Timed(Duration)`, `Manual`.
+
+  4. `src/tiered/mod.rs` — `TieredCollection<K, V, Hot, Cold>`:
+     - Internal state in `Arc<Mutex<TieredState<…>>>` — O(1) clone, `Send + Sync`.
+     - `pending_deletes: HashSet<K>` masks cold-tier values for recently deleted keys
+       until next flush.
+     - Public API: `new`, `insert`, `get`, `remove`, `flush`, `cold_snapshot`,
+       `hot_snapshot`, `len` (approximate), `is_empty`, `start_background_propagation`.
+     - `PropagationHandle` with `Drop` impl (stop signal + join).
+     - `CollectionBackend<K, V>` impl on `TieredCollection` — enables three-tier
+       recursive composition.
+
+  5. `src/tiered/tests.rs` — 14 tests: hot-only get, flush-to-cold, delete-before-flush,
+     delete-after-propagation, flush-clears-deletion-mask, Batched(3) auto-flush,
+     Immediate always-current, Manual never-auto-flushes, concurrent inserts (2 threads
+     × 50 each), three-tier composition with MerkleWrapper root change (gated on
+     `traits`), cold_snapshot independence, re-insert deleted key, is_empty both tiers,
+     `CollectionBackend` drain/load, Timed policy background propagation.
+
+  Cargo.toml: `tiered = ["std"]` feature. No new external deps.
+  `lib.rs`: `pub mod tiered`, re-exports for `TieredCollection`, `PropagationPolicy`,
+  `PropagationHandle`, `StdHashMapBackend`, `PdsHashMapBackend`, `MerkleWrapperBackend`.
+
+  All three test variants green: `--features tiered` (425 tests), `--features "tiered traits"`
+  (425 tests), `--all-features` (441 tests). `cargo clippy --all-features -- -D warnings`
+  clean. `cargo doc --no-deps --all-features` no warnings.
+
 - **[2026-07-01] Architectural improvements — MerkleWrapper, decision log, trait boundary note, selection guidance.**
   Four improvements from the post-H.8 architectural review:
 
@@ -1039,7 +1085,7 @@ that point (see DEC-DURABLE-1).
 
 ---
 
-### T.0 — Core infrastructure {#t0}
+### T.0 — Core infrastructure {#t0} ✓ Done [2026-07-01]
 
 **Scope:** the `tiered` feature in the pds root crate. No folio or merkle-spine
 dependency — backends for those tiers are added in T.1 / T.2.

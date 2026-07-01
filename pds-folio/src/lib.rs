@@ -12,6 +12,7 @@
 //! | [`folio_ordmap::FolioOrdMap`] | [`folio_ordmap`] | [`pds::traits::PersistentOrdMap`] |
 //! | [`folio_ordset::FolioOrdSet`] | [`folio_ordset`] | [`pds::traits::PersistentOrdSet`] |
 //! | [`rope::FolioRope`] | [`rope`] | — (persistent UTF-8 text buffer — serde-free, O(1) clone) |
+//! | [`text_map::FolioTextMap`] | [`text_map`] | — (OrdMap-keyed map with FolioRope values; O(1) clone, no shared store) |
 //!
 //! # Storage model
 //!
@@ -86,5 +87,6 @@ pub mod hamt_index;
 pub mod node;
 pub mod rope;
 pub mod set;
+pub mod text_map;
 pub mod traits;
 pub mod vector;
