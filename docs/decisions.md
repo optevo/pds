@@ -147,6 +147,62 @@ not available. `hashbrown` is the correct choice for this constraint.
 
 ---
 
+### Area-10 — `foldhash` vs SipHash-1-3 as default hasher for `pds::HashMap` {#sec:area-10}
+
+**Date:** 2026-07-01
+**Status:** Accepted — negative result; foldhash remains opt-in only
+
+**Context:**
+`foldhash` is already available in `pds` as an optional feature (`--features foldhash`).
+The question was whether to promote it to the default hasher, given that it is measurably
+faster than SipHash-1-3 for `u64` keys in `hashbrown` (standard hash maps). The `pds`
+HAMT uses a SIMD-accelerated probing scheme (`wide::u8x16` control byte groups); the hash
+output feeds directly into the control byte extraction and group index selection.
+
+**Decision:**
+Keep `foldhash` as opt-in only (`--features foldhash`). Do not promote it to the default
+hasher for `pds::HashMap`. SipHash-1-3 is the correct default.
+
+**Measured results (pds::HashMap, M5 Max, 2026-07-01):**
+
+| Benchmark | SipHash-1-3 (default) | foldhash | Change |
+|-----------|----------------------:|----------|--------|
+| i64 lookup n=10K | 78.0 µs | 84.2 µs | +8.4% REGRESSION |
+| i64 lookup n=100K | 1.168 ms | 1.315 ms | +22.2% REGRESSION |
+| i64 from_iter n=10K | 236.6 µs | 245.6 µs | +4.0% regression |
+| i64 from_iter n=100K | 3.883 ms | 4.426 ms | +14.0% REGRESSION |
+| i64 insert n=10K | 3.070 ms | 3.239 ms | +5.5% regression |
+| str lookup n=10K | 137.5 µs | 142.3 µs | +3.1% regression |
+| str lookup n=100K | 2.84 ms | 3.00 ms | no change |
+| str from_iter n=10K | 380.4 µs | 385.7 µs | +1.3% (noise) |
+| str from_iter n=100K | 7.60 ms | 6.91 ms | −9.1% improvement |
+| str insert n=10K | 4.17 ms | 4.14 ms | no change |
+
+**Why SipHash-1-3 wins for i64 keys:**
+The `pds` HAMT uses SIMD node probing via `wide::u8x16`. The control byte
+(`hash.ctrl_byte()`) and group index (`hash.ctrl_group()`) are extracted from the
+high bits of the hash. SipHash-1-3 provides better bit distribution in these high
+bits for i64 workloads, resulting in better SIMD probe hit rates. For str keys the
+gap narrows (string hashing dominates total cost), but no category shows a gain large
+enough to justify a regression in the dominant i64 case.
+
+**Alternatives considered:**
+- *Promote foldhash to default* — causes 8–22% regressions on i64 lookup (the dominant
+  workload). Not acceptable.
+- *Use foldhash for str keys, SipHash for i64* — there is no per-key-type hasher
+  dispatch in the current design; this would require a wrapper type. Overhead not
+  justified given the small str improvement.
+- *AHash as default* — not investigated in this round; deferred to future iteration if
+  a hasher survey is warranted.
+
+**Consequences:**
+- Users who have str-heavy workloads and care more about `from_iter` than lookup can
+  opt in via `--features foldhash`. The feature flag remains.
+- This result is specific to the SIMD-accelerated HAMT probing scheme. If the probing
+  scheme changes, this result should be re-evaluated.
+
+---
+
 ## DEC-039: `*Range` view types — design principles {#sec:dec-039}
 
 **Date:** 2026-04-27

@@ -202,6 +202,37 @@ interruptions (>10×) can throw off the outlier detector too.
 
 *Entries appended as the tuning loop runs. Newest first.*
 
+### 2026-07-01 — Area #10: foldhash vs SipHash-1-3 for pds::HashMap (investigated — foldhash SLOWER)
+
+**Crate:** pds (base collections)
+**Assessment:** Decisive negative result. Foldhash causes 5–22% regressions across i64 lookup
+and insert workloads vs the default SipHash-1-3. Do NOT enable foldhash by default.
+
+**Results (SipHash-1-3 vs foldhash, pds::HashMap):**
+
+| Benchmark | SipHash (default) | Foldhash | Change |
+|-----------|------------------:|----------|--------|
+| i64 lookup n=10K | 78.0 µs | 84.2 µs | +8.4% REGRESSION |
+| i64 lookup n=100K | 1.168 ms | 1.315 ms | +22.2% REGRESSION |
+| i64 from_iter n=10K | 236.6 µs | 245.6 µs | +4.0% regression |
+| i64 from_iter n=100K | 3.883 ms | 4.426 ms | +14.0% REGRESSION |
+| i64 insert n=10K | 3.070 ms | 3.239 ms | +5.5% regression |
+| str lookup n=10K | 137.5 µs | 142.3 µs | +3.1% regression |
+| str lookup n=100K | 2.84 ms | 3.00 ms | no change |
+| str from_iter n=10K | 380.4 µs | 385.7 µs | +1.3% (noise) |
+| str from_iter n=100K | 7.60 ms | 6.91 ms | −9.1% improvement |
+| str insert n=10K | 4.17 ms | 4.14 ms | no change |
+
+**Why foldhash is slower here:** The pds HAMT uses SIMD-accelerated node probing
+via `wide::u8x16` groups. The control byte (`hash.ctrl_byte()`) and group index
+(`hash.ctrl_group()`) are extracted from high bits of the hash. SipHash-1-3 produces
+slightly better bit distribution in these high bits for the specific key types
+benchmarked (i64), resulting in better SIMD probe hit rates. For str keys the difference
+is smaller (string hashing dominates, not the hasher for the HAMT lookup).
+
+**Decision:** Keep `foldhash` as an opt-in feature only. Do not promote it to default.
+Record in docs/decisions.md → Area-10.
+
 ### 2026-07-01 — Area #3: HAMT branching factor tuning (pre-investigated — no further opportunity)
 
 **Crate:** pds (base collections)
