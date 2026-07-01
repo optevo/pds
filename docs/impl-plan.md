@@ -1166,6 +1166,242 @@ small-chunks). `cargo clippy --all-features -- -D warnings` clean.
 
 ---
 
+### T.0b — OrdMap tiered backends {#t0b}
+
+**Scope:** extend the `tiered` feature with ordered-map composition support.
+`CollectionBackend<K, V>` covers keyed access but has no ordered-iteration or
+range-query methods. A sub-trait `OrderedCollectionBackend<K, V>` adds these, and
+`TieredOrdMap<K, V, Hot, Cold>` is a type alias (or newtype) over
+`TieredCollection` that constrains both tiers to implement it.
+
+**Deliverables:**
+
+1. **`OrderedCollectionBackend<K, V>: CollectionBackend<K, V>`** in
+   `src/tiered/backend.rs`
+
+   Additional methods beyond `CollectionBackend`:
+
+   ```rust
+   /// Returns all K/V pairs with keys in `range`, in ascending key order.
+   fn range(&self, range: impl std::ops::RangeBounds<K>) -> Vec<(K, V)>;
+
+   /// Returns all K/V pairs in ascending key order.
+   fn iter_ordered(&self) -> Vec<(K, V)>;
+
+   /// Returns the smallest key present, or `None` if empty.
+   fn first_key(&self) -> Option<K>;
+
+   /// Returns the largest key present, or `None` if empty.
+   fn last_key(&self) -> Option<K>;
+   ```
+
+   `K` bound extends to `Ord` for backends requiring it. The blanket bound on
+   `OrderedCollectionBackend` requires `K: Clone + Eq + Hash + Ord`.
+
+2. **Concrete ordered backends** in `src/tiered/backends.rs`
+
+   - **`StdBTreeMapBackend<K, V>`** — wraps `std::collections::BTreeMap<K, V>`.
+     `drain` calls `btree.into_iter().collect()` after replacing with an empty map.
+     `load_from` calls `extend`. `range` uses `BTreeMap::range`.
+   - **`PdsOrdMapBackend<K, V>`** — wraps `crate::OrdMap<K, V>`. `insert`/`remove`
+     use the functional API. `drain` collects all pairs and resets to empty.
+     `range` uses `OrdMap::range`. `iter_ordered` uses `OrdMap::iter`.
+
+3. **`TieredOrdMap<K, V, Hot, Cold>`** type alias in `src/tiered/mod.rs`
+
+   ```rust
+   pub type TieredOrdMap<K, V, Hot, Cold> = TieredCollection<K, V, Hot, Cold>;
+   ```
+
+   Plus a free function or inherent-impl block (via an extension trait
+   `TieredCollectionOrdExt`) that exposes `range` and `iter_ordered` on
+   `TieredCollection<K, V, Hot, Cold>` when `Hot: OrderedCollectionBackend<K, V>`
+   and `Cold: OrderedCollectionBackend<K, V>`. These methods read from hot first,
+   merge with cold (deduplicating by key, hot wins), and return results in key order.
+
+4. **Tests** covering:
+   - `range` on `TieredOrdMap<StdBTreeMapBackend, PdsOrdMapBackend>`: insert span
+     of keys, query sub-range before and after flush.
+   - `iter_ordered` returns keys in ascending order with hot+cold merged correctly.
+   - Deleted key not returned in range even when present in cold tier.
+   - Three-tier `StdBTreeMap → PdsOrdMap → PdsOrdMap` composition via nesting.
+
+5. **Re-exports** in `src/lib.rs`:
+
+   ```rust
+   #[cfg(feature = "tiered")]
+   pub use tiered::backends::{StdBTreeMapBackend, PdsOrdMapBackend};
+   pub use tiered::backend::OrderedCollectionBackend;
+   ```
+
+**Acceptance:** `test.sh` passes all three variants. Clippy clean. Doc clean.
+
+---
+
+### T.0c — Vector tiered backends {#t0c}
+
+**Scope:** extend the `tiered` feature with sequence composition support.
+Vectors are indexed sequences, not keyed maps — a separate `SequenceBackend<A>`
+trait is needed. A `TieredVector<A, Hot, Cold>` type wraps a
+`TieredSequence<A, Hot, Cold>` (analogous to `TieredCollection` but for sequences).
+
+**Deliverables:**
+
+1. **`SequenceBackend<A>`** in `src/tiered/sequence_backend.rs`
+
+   ```rust
+   pub trait SequenceBackend<A>: Send + 'static
+   where
+       A: Clone,
+   {
+       fn get(&self, index: usize) -> Option<A>;
+       fn push_back(&mut self, value: A);
+       fn push_front(&mut self, value: A);
+       fn pop_back(&mut self) -> Option<A>;
+       fn pop_front(&mut self) -> Option<A>;
+       fn len(&self) -> usize;
+       fn is_empty(&self) -> bool;
+       /// Bulk-replace from iterator (used during propagation).
+       fn load_from(&mut self, iter: impl Iterator<Item = A>);
+       /// Drain all elements, leaving the backend empty.
+       fn drain(&mut self) -> Vec<A>;
+   }
+   ```
+
+2. **Concrete sequence backends** in `src/tiered/sequence_backends.rs`
+
+   - **`StdVecBackend<A>`** — wraps `std::vec::Vec<A>`. `push_front` uses
+     `Vec::insert(0, …)` (O(n) — document this). `drain` uses `Vec::drain(..)`.
+   - **`PdsVectorBackend<A>`** — wraps `crate::Vector<A>`. All mutations use
+     the functional API (`push_back`, `push_front`, `pop_back`, `pop_front` return
+     new vectors). `drain` collects all elements and resets to empty vector.
+
+3. **`TieredSequence<A, Hot, Cold>`** in `src/tiered/sequence.rs`
+
+   Mirrors `TieredCollection` but for sequences. Internal state in
+   `Arc<Mutex<TieredSequenceState<A, Hot, Cold>>>`.
+
+   ```rust
+   struct TieredSequenceState<A, Hot, Cold> {
+       hot: Hot,
+       cold: Cold,
+       /// Elements appended to hot but not yet propagated.
+       /// Propagation appends hot's full contents to cold.
+       write_count: usize,
+       policy: PropagationPolicy,
+   }
+   ```
+
+   **Propagation semantics for sequences:** unlike maps (where cold is a full
+   mirror), cold for sequences is the *committed log* — flush appends all hot
+   elements to cold (in order), then clears hot. `get(i)` checks cold first
+   (committed), then hot (uncommitted); total index = cold.len() + hot offset.
+
+   Public API:
+   - `new(hot: Hot, cold: Cold, policy: PropagationPolicy) -> Self`
+   - `push_back(&self, value: A)` — writes to hot; auto-flushes per policy
+   - `push_front(&self, value: A)` — writes to hot
+   - `pop_back(&self) -> Option<A>` — pops from hot; if hot empty, pops from cold
+   - `get(&self, index: usize) -> Option<A>` — cold[0..cold.len()] then hot[0..]
+   - `len(&self) -> usize` — `cold.len() + hot.len()`
+   - `flush(&self)` — appends hot elements to cold via `cold.load_from(hot.drain())`
+   - `cold_snapshot(&self) -> Cold where Cold: Clone`
+   - `hot_snapshot(&self) -> Hot where Hot: Clone`
+
+   **`TieredSequence` implements `SequenceBackend<A>`** for recursive composition.
+
+   **Type alias:**
+   ```rust
+   pub type TieredVector<A, Hot, Cold> = TieredSequence<A, Hot, Cold>;
+   ```
+
+4. **Tests** covering:
+   - `push_back` then `get(0)` — readable from hot before flush
+   - `push_back` then flush — visible in `cold_snapshot`
+   - `get(i)` spanning cold + hot (cold.len()-1 and cold.len() indices)
+   - `pop_back` from hot; `pop_back` when hot empty drains cold
+   - `Batched(3)` auto-flush after 3 push_backs
+   - Concurrent `push_back` from two threads, flush, all elements in cold snapshot
+   - Three-tier `StdVec → PdsVector → PdsVector` composition
+
+5. **Re-exports** in `src/lib.rs`:
+
+   ```rust
+   #[cfg(feature = "tiered")]
+   pub use tiered::{TieredSequence, TieredVector};
+   #[cfg(feature = "tiered")]
+   pub use tiered::sequence_backends::{StdVecBackend, PdsVectorBackend};
+   pub use tiered::sequence_backend::SequenceBackend;
+   ```
+
+**Acceptance:** `test.sh` passes all three variants. Clippy clean. Doc clean.
+
+---
+
+### T.0d — Composability verification and performance tuning loop {#t0d}
+
+Once T.0b and T.0c are implemented, verify all combinations compile and run,
+then tune performance until no opportunity ≥ 5% remains.
+
+**Composability matrix to verify (compile + basic smoke test):**
+
+| Hot tier | Cold tier | Type |
+|----------|-----------|------|
+| `StdHashMapBackend` | `PdsHashMapBackend` | `TieredCollection` |
+| `StdHashMapBackend` | `MerkleWrapperBackend` | `TieredCollection` |
+| `PdsHashMapBackend` | `MerkleWrapperBackend` | `TieredCollection` |
+| `StdHashMapBackend` | `TieredCollection<Pds, Merkle>` | 3-tier `TieredCollection` |
+| `StdBTreeMapBackend` | `PdsOrdMapBackend` | `TieredOrdMap` |
+| `PdsOrdMapBackend` | `PdsOrdMapBackend` | `TieredOrdMap` |
+| `StdBTreeMapBackend` | `TieredOrdMap<Pds, Pds>` | 3-tier `TieredOrdMap` |
+| `StdVecBackend` | `PdsVectorBackend` | `TieredVector` |
+| `PdsVectorBackend` | `PdsVectorBackend` | `TieredVector` |
+| `StdVecBackend` | `TieredVector<Pds, Pds>` | 3-tier `TieredVector` |
+
+**Performance tuning loop** (same philosophy as perf-tuning-plan.md):
+
+```
+Baseline: bench all logical compositions (criterion, release mode, tee to file)
+
+Loop until no opportunity ≥ 5%:
+  A. Profile: samply on the slowest composition/operation
+  B. Identify hotspot: rank by exclusive CPU time
+  C. Ideate: is this a lock contention issue? flush overhead? clone cost?
+             propagation batching? pending_deletes scan?
+  D. PoC: implement minimum viable fix, bench before/after
+  E. If ≥ 5%: full implementation, tests, commit
+     If < 5%: document finding, discard PoC
+  F. gsync after each accepted improvement
+```
+
+**Benchmark suite** (`benches/tiered.rs`):
+
+For each logical composition, bench:
+- `insert_n` (n = 100, 1_000, 10_000) — hot-tier write throughput
+- `get_hit` — read from hot (no flush)
+- `get_cold_fallback` — read key only in cold tier
+- `flush_n` — propagation cost for n accumulated writes
+- `cold_snapshot` — cost of snapshotting the cold tier
+
+Record results in `docs/baselines.md` under a new `## Tiered collections` section.
+
+**Known candidates to investigate:**
+
+| Candidate | Expected impact | Why |
+|-----------|----------------|-----|
+| `Mutex` contention on hot reads | Medium | Every `get` locks the Arc<Mutex<State>> |
+| `pending_deletes: HashSet` scan on cold fallback | Low–Medium | Linear scan before cold lookup |
+| `drain() → Vec → load_from` allocation on flush | Medium | Two passes + intermediate Vec allocation |
+| `PdsHashMapBackend` clone on `cold_snapshot` | Very Low | O(1) arc clone — verify this is actually O(1) |
+| `flush` under `Immediate` policy: one fsync per insert | High if on disk | Batching is the fix (WAL group commit for tiers) |
+
+**Acceptance:** all compositions in the matrix pass the composability smoke test.
+Benchmark suite exists and baseline is recorded in `docs/baselines.md`.
+Every investigated hotspot is documented (outcome: implemented or discarded with
+measurement). No remaining opportunity ≥ 5% on the primary benchmarks.
+
+---
+
 ### T.1 — Folio backend wrapper {#t1}
 
 Add `FolioHamtMapBackend<K, V, B: Backend>` in `pds-folio`.
