@@ -368,6 +368,40 @@ where
         guard.hot.is_empty() && guard.cold.is_empty()
     }
 
+    /// Creates a `TieredCollection` with a [`Timed`][PropagationPolicy::Timed] policy
+    /// and immediately starts the background propagation thread.
+    ///
+    /// Returns `(collection, handle)`. Drop `handle` to stop the background thread.
+    ///
+    /// This is a convenience constructor that combines [`new`][Self::new] with
+    /// [`start_background_propagation`][Self::start_background_propagation] in a single
+    /// call, ensuring the policy and the thread interval always match.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use pds::tiered::{TieredCollection, PropagationPolicy};
+    /// # use pds::tiered::backends::{StdHashMapBackend, PdsHashMapBackend};
+    /// let (tc, _handle) = TieredCollection::<i32, i32, StdHashMapBackend<i32, i32>, PdsHashMapBackend<i32, i32>>::with_timed_propagation(
+    ///     StdHashMapBackend::new(),
+    ///     PdsHashMapBackend::new(),
+    ///     std::time::Duration::from_millis(50),
+    /// );
+    /// tc.insert(1, 42);
+    /// // Background thread will flush to cold within ~50 ms.
+    /// ```
+    ///
+    /// Time: O(1).
+    pub fn with_timed_propagation(
+        hot: Hot,
+        cold: Cold,
+        interval: std::time::Duration,
+    ) -> (Self, PropagationHandle) {
+        let tc = Self::new(hot, cold, PropagationPolicy::Timed(interval));
+        let handle = tc.start_background_propagation();
+        (tc, handle)
+    }
+
     /// Spawns a background thread that flushes on the given interval.
     ///
     /// Only meaningful with the

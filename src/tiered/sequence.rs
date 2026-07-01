@@ -230,6 +230,40 @@ where
         guard.hot.clone()
     }
 
+    /// Creates a `TieredSequence` with a [`Timed`][PropagationPolicy::Timed] policy
+    /// and immediately starts the background propagation thread.
+    ///
+    /// Returns `(sequence, handle)`. Drop `handle` to stop the background thread.
+    ///
+    /// This is a convenience constructor that combines [`new`][Self::new] with
+    /// [`start_background_propagation`][Self::start_background_propagation] in a single
+    /// call, ensuring the policy and the thread interval always match.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use pds::tiered::sequence::TieredSequence;
+    /// # use pds::tiered::sequence_backends::{StdVecBackend, PdsVectorBackend};
+    /// let (ts, _handle) = TieredSequence::<i32, StdVecBackend<i32>, PdsVectorBackend<i32>>::with_timed_propagation(
+    ///     StdVecBackend::new(),
+    ///     PdsVectorBackend::new(),
+    ///     std::time::Duration::from_millis(50),
+    /// );
+    /// ts.push_back(1);
+    /// // Background thread will flush to cold within ~50 ms.
+    /// ```
+    ///
+    /// Time: O(1).
+    pub fn with_timed_propagation(
+        hot: Hot,
+        cold: Cold,
+        interval: std::time::Duration,
+    ) -> (Self, super::PropagationHandle) {
+        let ts = Self::new(hot, cold, PropagationPolicy::Timed(interval));
+        let handle = ts.start_background_propagation();
+        (ts, handle)
+    }
+
     /// Spawns a background thread that flushes on the given interval.
     ///
     /// Only meaningful with the [`Timed`][PropagationPolicy::Timed] policy, but

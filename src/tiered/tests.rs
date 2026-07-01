@@ -339,6 +339,44 @@ mod tests {
         assert!(tc.is_empty());
     }
 
+    /// `with_timed_propagation` convenience constructor: insert items, wait for
+    /// two flush intervals, then verify the cold tier received them without any
+    /// explicit `flush()` call.
+    #[test]
+    fn with_timed_propagation_auto_flushes() {
+        let (tc, _handle) = TieredCollection::<
+            String,
+            i32,
+            StdHashMapBackend<String, i32>,
+            PdsHashMapBackend<String, i32>,
+        >::with_timed_propagation(
+            StdHashMapBackend::new(),
+            PdsHashMapBackend::new(),
+            std::time::Duration::from_millis(50),
+        );
+
+        // Push 10 items through the hot tier.
+        for i in 0..10_i32 {
+            tc.insert(format!("wtp_{i}"), i);
+        }
+
+        // Wait for at least two flush cycles (100 ms + margin).
+        std::thread::sleep(std::time::Duration::from_millis(250));
+
+        let snap = tc.cold_snapshot();
+        assert!(
+            !snap.is_empty(),
+            "cold snapshot empty after two flush intervals"
+        );
+        for i in 0..10_i32 {
+            assert_eq!(
+                snap.get(&format!("wtp_{i}")),
+                Some(i),
+                "wtp_{i} missing from cold snapshot after auto-flush"
+            );
+        }
+    }
+
     /// Timed policy: spawn background propagation, insert a key, wait for a
     /// flush cycle, then verify the cold tier has the key.
     #[test]
