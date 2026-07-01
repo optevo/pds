@@ -504,6 +504,146 @@ See `docs/baselines.md` for analysis.
 
 ---
 
+---
+
+## Rope integration track (G.16–G.18)
+
+folio-rope is a persistent, folio-page-backed UTF-8 rope living in the folio workspace.
+This track wires it into pds-folio so it is available alongside the existing collection
+types, and adds `FolioTextMap` — a HAMT-keyed map whose values are rope-backed text
+buffers.
+
+### Design constraints
+
+- `FolioRope` owns its own `Arc<Mutex<ChunkStore<B>>>` — it does not share a page store
+  with the existing `NodeStore<B>` used by HAMT/Vector/OrdMap. The two stores use the
+  same `FolioStore<B>` type but different domain wrappers.
+- `FolioRope` has no serde impls (DEC-002: no serde). It cannot be a postcard-encoded
+  value inside a HamtMap. `FolioTextMap` uses a `HamtMap<K, u64, C, B>` to store
+  the btree_meta page ID (a raw `u64`) for each key, plus a separate shared rope store.
+- The shared rope store for `FolioTextMap` is a `FolioRope`'s internal `ChunkStore`
+  wrapped behind `Arc<Mutex<_>>` and shared across all map snapshots. This mirrors
+  the pattern already used by `NodeStore` for HAMT snapshots.
+- Page lifecycle for rope values follows the same `Arc::try_unwrap` pattern as
+  `FolioRope` itself: each map snapshot holds an `Arc<Vec<u64>>` listing the btree_meta
+  and root_node pages for each of its rope values. Dropping the last snapshot that
+  references a set of rope pages frees them.
+
+---
+
+### G.16 — Add folio-rope dependency and module re-export
+
+**Goal:** Make `FolioRope` and `RopeSnapshot` available to pds-folio users via
+`pds_folio::rope`.
+
+**Changes:**
+
+1. `pds-folio/Cargo.toml`: add `folio-rope = { path = "../../folio/folio-rope" }`.
+2. `src/rope.rs` (new): thin re-export module.
+   ```rust
+   //! Re-exports from `folio-rope` with pds-folio convenience constructors.
+   pub use folio_rope::{FolioRope, RopeSnapshot, RopeError};
+   ```
+3. `src/lib.rs`: add `pub mod rope;` and update the crate-level doc collection table.
+
+**Tests:** unit test in `src/rope.rs` — create a `FolioRope` with `MemBackend`, insert
+text, read back via `to_string()`, clone, verify clone reads the same content.
+
+**Acceptance:** `test.sh` green; `FolioRope` accessible as `pds_folio::rope::FolioRope`.
+
+**Dependencies:** folio-rope FR-1–FR-8 (done).
+
+---
+
+### G.17 — Shared rope store: `FolioRope::new_in`
+
+**Goal:** Allow multiple `FolioRope` instances and `FolioTextMap` snapshots to share a
+single `ChunkStore` rather than each allocating its own. This is the prerequisite for
+`FolioTextMap` (G.18).
+
+**Context:** Currently `FolioRope::new()` creates its own `Arc<Mutex<ChunkStore<B>>>`.
+For `FolioTextMap` to hold many rope-valued entries in a single shared store (efficient
+page allocation, single lock contention point), ropes need to be constructable from an
+existing `Arc<Mutex<ChunkStore<B>>>`.
+
+**Changes** (in folio-rope, not pds-folio):
+
+1. Expose `ChunkStore` (or a newtype `SharedRopeStore<B>`) publicly from folio-rope.
+   - Current: `ChunkStore` is `pub(crate)`.
+   - Change: promote to `pub` behind the `folio_rope` crate root, or extract a
+     `pub struct SharedRopeStore<B>(Arc<Mutex<ChunkStore<B>>>)` newtype.
+2. Add `FolioRope::new_in(store: Arc<Mutex<ChunkStore<B>>>) -> Self` — creates an empty
+   rope in the given store rather than allocating a fresh one.
+3. Add `FolioRope::store(&self) -> Arc<Mutex<ChunkStore<B>>>` — returns a clone of the
+   inner `Arc` so callers can share the store with new ropes.
+
+**Tests:** create two `FolioRope` instances from the same `SharedRopeStore`; insert
+different text into each; verify they are independent; drop one; verify the other still
+reads correctly.
+
+**Acceptance:** `test.sh` green in both folio and pds workspaces.
+
+**Dependencies:** G.16.
+
+---
+
+### G.18 — `FolioTextMap<K, C, B>` — HAMT-keyed map with rope values
+
+**Goal:** A persistent, path-copy map whose keys are any `Serialize + Deserialize + Ord`
+type and whose values are `FolioRope<B>` text buffers. Clone is O(1). Mutation is O(log N)
+for the HAMT plus O(n) for the materialise-and-rebuild rope mutation (DEC-003; FR-9 will
+improve the rope part).
+
+**Internal representation:**
+
+```
+FolioTextMap<K, C, B> {
+    index:      HamtMap<K, u64, C, B>,   // K → btree_meta page ID
+    rope_store: Arc<Mutex<ChunkStore<B>>>, // shared by all map snapshots
+    page_sets:  Option<Arc<HashMap<u64, Arc<Vec<u64>>>>>,
+    //          btree_meta → Arc<page_set> for each live entry
+}
+```
+
+- `index` stores the btree_meta page ID for each key (raw `u64`, PodCodec — no serde).
+- `rope_store` is shared across all clones / snapshots via `Arc`.
+- `page_sets` tracks the per-entry page sets (btree_meta + root_node + chunk pages) for
+  lifecycle management, using the same `Arc::try_unwrap` pattern as `FolioRope::Drop`.
+
+**Public API:**
+
+| Method | Signature | Notes |
+|--------|-----------|-------|
+| `new(store)` | `FolioStore<B> → Self` | Creates empty map; allocates rope store |
+| `len()` | `&self → usize` | Delegates to `index.len()` |
+| `is_empty()` | `&self → bool` | |
+| `get(key)` | `&self, &K → Option<FolioRope<B>>` | Reconstructs rope from page ID + shared store |
+| `insert(key, text)` | `&self, K, &str → Result<Self>` | Creates rope, path-copies index, returns new snapshot |
+| `remove(key)` | `&self, &K → Option<Self>` | Path-copies index without the entry; drops page_set for removed key when last holder |
+| `iter()` | `&self → impl Iterator<Item=(K, FolioRope<B>)>` | Iterates all entries |
+
+**Clone:** `Arc::clone` the `rope_store` + HAMT root refcount bump (O(1) total).
+
+**Drop:** for each entry in `page_sets` whose `Arc` has strong count → 1, free the
+pages from `rope_store`. Uses `Arc::try_unwrap` exactly as `FolioRope::Drop` does.
+
+**Tests:**
+- Empty map: `len() == 0`, `get` returns `None`.
+- Single insert: `get` returns rope with correct content.
+- Multiple inserts: all keys present, correct values.
+- Snapshot isolation: insert on a clone does not appear in original.
+- Remove: entry gone from new snapshot, present in old snapshot.
+- Page lifecycle: after old snapshot dropped, its rope pages are freed; new snapshot
+  still reads correctly.
+- Large map (256 entries): verify no page leaks after all snapshots dropped.
+- Proptest: model-based against `HashMap<String, String>` (20 cases).
+
+**Acceptance:** `test.sh` green; `FolioTextMap` accessible as `pds_folio::text_map::FolioTextMap`.
+
+**Dependencies:** G.17. No dependency on FR-9 — the map is correct with materialise-and-rebuild rope mutations; FR-9 makes rope mutations O(log n) transparently.
+
+---
+
 ## Dependency map
 
 ```
@@ -518,4 +658,6 @@ G.8 (vector nodes) → G.9 (Vector + PersistentVector)
 G.10 (btree nodes) → G.11 (OrdMap/OrdSet + traits) → G.12 (integration)
 
 G.5 + G.6 + G.9 + G.11 → G.13/G.14/G.15 (polish)
+
+folio-rope (FR-1–FR-8) → G.16 (re-export) → G.17 (shared store) → G.18 (FolioTextMap)
 ```
