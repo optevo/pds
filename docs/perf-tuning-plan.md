@@ -202,6 +202,23 @@ interruptions (>10×) can throw off the outlier detector too.
 
 *Entries appended as the tuning loop runs. Newest first.*
 
+### 2026-07-01 — Area #3: HAMT branching factor tuning (pre-investigated — no further opportunity)
+
+**Crate:** pds (base collections)
+**Assessment:** Already investigated prior to this tuning session. Decision documented in
+`src/config.rs` comments and partially in existing decisions.md.
+
+**Current setting:** HASH_LEVEL_SIZE=5 (32-way branching factor).
+
+**Prior analysis:** 4-bit (16-way) branching improves immutable inserts by 16–25% but
+causes severe lookup regressions. Under typical workloads (~70% lookup, ~25% small
+mutation, ~5% bulk mutation), 5-bit (32-way) is better overall. The optimal branching
+factor for this SIMD-accelerated HAMT is 32 on Apple Silicon.
+
+**Conclusion:** No further investigation warranted — this was a deliberate, benchmarked
+decision with documented tradeoffs. The 5-bit value is correct for the M5 Max cache
+line size and SIMD group layout (16-entry groups using wide::u8x16).
+
 ### 2026-07-01 — Area #2: BLAKE3 parallel subtree hashing (investigated — no opportunity)
 
 **Crate:** pds-merkle-spine

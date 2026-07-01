@@ -17,6 +17,7 @@ regressions or improvements. Compare against these numbers.
 
 ## Contents
 
+- [pds (base collections) baselines](#pds-base-baselines)
 - [pds-folio baselines](#pds-folio-baselines)
 - [pds-merkle-spine baselines](#pds-merkle-spine-baselines)
 - [pds-durable baselines](#pds-durable-baselines)
@@ -119,6 +120,43 @@ for the full analysis.
 `4dc85e2` simplified `clone()` by removing the `increment_root_refcount` call that
 had previously acquired a `Mutex` lock per clone. The current clone path is a pure
 `Arc::clone` (atomic refcount increment, no mutex).
+
+---
+
+## pds (base collections) baselines {#sec:pds-base-baselines}
+
+**Bench command:** `direnv exec . cargo bench -p pds --bench hashmap`
+**Notes:** All median times from criterion. Default features (no `foldhash`; SipHash-1-3).
+HASH_LEVEL_SIZE=5 (32-way branching). Partial run — 500K-entry string benchmarks not captured
+(too slow; ran for 30+ minutes without completing).
+
+### pds::HashMap<i64, i64>
+
+| Benchmark | n=100 | n=1 000 | n=10 000 | n=100 000 |
+|-----------|------:|--------:|---------:|----------:|
+| `hashmap_i64/lookup` (N lookups) | 654 ns | 6.88 µs | 81.1 µs | 1.239 ms |
+| `hashmap_i64/insert_mut` (N in-place inserts) | 2.29 µs | 31.1 µs | 133.8 µs | 4.08 ms |
+| `hashmap_i64/insert` (N persistent inserts) | 17.5 µs | 227.9 µs | 3.15 ms | — |
+| `hashmap_i64/remove` (N persistent removes) | 13.6 µs | 225.4 µs | 3.28 ms | — |
+| `hashmap_i64/iter` | — | 2.03 µs | 32.0 µs | 550 µs |
+| `hashmap_i64/from_iter` | — | 31.1 µs | 241.6 µs | 4.01 ms |
+
+### pds::HashMap<String, String>
+
+| Benchmark | n=100 | n=1 000 | n=10 000 | n=100 000 |
+|-----------|------:|--------:|---------:|----------:|
+| `hashmap_str/lookup` (N lookups) | 753 ns | 8.40 µs | 139.9 µs | 2.837 ms |
+| `hashmap_str/insert_mut` (N in-place inserts) | 2.91 µs | 42.3 µs | 209.7 µs | 6.93 ms |
+| `hashmap_str/iter` | — | 1.98 µs | 41.4 µs | — |
+| `hashmap_str/insert_once` | — | — | — | 55.96 µs |
+| `hashmap_str/remove_once` | — | — | — | 54.59 µs |
+
+**Key observations:**
+- `insert` (persistent — each call returns a new map) is ~14× slower than `insert_mut` at n=1K,
+  reflecting the cost of path-copying in the persistent HAMT on each insertion.
+- String hashing is ~30% slower than i64 hashing for lookup at n=1K (8.40 µs vs 6.88 µs).
+- `from_iter` at n=1K takes 31 µs; building with sequential `insert` would cost 227 µs.
+  `from_iter` is ~7.3× faster because it uses the mutable path for bulk construction.
 
 ---
 
