@@ -1035,6 +1035,69 @@ All residual items including R.17 and the range-view API refactor are now comple
 
 ---
 
+### `MultiKeyMap<K, V>` — insertion-ordered many-keys-to-one-value map with maintained reverse {#multi-key-map}
+
+**Motivation:**
+
+Needed by kito's `NamingTree` (S10.3): multiple names (keys) must map to the same
+system Id (value), the first-registered name must be recoverable as the "preferred"
+name efficiently, and names must be removable with automatic promotion of the next
+preferred name. No existing pds collection provides this combination.
+
+**Design:**
+
+A new standalone collection type — `MultiKeyMap<K, V>` — distinct from:
+- `BiMap` (1-to-1 only)
+- `HashMultiMap` / `OrdMultiMap` (one key, many values — the opposite direction)
+- `InsertionOrderMap` (no maintained reverse index)
+
+Internal structure (all pds collections, no `std::collections`):
+
+```rust
+GenericMultiKeyMap<K, V, S, P, H> {
+    fwd: GenericHashMap<K, (V, usize), S, P, H>,        // K → (V, insertion_idx)
+    seq: GenericOrdMap<usize, K, P>,                    // idx → K  (insertion order)
+    rev: GenericOrdMap<V, GenericOrdMap<usize, K, P>, P>, // V → {idx→K}, min=preferred
+    next_idx: usize,
+}
+```
+
+All operations are O(log n):
+- `insert(k, v)` — records insertion index; first key for a value becomes its preferred
+  key. Re-inserting an existing key with a new value updates the rev index atomically.
+- `remove(k)` — removes from all three maps. If k was the preferred key for its value,
+  the next-earliest key for that value is promoted automatically.
+- `get(k) → Option<&V>` — forward lookup.
+- `preferred_key(v) → Option<&K>` — first-inserted key for this value.
+- `keys_for(v) → impl Iterator<&K>` — all keys for a value, in insertion order.
+- `iter()` — all (K, V) pairs in insertion order.
+- No `get_mut` — mutating V through a mutable reference would silently corrupt the rev
+  index; callers must remove + re-insert.
+
+**Type constraints:** `K: Hash + Eq + Clone`, `V: Ord + Clone`.
+
+**Trait coverage** (per standard pds obligation):
+Clone (O(1), manual), Debug, PartialEq, Eq, Hash, Default, FromIterator,
+IntoIterator (owned + ref), Extend, Index. `Send`/`Sync` verified via
+`static_assertions`. `Serialize`/`Deserialize` behind `serde` feature.
+
+**Files:**
+- `src/multi_key_map.rs` — implementation + inline tests
+- `src/lib.rs` — `pub mod multi_key_map` + `pub use` exports for
+  `MultiKeyMap` and `GenericMultiKeyMap`
+- `multi_key_map![]` macro (same pattern as `insertion_order_map![]`)
+
+**Acceptance:**
+- All operations O(log n); invariant: `preferred_key(v)` always returns the
+  first-inserted key for v among all currently registered keys for v
+- `remove` on the preferred key correctly promotes the next-earliest
+- Re-insert with changed value atomically updates rev
+- Full trait coverage per table in `directives.md`
+- `assert_invariants` (#[cfg(debug_assertions)]) verifies fwd/seq/rev consistency
+- `test.sh` green (all three cargo-test invocations); clippy clean
+
+---
+
 ## Phase T — Tiered write-behind collections {#phase-t}
 
 A composable, configurable pipeline where hot writes land on a fast mutable tier
