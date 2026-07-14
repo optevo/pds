@@ -734,6 +734,8 @@ pub mod symmap;
 pub mod trie;
 #[macro_use]
 pub mod unique_vector;
+#[cfg(any(feature = "std", feature = "foldhash"))]
+pub mod multi_key_map;
 
 #[cfg(any(test, feature = "rayon"))]
 mod rayon;
@@ -759,6 +761,8 @@ pub use crate::insertion_order_map::InsertionOrderMap;
 pub use crate::insertion_order_set::GenericInsertionOrderSet;
 #[cfg(any(feature = "std", feature = "foldhash"))]
 pub use crate::insertion_order_set::InsertionOrderSet;
+#[cfg(any(feature = "std", feature = "foldhash"))]
+pub use crate::multi_key_map::{GenericMultiKeyMap, MultiKeyMap};
 pub use crate::ord_bag::{GenericOrdBag, OrdBag};
 pub use crate::ord_bimap::{GenericOrdBiMap, OrdBiMap};
 pub use crate::ord_insertion_order_map::{GenericOrdInsertionOrderMap, OrdInsertionOrderMap};

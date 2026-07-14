@@ -59,6 +59,25 @@ single v2.0.0 release in Phase 5.
 
 *Newest first.*
 
+- **[2026-07-14] MultiKeyMap — persistent many-to-one bidirectional map.**
+  New `src/multi_key_map.rs` module added to pds for the kito S10.3 stage.
+  Gated on `#[cfg(any(feature = "std", feature = "foldhash"))]` (requires
+  `HashMap` type alias and `RandomState`).
+
+  Deliverables:
+  - `GenericMultiKeyMap<K, V, S>` and `MultiKeyMap<K, V>` type alias.
+  - Internal structure: `fwd: HashMap<K,(V,usize)>`, `seq: OrdMap<usize,K>`,
+    `rev: OrdMap<V,OrdMap<usize,K>>` — three-map bidirectional index.
+  - Full trait coverage: `Clone`, `Debug`, `PartialEq`/`Eq`, `Hash`
+    (order-independent via `FnvHasher` + `wrapping_add`), `Default`,
+    `FromIterator`, `IntoIterator` (`ConsumingIter` + `RefIter`), `Extend`.
+  - `check_invariants()` / `assert_invariants()` gated on `#[cfg(debug_assertions)]`.
+  - 20 unit tests + 3 proptest suites (invariants hold, preferred key is first
+    inserted, remove-then-reinsert).
+  - Updated `crossbeam-epoch` from 0.9.18 → 0.9.20 (RUSTSEC-2026-0204).
+  - Edge case hardening: all tests pass across default, all-features, small-chunks;
+    no_std path verified via `cargo check --no-default-features`.
+
 - **[2026-07-01] Phase T.0 — Core tiered write-behind infrastructure.**
   New `tiered` feature in the pds root crate. No folio or merkle-spine dependency.
 
