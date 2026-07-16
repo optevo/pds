@@ -41,6 +41,8 @@ use foldhash::fast::RandomState;
 #[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
 
+use equivalent::Equivalent;
+
 use crate::hashmap::HashMap;
 use crate::ordmap::OrdMap;
 
@@ -208,8 +210,13 @@ where
     /// Returns the removed value, or `None` if `k` was not present.
     /// If the value still has other keys registered, those registrations remain.
     ///
+    /// Accepts any `Q` where `K: Borrow<Q>` (or `Q: Equivalent<K>`).
+    ///
     /// Time: O(log n)
-    pub fn remove(&mut self, k: &K) -> Option<V> {
+    pub fn remove<Q>(&mut self, k: &Q) -> Option<V>
+    where
+        Q: Hash + Equivalent<K> + ?Sized,
+    {
         let (v, idx) = self.fwd.remove(k)?;
         // Remove from seq.
         self.seq = self.seq.without(&idx);
@@ -227,8 +234,14 @@ where
 
     /// Returns the value registered for `k`, if any.
     ///
+    /// Accepts any `Q` where `K: Borrow<Q>` (or `Q: Equivalent<K>`), allowing
+    /// e.g. `&[String]` lookups when `K = Vec<String>`.
+    ///
     /// Time: O(log n)
-    pub fn get(&self, k: &K) -> Option<&V> {
+    pub fn get<Q>(&self, k: &Q) -> Option<&V>
+    where
+        Q: Hash + Equivalent<K> + ?Sized,
+    {
         self.fwd.get(k).map(|(v, _)| v)
     }
 

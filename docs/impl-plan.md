@@ -4957,6 +4957,39 @@ All major tracks complete. Remaining open items listed in [Residual](#residual).
 These items were identified during the 2026-07-01 architectural review. None are
 blocking; all are deferred until the relevant infrastructure lands.
 
+### PoC: content-addressing / Merkle hashing for O(1) equality {#poc-content-address}
+
+**Origin:** kito execution framework design (kito `docs/decisions.md` DEC-030,
+DEC open question on content-addressing).
+
+**Go/no-go question:** Is the per-mutation hash maintenance cost low enough, and
+does O(1) equality actually benefit kito's memoisation hot path enough, to justify
+adding structural Merkle hashing to pds collection types?
+
+**Proposed approach:**
+- Compute a structural hash for each value lazily and cache it at the root node:
+  `hash(OrdMap) = hash(sorted key-value pairs)`, `hash(Vector) = hash(sequence of
+  element hashes)`, leaves hash themselves
+- Equality check = root hash comparison (O(1) after first computation)
+- Deduplication: intern pool keyed by hash → `Arc<Value>`; equal values share one Arc
+- Persistent structural sharing already present in pds means subtree hashes are
+  reused across versions without recomputation — only changed nodes need rehashing
+
+**PoC scope:** implement Merkle hashing on `OrdMap` only (smallest surface area).
+Benchmark two things:
+1. Construction + mutation cost vs baseline — is the overhead per `insert`/`remove`
+   acceptable (target: < 5% regression on existing benchmarks)?
+2. Equality check cost vs deep structural equality on realistic store-sized values
+   (target: > 10× speedup for values with > 100 nodes)
+
+If both pass, proceed to full integration across all pds collection types and
+cross-reference with kito's memoisation input-hash design.
+
+**Time-box:** half a day. Record result in `docs/decisions.md` regardless of outcome
+— negative results prevent re-investigation.
+
+**Prerequisite:** none — standalone investigation on `OrdMap`.
+
 - **DEC-DURABLE-1 follow-up:** Evaluate whether `pds-durable`'s `TieredMap` is
   superseded once `pds-folio` gains a disk `Backend` implementation. If yes, mark
   `pds-durable` maintenance-only and deprecate `TieredMap`. Gate: `pds-folio` disk
