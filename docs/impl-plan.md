@@ -1175,27 +1175,10 @@ is superseded. Mark `pds-durable` maintenance-only and deprecate `TieredMap` in
 favour of `TieredCollection<K, V, StdHashMapBackend, FolioHamtMapBackend>` at
 that point (see DEC-DURABLE-1).
 
-**Planned consumer — soong (investigate before T.1):**
-
-soong's Track IMMUT plans to use `TieredCollection` as the transient-ahead /
-write-behind abstraction for its HNSW vector index and BM25 inverted index, rather
-than implementing two-tier logic inside soong itself. Two open questions that affect
-Phase T design:
-
-1. **SparseMat backend.** HNSW is a layered sparse graph; its natural pds cold tier
-   is `SparseMat<()>` per layer (from spa-rs), not a standard map. Phase T backends
-   are currently Map/Set/Vector shaped. Before T.1 lands, investigate whether:
-   - HNSW neighbour lists can be modelled as `TieredCollection<NodeId, Vec<NodeId>, Std, PdsOrdMap>`
-     with SparseMat derived on flush (keeps Phase T generic, no new backend needed), or
-   - A `SparseMatBackend` is needed as a first-class Phase T backend (more architecturally
-     correct; requires Phase T to depend on spa-rs)
-   Document the decision in `docs/decisions.md` — it affects whether T.1 needs a
-   backend extension or whether soong derives SparseMat externally.
-
-2. **Bigger-than-memory gate.** soong's IMMUT-6 (bigger-than-memory tuning) is blocked
-   on T.1 (`FolioHamtMapBackend`) landing. T.1 is the mechanism; IMMUT-6 is the
-   measurement and tuning pass on top of it. This gives T.1 a concrete external consumer
-   and a benchmark workload (soong's HNSW and BM25 at 150%+ RAM working sets).
+**Planned consumer — soong Track IMMUT:** soong intends to use `TieredCollection` as
+the two-tier abstraction for its HNSW vector index and BM25 inverted index rather than
+reimplementing the pattern internally. Two open questions must be investigated before
+soong can depend on Phase T — see T.INV-1 and T.INV-2 below.
 
 ---
 
@@ -1515,11 +1498,86 @@ measurement). No remaining opportunity ≥ 5% on the primary benchmarks.
 
 ---
 
+### T.INV-1 — Can TieredCollection serve graph-shaped backends? {#t-inv-1}
+
+**Context:** soong wants to use `TieredCollection` for its HNSW index. HNSW is a
+layered sparse graph — its natural persistent representation is `SparseMat<()>` per
+layer (from spa-rs), not a standard ordered map. Phase T backends are currently
+Map/Set/Vector shaped.
+
+**Questions to answer:**
+
+1. Can HNSW neighbour lists be adequately modelled as a map-shaped backend
+   (`NodeId → neighbour_list`) with SparseMat derived externally on flush, or does
+   the query path (beam search) require SparseMat layout during reads to be efficient?
+
+2. If a `SparseMatBackend` is needed as a first-class Phase T backend: does Phase T's
+   `CollectionBackend<K, V>` trait need extension to support matrix-shaped access
+   (row iteration, CSR layout)? What is the cost of adding this?
+
+3. If map-shaped is sufficient: which backend composition fits HNSW best?
+   `StdHashMap → PdsOrdMap`? `StdHashMap → FolioHamt`? What propagation policy
+   (Batched vs Timed) matches HNSW's insert patterns?
+
+**Output:** a `docs/decisions.md` entry with answers and a clear recommendation:
+either (a) Phase T as-is is sufficient with map-shaped backends, or (b) a
+`SparseMatBackend` is needed and should be added before T.1 lands. No code until
+the investigation is done.
+
+**Blocked by:** T.0d complete (already done). Does not require T.1.
+
+---
+
+### T.INV-2 — Bigger-than-memory: folio mmap tuning for pds cold tiers {#t-inv-2}
+
+**Context:** soong's IMMUT-6 (bigger-than-memory investigation) is blocked on T.1
+(`FolioHamtMapBackend`) and needs to know whether the default folio + mmap
+configuration is adequate for index structures with working sets > RAM, or whether
+tuning is required.
+
+**Questions to answer:**
+
+1. Does folio currently emit `madvise` hints (MADV_SEQUENTIAL, MADV_RANDOM,
+   MADV_WILLNEED) or rely on OS defaults? Are these configurable?
+
+2. What is the default folio page size and is it configurable per backing file?
+   How does page size interact with pds B-tree node size and HAMT node size?
+
+   **ARM64 floor constraint (M5 Max):** the OS uses 16 KiB hardware pages on ARM64.
+   A folio page size below 16 KiB means the OS faults in 16 KiB on every access —
+   paying for 4 folio pages while requesting 1, wasting bandwidth and TLB entries.
+   16 KiB is therefore the minimum viable page size for any mmap-backed pds cold tier
+   on this platform. The current 4 KiB default is test-only and must not be used in
+   production mmap workloads. Confirm whether folio exposes page size as a
+   per-backing-file parameter, and if not, what work is needed to expose it.
+
+3. For access patterns relevant to soong (random access for HNSW beam search;
+   sequential scan for BM25 posting list merge): does the current folio configuration
+   behave reasonably, or does it need madvise annotations or page-size tuning?
+
+   Expected starting-point recommendations (validate against benchmark data):
+   - B-tree (property indexes) — random access: 16 KiB (OS floor; larger pages waste I/O)
+   - HAMT (neighbour lists) — random access: 16 KiB (OS floor; same reasoning)
+   - Posting log (BM25 segments) — sequential merge: 64 KiB (amortises OS fault cost)
+   - CSR arrays (SparseMat cold tier) — large sequential reads: 64–256 KiB
+
+4. What configuration surface (if any) does pds-folio need to expose so that soong
+   can tune it without forking folio internals?
+
+**Output:** a `docs/decisions.md` entry documenting what folio currently does, what
+soong needs, and what (if anything) needs to change in pds-folio before T.1 is useful
+for bigger-than-memory workloads. Feed findings into the T.1 spec before T.1 begins.
+
+**Blocked by:** T.0d complete (already done). Can be done concurrently with T.INV-1.
+
+---
+
 ### T.1 — Folio backend wrapper {#t1}
 
 Add `FolioHamtMapBackend<K, V, B: Backend>` in `pds-folio`.
 
-**Blocked by:** Phase G.12 (pds-folio Vector + OrdMap/OrdSet complete and stable).
+**Blocked by:** Phase G.12 (pds-folio Vector + OrdMap/OrdSet complete and stable);
+T.INV-2 findings incorporated into spec.
 
 ---
 
