@@ -1175,6 +1175,28 @@ is superseded. Mark `pds-durable` maintenance-only and deprecate `TieredMap` in
 favour of `TieredCollection<K, V, StdHashMapBackend, FolioHamtMapBackend>` at
 that point (see DEC-DURABLE-1).
 
+**Planned consumer — soong (investigate before T.1):**
+
+soong's Track IMMUT plans to use `TieredCollection` as the transient-ahead /
+write-behind abstraction for its HNSW vector index and BM25 inverted index, rather
+than implementing two-tier logic inside soong itself. Two open questions that affect
+Phase T design:
+
+1. **SparseMat backend.** HNSW is a layered sparse graph; its natural pds cold tier
+   is `SparseMat<()>` per layer (from spa-rs), not a standard map. Phase T backends
+   are currently Map/Set/Vector shaped. Before T.1 lands, investigate whether:
+   - HNSW neighbour lists can be modelled as `TieredCollection<NodeId, Vec<NodeId>, Std, PdsOrdMap>`
+     with SparseMat derived on flush (keeps Phase T generic, no new backend needed), or
+   - A `SparseMatBackend` is needed as a first-class Phase T backend (more architecturally
+     correct; requires Phase T to depend on spa-rs)
+   Document the decision in `docs/decisions.md` — it affects whether T.1 needs a
+   backend extension or whether soong derives SparseMat externally.
+
+2. **Bigger-than-memory gate.** soong's IMMUT-6 (bigger-than-memory tuning) is blocked
+   on T.1 (`FolioHamtMapBackend`) landing. T.1 is the mechanism; IMMUT-6 is the
+   measurement and tuning pass on top of it. This gives T.1 a concrete external consumer
+   and a benchmark workload (soong's HNSW and BM25 at 150%+ RAM working sets).
+
 ---
 
 ### T.0 — Core infrastructure {#t0} ✓ Done [2026-07-01]
@@ -4989,6 +5011,48 @@ cross-reference with kito's memoisation input-hash design.
 — negative results prevent re-investigation.
 
 **Prerequisite:** none — standalone investigation on `OrdMap`.
+
+### WASM value representation {#wasm-value-repr}
+
+**Origin:** kito WASM adoption plan (S-WASM-2 value-table approach; S-WASM-3 wasm-gc target).
+
+**Context:**
+
+kito's S-WASM-2 JIT requires a way to represent pds collection values inside WASM linear
+memory (value-table approach: `Vec<Value>` on the host side, WASM manipulates `i32` handles).
+S-WASM-3 goes further: wasm-gc reference types allow persistent structural sharing to be
+expressed as shared wasm-gc object refs, eliminating the host-side table entirely. Both
+approaches require pds to define how its collection types encode into WASM.
+
+**Items:**
+
+1. **Flat array encoding for ET column execution (S-WASM-2 prerequisite):**
+   Define a canonical flat-array encoding for each pds collection type suitable for
+   WASM linear memory. `OrdMap` → sorted key/value interleaved `i32` handle array;
+   `Vector` → contiguous `i32` handle array with length prefix. This encoding is consumed
+   by `kito-wasm-codegen` for ET column operations (map, filter, reduce, zip).
+   Target: encoding/decoding round-trip with zero copies on the Rust side (slice view
+   into the value-table backing buffer).
+
+2. **Stable content-addressed handles (S-WASM-2 cache key):**
+   The Merkle hash from the content-addressing PoC (see above) provides stable handles:
+   two values with the same Merkle hash can share the same WASM handle. This is the
+   foundation of the S-WASM-2 module cache (compiled WASM module keyed by subgraph
+   Merkle hash). No separate work item — follows naturally once the PoC is complete and
+   Merkle hash is integrated across all collection types.
+
+3. **wasm-gc type definitions (S-WASM-3 prerequisite, long-term):**
+   Once the content-addressing PoC and flat-array encoding are in place, define the
+   wasm-gc struct/array type layouts that encode each pds collection type as first-class
+   wasm-gc objects. `OrdMap` B-tree nodes → `(ref (struct))` chains; `Vector` RRB-tree
+   nodes → `(ref (array))` with shared sub-arrays. This work is deferred until the
+   `wasm-gc` proposal is stable in Wasmtime and S-WASM-2 provides a performance baseline.
+
+**Sequencing:** Item 1 unblocks S-WASM-2 codegen. Item 2 is a natural follow-on from the
+content-addressing PoC (no separate gate). Item 3 is long-term; depends on S-WASM-2 complete
++ wasm-gc runtime stability.
+
+---
 
 - **DEC-DURABLE-1 follow-up:** Evaluate whether `pds-durable`'s `TieredMap` is
   superseded once `pds-folio` gains a disk `Backend` implementation. If yes, mark
