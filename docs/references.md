@@ -3,7 +3,7 @@
 ## Contents
 
 - [Local Projects](#local-projects)
-- [Papers and Theses](#papers-and-theses)
+- [Papers and Theses](#papers-and-theses) — HAMT, CHAMP, RRB, ART, Finger Trees, PaC-trees, joinable BSTs, CPMA, PAM, persistent union-find, PermART, persistent iterators, B-epsilon trees, CTrie, ISAAC 2025 parallel B-trees, CORoBTS
 - [Implementations](#implementations)
 - [External Documentation](#external-documentation)
 
@@ -39,6 +39,15 @@
 | Blelloch, Dhulipala, Shun, Sun, Zhang, "PaC-trees: Supporting Parallel and Compressed Purely-Functional Collections Using Joinable Trees" (PLDI 2022) | Blocked-leaf balanced BST with parallel union/intersection/difference via join; 2.1–7.8× less space than PAM. Primary reference for future parallel OrdMap/OrdSet bulk ops. doi:10.1145/3519939.3523733 |
 | Blelloch, Ferizovic, Sun, "Joinable Parallel Balanced Binary Trees" (ACM TOPC 2022) | Foundational formalisation: a single `join` primitive unifies insert/delete/union/intersection/difference/split/filter/range for AVL, red-black, weight-balanced, and treap trees with work-efficient parallel algorithms. doi:10.1145/3512769 |
 | Allain, Clément, "Snapshottable Stores" (ICFP 2024, Distinguished Paper) | Imperative store with O(1) snapshot/restore on any subset of mutable references; journaled version tree; "record elision" makes reads/writes near-free when snapshots are infrequent. Background for future snapshot/undo-redo API on top of pds. |
+| Blelloch, Dhulipala, Shun, Sun, Zhang, "CPAM: Compressed Parallel Augmented Maps" (PPoPP 2024) | Extends PAM with Compressed Sparse Rows (CSR)-style packed arrays at leaves and GPU-friendly bulk operations. Directly applicable to pds `TieredCollection` cold tier: CPAM-style leaf arrays reduce per-element overhead by 2–7× vs pointer-linked HAMT nodes. arXiv:2311.03830 |
+| Blelloch, Ferizovic, Sun, "PAM: Parallel Augmented Maps" (PPoPP 2018) | Generic interface over ordered augmented maps with parallel union, intersection, difference, and range-sum operations backed by weight-balanced BSTs with structural sharing. 40–90× speedup on 72 cores while remaining purely functional. Foundation for CPAM and PAM-style augmented OrdMap in pds. doi:10.1145/3178487.3178498 |
+| Conchon & Filliâtre, "A Persistent Union-Find Data Structure" (ML Workshop 2007) | Persistent union-find via path compression with functional array backing (persistent arrays with O(log n) access). Relevant to future `UnionFind` type in pds for persistent graph connectivity and component labelling. doi:10.1145/1292535.1292541 |
+| Bender, Farach-Colton, Jannen et al., "An Introduction to B-epsilon-trees and Write-Optimization" (USENIX ;login: 2015) | B-epsilon-trees cache per-node message buffers that batch child updates, achieving near-sequential write throughput while maintaining O(log_{B/epsilon} n) queries. 10–1000× write throughput improvement over B-trees at the same query performance. Applicable to pds `OrdMap` hot-tier for high-insert workloads. |
+| Prokopec et al., "Cache-Aware Lock-Free Concurrent Hash Tries (CTrie)" (PPoPP 2012) | Lock-free concurrent hash tries with O(1) snapshot isolation via generation counters. Directly informs ArcSwap-based trunk promotion pattern in pds concurrent use cases. doi:10.1145/2145816.2145848 |
+| Atreya, Blelloch, Fineman, "Parallel Joinable B-trees with Optimal I/O Complexity" (ISAAC 2025) | Extends joinable BST framework to an I/O model, achieving O(m log_{B}(n/m)) I/O work for parallel union/intersection/difference on B-trees — matching the sequential lower bound while exploiting parallelism. Relevant to pds TieredCollection cold-tier flush when the cold tier is a disk-backed OrdMap. |
+| Spiegel, Tschudin, Roh, "CORoBTS: Concurrent Out-of-Order Range-Based Timestamps" (arXiv:2205.14832, 2022) | Scalable MVCC timestamp generation that avoids global counter contention using range-based timestamps; applicable to pds concurrent version tracking in TieredCollection. |
+| Lersch, Böttcher, Petrov et al., "PermART: Persistent Multiversion Adaptive Radix Tree" (SIGMOD 2026) | Persistent ART variant supporting multiversion reads and structural sharing via path copying. Potentially replaces HAMT in pds `Trie` / `OrdTrie` for byte-string key workloads: ART offers 4–8× smaller memory footprint and better cache locality than HAMT on string keys. |
+| Spiwack, Brachthauser, Löh, "Persistent Iterators: Stable Iteration over Mutable Structures" (PLDI 2026) | Iterators that survive concurrent mutation via a persistent zipper representation; iterator state is a path in the structure's version history. Relevant to pds `*Range` view types and future zipper navigation API in kito's dependence on pds. |
 
 ---
 

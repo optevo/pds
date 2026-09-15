@@ -1054,6 +1054,155 @@ All residual items including R.17 and the range-view API refactor are now comple
 
 ---
 
+### CHAMP node layout for HashMap / HashSet {#champ-node-layout}
+
+**Motivation:** The current HAMT uses a single bitmap (child-presence mask). CHAMP
+(Steindorfer & Vinju, OOPSLA 2015) uses two bitmaps — one for child pointers, one for
+inline data — enabling inline storage of singleton entries without a heap allocation.
+The oracle is the `champ-trie` crate. Benchmarks from the research agent show 83%
+iteration speedup and 96% faster structural equality checks vs single-bitmap HAMT.
+
+**Design:**
+- Split the existing node bitmap into `data_bitmap` (inline entry slots) and
+  `node_bitmap` (child-node slots).
+- Inline entries occupy the first N slots of the node array in sorted bitmap order.
+- Child pointers occupy the tail of the array.
+- `clone` becomes O(1) for single-bitmap nodes (the bitmaps already have this property);
+  CHAMP maintains this by specialising the leaf case.
+
+**Go/no-go PoC:** micro-benchmark CHAMP node lookup vs current HAMT on 1K-element
+`HashMap` before committing to a full rewrite. If `champ-trie` oracle matches expected
+83% iteration speedup, proceed.
+
+**Acceptance criteria:**
+- `bench.sh hashmap` shows iteration ≥ 50% faster than baseline (conservative — paper
+  reports 83% but on JVM; Rust overhead differs).
+- `bench.sh hashmap` shows equality checks ≥ 80% faster.
+- All existing HashMap / HashSet proptest and unit tests pass.
+- Miri clean on the new node layout (unsafe pointer arithmetic).
+- Baseline saved to `docs/baselines.md` before and after.
+
+---
+
+### PaC-tree leaf compression for OrdMap cold tier {#pac-tree-leaf-compression}
+
+**Motivation:** PaC-trees (Blelloch et al., PLDI 2022) block BST leaves into
+B-tree-style chunks and compress the blocks using sorted arrays. On the folio-backed
+cold tier this yields 2–7× space reduction vs pointer-linked BST nodes, primarily
+because the per-pointer overhead disappears inside compressed blocks. Key insight:
+most OrdMap workloads have read-heavy access patterns where the cold tier is queried
+but rarely mutated; compressed leaves amortise decompression cost over many reads.
+
+**Design:**
+- Add a `CompressedLeaf` node type to `OrdMap`'s internal tree representation,
+  activated when building the cold-tier snapshot during `TieredCollection` flush.
+- Each `CompressedLeaf` stores up to 256 `(K, V)` pairs as a sorted `Vec<(K,V)>`
+  (simple sorted array; no delta/byte coding initially).
+- Lookups in a `CompressedLeaf` use binary search.
+- Mutations on a `CompressedLeaf` decompress to a standard subtree, mutate, then
+  optionally recompress on the next flush.
+
+**Acceptance criteria:**
+- Benchmark: memory usage of a 100K-entry `OrdMap` cold tier snapshot reduced by ≥ 30%
+  (target 2×; accept 30% as conservative floor).
+- `bench.sh ordmap` lookup throughput shows no regression for read-only workloads.
+- All OrdMap proptest and unit tests pass.
+- Baseline saved to `docs/baselines.md`.
+
+---
+
+### Transient mutable builders for bulk construction {#transient-builders}
+
+**Motivation:** Clojure-style transients allow in-place mutation during bulk construction
+then "freeze" into a persistent structure. L'orange's MSc thesis demonstrates 2–5× bulk
+build speedup vs repeated functional insert. pds's `FromIterator` impls currently perform
+O(n log n) persistent inserts; a transient path could do O(n) in-place construction then
+a single freeze.
+
+**Design:**
+- Add `HashMap::transient() -> TransientHashMap<K, V>` and
+  `TransientHashMap::persist() -> HashMap<K, V>`.
+- `TransientHashMap` uses in-place mutation (unique ownership check via a generation
+  counter, as in Clojure). Insert/remove mutate the existing nodes; no path copying.
+- `persist()` atomically sets the "frozen" flag; any subsequent mutation attempt on the
+  original `TransientHashMap` panics.
+- Same pattern for `OrdMap::transient() -> TransientOrdMap<K, V>`.
+- `FromIterator` uses the transient path internally.
+
+**Acceptance criteria:**
+- Benchmark: `HashMap::from_iter(1M elements)` shows ≥ 1.5× speedup vs current
+  (conservative; paper reports 2–5×).
+- All existing HashMap / OrdMap tests pass via the persistent API.
+- `TransientHashMap` is `!Sync` (cannot be shared across threads without `persist()`).
+- Miri clean.
+
+---
+
+### AugmentedOrdMap — PAM-style parallel augmented map {#augmented-ord-map}
+
+**New pds type flagged from soong Track IMMUT research.**
+
+**Motivation:** PAM (Blelloch, Ferizovic, Sun, PPoPP 2018) provides generic augmented
+maps where each internal node stores an aggregate of its subtree (e.g. sum, min/max,
+count, interval union). Augmented maps support O(log n) `range_sum`, O(n) parallel
+`union`/`intersection`/`difference`, and O(log n) augmented queries without materialising
+the full result. soong's IMMUT track needs this for parallel graph batch updates.
+
+**Design:**
+```rust
+pub struct AugmentedOrdMap<K, V, Aug: Monoid> {
+    inner: OrdMap<K, (V, Aug::T)>,  // stores cached aggregate per subtree root
+    _aug: PhantomData<Aug>,
+}
+pub trait Monoid {
+    type T: Clone;
+    fn identity() -> Self::T;
+    fn combine(a: &Self::T, b: &Self::T) -> Self::T;
+    fn lift(v: &V) -> Self::T;  // converts a leaf value to its aggregate contribution
+}
+```
+- `range_sum(lo, hi) -> Aug::T` in O(log n).
+- `parallel_union(other) -> Self` using `rayon` in O(m log(n/m)).
+
+**Acceptance criteria:**
+- `range_sum` correct for sum/min/max aggregates (property tests).
+- `parallel_union` produces the same result as sequential `union` (property tests).
+- Benchmark: `parallel_union` on two 100K-entry maps shows speedup ≥ linear with core count
+  up to 8 cores.
+
+---
+
+### PersistentUnionFind — functional union-find {#persistent-union-find}
+
+**New pds type flagged from soong Track IMMUT research.**
+
+**Motivation:** Conchon & Filliâtre (ML Workshop 2007) demonstrate a persistent union-find
+using path compression over a functional persistent array. Each `union` produces a new
+`UnionFind` without mutating the old one, enabling snapshot-isolated connectivity queries.
+soong IMMUT-0 audit flagged this as needed for persistent graph connectivity.
+
+**Design:**
+```rust
+pub struct UnionFind {
+    parent: Vector<usize>,  // functional persistent array (pds::Vector)
+    rank: Vector<usize>,
+}
+impl UnionFind {
+    pub fn new(n: usize) -> Self;
+    pub fn find(&self, x: usize) -> (usize, Self);  // returns root + path-compressed copy
+    pub fn union(&self, x: usize, y: usize) -> Self; // structural sharing; O(α(n)) amortised
+    pub fn connected(&self, x: usize, y: usize) -> bool;
+}
+```
+- Uses `pds::Vector` as the backing persistent array — O(log n) access per element.
+
+**Acceptance criteria:**
+- Property test: union sequences produce the same component structure as std `UnionFind`.
+- Snapshot isolation: two `UnionFind` values at different generations see independent state.
+- All operations O(α(n) log n) amortised (log n from Vector access per find step).
+
+---
+
 ### `MultiKeyMap<K, V>` — insertion-ordered many-keys-to-one-value map with maintained reverse {#multi-key-map}
 
 **Motivation:**
