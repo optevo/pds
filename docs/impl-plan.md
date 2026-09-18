@@ -4401,6 +4401,225 @@ target).
 
 ---
 
+### 6.10 Persistent R-tree — 2D spatial index with structural sharing {#persistent-rtree}
+
+**Status: research gate required before any implementation.** See §Research gate below.
+
+**What (provisional):** A path-copying persistent spatial index for 2D data (lat/lon, x/y).
+Each insert or delete produces a new version (new root `Arc`) by copying only the path from
+the modified leaf to the root — O(log n) node copies per mutation, O(1) snapshot (current
+root `Arc`). Unchanged subtrees are shared across versions. The specific index type (R-tree
+variant, k-d tree, or alternative) is to be determined by the research gate.
+
+**Motivation:** soong's GEO-0 geospatial index currently uses the mutable `rstar` crate
+behind an `Arc<RwLock<...>>`. Replacing it with a persistent spatial index (GEO-PERSISTENT-0
+in soong) delivers:
+
+- **O(1) snapshots** — a snapshot is the current root `Arc`; no serialisation or tree
+  walk required. Aligns with soong's SHADOW-DDL-0 cutover model (ArcSwap of root Arc).
+- **AS-OF geo queries** — soong can retain a history of root pointers keyed by WAL LSN,
+  enabling `AS OF $timestamp` geo queries (analogous to IMMUT-7 versioned property maps).
+- **True zero-copy SHADOW-DDL-0 cutover** — the shadow build produces a new root Arc;
+  ArcSwap installs it atomically with no temporary lock.
+- **Read/write concurrency without `RwLock`** — reads hold a clone of the current root
+  Arc; they never block on writes. Writes produce a new root Arc and ArcSwap it in.
+
+---
+
+#### Research gate {#rtree-research-gate}
+
+Before any design or code is written, conduct a full research scan covering:
+
+**1. R-tree variants**
+
+| Variant | Split heuristic | Key property | Path-copy complexity |
+|---------|----------------|--------------|----------------------|
+| R-tree (Guttman 1984) | Linear / quadratic | Baseline | O(log n) copies + O(log n) MBR updates |
+| R\*-tree (Beckmann et al. 1990) | Forced reinsertion | Better query quality | Same O(log n) but reinsertion causes cascading path copies |
+| R+-tree (Sellis et al. 1987) | Clipping | No overlap between siblings | Complicates path-copy (entries can appear in multiple nodes) |
+| Hilbert R-tree | Space-filling curve ordering | Near-optimal packing | Insert order matters; packing loss after arbitrary updates |
+| PR-tree (Arge et al. 2004) | Priority/segment trees | Optimal worst-case queries | Complex structure; unclear path-copy benefit |
+
+Evaluate each variant for: (a) suitability for path-copy persistence, (b) query quality
+on uniform random and clustered real-world spatial data, (c) implementation complexity.
+
+**2. Alternative spatial index structures**
+
+| Structure | Path-copy persistent? | Key trade-off |
+|-----------|----------------------|---------------|
+| k-d tree | Yes (binary tree; trivially path-copied) | Balanced only on static data; dynamic inserts degrade balance; requires periodic rebuilds |
+| KDB-tree (Robinson 1981) | Yes | 2D generalisation of B-tree; better dynamic properties than k-d tree |
+| Ball tree | Yes (binary; similar to k-d) | Works in high-dimensional spaces; less efficient in 2D |
+| VP-tree (vantage-point) | Yes | General metric spaces; overhead vs R-tree for 2D |
+| Quadtree | Yes (trie-like; path-copy trivial) | Point data only; poor for non-uniform distributions; depth unbounded |
+| PR-quadtree (point-region) | Yes | Better than plain quadtree; still distribution-sensitive |
+| BSP-tree | Yes | Good for static data; rebuilds needed after many mutations |
+
+Evaluate each for: path-copy complexity, dynamic insert/delete quality, range/radius query
+complexity, suitability for (lat, lon) WGS84 data with Haversine metric.
+
+**3. Existing persistent/functional implementations**
+
+Search across: Haskell (`Data.Map`-like spatial types, finger trees for 2D), Scala
+(Cats functional data structures), Clojure, OCaml (Jane Street `Core` spatial), Elm,
+PureScript. Look specifically for:
+
+- Any production persistent R-tree (proven path-copy R-tree with real-world use)
+- Functional spatial indexes in any language (even non-Rust)
+- Academic implementations with benchmarks against mutable counterparts
+
+Key question: **has anyone actually built a persistent R-tree and benchmarked it against
+a mutable one?** If yes, what were the overhead numbers? If no, why not — is there a
+structural reason path-copy R-trees are avoided?
+
+**4. Rust ecosystem scan**
+
+Search crates.io + lib.rs for:
+- `rtree`, `r-tree`, `spatial`, `geo-index`, `kd-tree`, `kdtree`, `ball-tree` — any
+  Rust spatial index crates beyond `rstar`
+- Any crate offering persistence/immutability semantics
+- `persistent-rtree`, `immutable-spatial`, `functional-spatial` — direct matches
+
+For each relevant crate: maintenance health (last release, issue response), MSRV
+compatibility (≥ 1.85), benchmark data if available, `Send + Sync` status.
+
+**5. Path-copy overhead analysis**
+
+The core question before committing to a path-copy R-tree: what is the expected write
+overhead vs a mutable R-tree?
+
+For a balanced R-tree of height h (≈ log\_M(n) where M is fanout, typically 16–32):
+- Each insert copies O(h) nodes, each of size O(M × sizeof(entry))
+- At 100k nodes and M=16: h ≈ 3; each insert copies ~3 nodes of ~16 × 32 bytes = ~1.5 KB
+- At 1M nodes: h ≈ 4; ~2 KB per insert
+- Memory pressure: short-lived Arcs from replaced nodes — triomphe's Arc has no GC, relies
+  on reference counting. With concurrent readers holding clones, old nodes may live longer.
+
+Compute: expected memory amplification factor under concurrent read/write workloads
+(readers × node-lifetime × nodes-per-write). Is this acceptable for soong's use case?
+
+**6. Research deliverables**
+
+Document findings in `docs/decisions.md` under `DEC-SPATIAL-0`:
+- Which structure was selected and why
+- Which alternatives were ruled out and why (with specific reasoning, not just "too complex")
+- Expected path-copy overhead numbers (theoretical and measured if a PoC was run)
+- Whether an existing persistent spatial index exists that could be adopted rather than built
+
+The research gate passes when `DEC-SPATIAL-0` is written and the selected structure's
+design is confirmed viable via a micro-PoC (50-line prototype measuring actual path-copy
+cost per insert against `rstar` on a 10k-node tree). If the PoC shows > 5× write overhead,
+revisit the structure selection.
+
+---
+
+**Oracle (post-research-gate):** `rstar` crate — run equivalent insert/delete/query
+sequences through both and assert identical result sets. See `tests/fixtures/rtree/` for
+fixture scripts.
+
+**Algorithm (provisional, subject to research gate):** R-tree with quadratic split
+heuristic. Path copying applies cleanly because each internal node stores a fixed-size
+array of (MBR, child Arc) pairs. On insert:
+
+1. Descend to the best leaf node (minimum MBR enlargement heuristic).
+2. Copy leaf node; insert new entry. If overflow (fanout > M), split into two nodes.
+3. Walk back to root copying each internal node, updating MBRs and inserting the new
+   split sibling if a split occurred at the level below.
+4. If the root splits, create a new root Arc containing two children.
+
+On delete: condense-tree algorithm — remove entry from leaf, copy path, propagate
+MBR shrinkage, reinsert orphaned nodes from underfull nodes.
+
+**Data structures:**
+
+```rust
+pub struct RTree<T: RTreeObject> {
+    root: Arc<RTreeNode<T>>,
+    len:  usize,
+}
+
+enum RTreeNode<T: RTreeObject> {
+    Leaf  { mbr: Aabb2d, entries: SmallVec<[T; 16]> },
+    Inner { mbr: Aabb2d, children: SmallVec<[Arc<RTreeNode<T>>; 16]> },
+}
+
+pub trait RTreeObject: Clone {
+    fn aabb(&self) -> Aabb2d;
+}
+
+pub struct Aabb2d { min: [f64; 2], max: [f64; 2] }
+```
+
+`SmallVec<[_; 16]>` avoids heap allocation for nodes below the default max fanout
+(M = 16). Tunable via a `const M: usize = 16` generic parameter.
+
+**API surface:**
+
+```rust
+impl<T: RTreeObject + Clone> RTree<T> {
+    pub fn new() -> Self;
+    pub fn insert(&self, obj: T) -> Self;          // path-copy insert; returns new version
+    pub fn remove(&self, obj: &T) -> Option<Self>; // path-copy delete; returns new version or None
+    pub fn contains_in_bbox(&self, min: [f64; 2], max: [f64; 2]) -> impl Iterator<Item = &T>;
+    pub fn nearest_neighbour(&self, point: [f64; 2]) -> Option<&T>;
+    pub fn within_radius(&self, centre: [f64; 2], radius: f64) -> impl Iterator<Item = &T>;
+    pub fn len(&self) -> usize;
+    pub fn is_empty(&self) -> bool;
+}
+```
+
+**Standard trait coverage:** `Clone` (cheap — clones root Arc), `Debug`, `Default`,
+`FromIterator`, `IntoIterator`, `PartialEq` (structural equality via entry comparison),
+`Send + Sync` (Arc children; `T: Send + Sync`). No `Ord`/`Hash` — spatial types do not
+have a natural total order. No `Serialize/Deserialize` in v1 (trees are rebuilt from
+source data; no need to persist the index structure itself).
+
+**Benchmark gate:** compare against `rstar` on the following workloads:
+
+| Benchmark | Gate |
+|-----------|------|
+| `rtree_insert_100k` — sequential 100k inserts, uniform random lat/lon | ≤ 3× `rstar` median |
+| `rtree_bbox_query_100k` — 1000 bounding box queries on 100k-node tree | ≤ 2× `rstar` median |
+| `rtree_radius_100k` — 1000 radius queries (50km) on 100k Australia-extent nodes | ≤ 2× `rstar` median |
+| `rtree_snapshot_cost` — cost of taking a snapshot (cloning root Arc) | O(1) confirmed; ≤ 1 µs |
+
+Benchmarks saved to `docs/baselines.md § 6.10 baseline`. If insert overhead exceeds 3×,
+profile and consider lazy MBR propagation (defer MBR recomputation to query time) or
+increasing M.
+
+**Acceptance:**
+
+1. `rtree_oracle_parity`: 500 random inserts + 100 random deletes; bounding-box query
+   results identical to `rstar` oracle (same entry set, order-independent).
+2. `rtree_radius_oracle_parity`: 200 radius queries; result sets identical to `rstar`.
+3. `rtree_nearest_oracle_parity`: 200 nearest-neighbour queries; same result as `rstar`.
+4. `rtree_snapshot_immutability`: insert 1000 entries capturing snapshot after each 100;
+   query each snapshot; results match the snapshot's entry count.
+5. `rtree_concurrent_reads`: 16 threads each hold a root Arc clone and query concurrently
+   while a writer produces 500 new versions; no data race, no panic (MIRI or TSan).
+6. `rtree_proptest_roundtrip`: proptest with 256 cases — random inserts/deletes; every
+   entry in the final set is found by a point-overlap query; no entry is found that was
+   not inserted (or was deleted).
+7. Three-surface check: not applicable (pds library; no RESP3 surface).
+
+**Prior art:**
+- Guttman (1984) — original R-tree paper; quadratic split algorithm
+- Beckmann et al. (1990) — R\*-tree; forced reinsertion; reference if quadratic split
+  proves insufficient for soong's spatial distributions
+- `rstar` crate — Rust mutable R-tree; oracle for correctness and performance baseline
+- Driscoll et al. (1986) — "Making data structures persistent" — theoretical foundation
+  for path-copy persistence; confirms O(log n) copy cost per mutation
+
+**Complexity:** Medium-High. New data structure module. No changes to existing collections.
+Full test/bench/proptest coverage required. Unsafe not needed (all Arc, no raw pointers).
+
+**Prerequisites:** 0.1 ✓ (CI), 0.3 ✓ (benchmarks). No dependency on other Phase 6 items.
+
+**Delivers to:** soong GEO-PERSISTENT-0 — swaps `rstar` for `pds::RTree` in the geo
+index implementation.
+
+---
+
 
 ## Residual {#residual}
 
